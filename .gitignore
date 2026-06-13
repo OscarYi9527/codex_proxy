@@ -7,7 +7,4 @@ current-model.json
 # per-session files (window-specific, not shared)
 sessions/
 
-# windows launch helpers (machine-specific paths)
-start-claude.ps1
-start-proxy.vbs
-claude.cmd
+# no machine-specific exclusions — launch scripts use portable paths

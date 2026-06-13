@@ -52,13 +52,16 @@ claude-* 模型              deepseek-* 模型
 │   ├── server.js              # 代理核心（HTTP → HTTPS 转发 + 模型路由）
 │   ├── session-init.js        # SessionStart hook：生成 session ID，写映射文件
 │   ├── models.json            # 模型注册表（可扩展）
-│   ├── current-model.json     # 全局回退模型（无 session 时使用）
-│   ├── sessions/              # per-window 模型选择
+│   ├── current-model.json     # 全局回退模型（无 session 时使用，运行时生成）
+│   ├── sessions/              # per-window 模型选择（运行时生成）
 │   │   ├── by-cc-session-{CLAUDE_CODE_SESSION_ID}.txt  # CC会话 → 代理session映射
 │   │   └── {proxySessionId}.json                       # 该窗口当前选中模型
 │   ├── package.json           # ESM 模块声明
-│   ├── start.sh               # 启动脚本（防重复启动）
-│   └── proxy.log              # 代理运行日志
+│   ├── start.sh               # 代理启动脚本（跨平台，防重复启动）
+│   ├── start-proxy.vbs        # Windows 开机自启脚本（放入启动文件夹）
+│   ├── start-claude.ps1       # Windows PowerShell 启动 Claude 的包装脚本
+│   ├── claude.cmd             # Windows CMD 启动包装（供 alias 使用）
+│   └── proxy.log              # 代理运行日志（运行时生成）
 └── skills/
     └── models/
         └── SKILL.md            # /models 技能定义（frontmatter + 指令）
@@ -401,6 +404,61 @@ const PROVIDER_HOSTS = {
 else if (modelConfig.provider === 'new-provider') {
   headers['authorization'] = `Bearer ${process.env.NEW_PROVIDER_API_KEY}`
 }
+```
+
+## 安装与配置
+
+### 前置条件
+
+- Node.js 18+
+- Claude Code CLI（`npm install -g @anthropic-ai/claude-code`）
+- Anthropic API Key（必须）；DeepSeek API Key（可选）
+
+### 步骤
+
+**1. 克隆到 proxy 目录**
+```bash
+git clone https://github.com/OscarYi9527/skill-models ~/.claude/proxy
+```
+
+**2. 设置环境变量**
+
+在系统环境变量中添加（不要写进代码）：
+```
+ANTHROPIC_API_KEY=sk-ant-...
+DEEPSEEK_API_KEY=sk-...       # 使用 DeepSeek 时必须
+ANTHROPIC_BASE_URL=http://127.0.0.1:47891
+```
+
+**3. 更新 ~/.claude/settings.json**
+
+添加 SessionStart hooks（参见第 1 节配置示例）。
+
+**4. 安装 /models 技能**
+
+将 `SKILL.md`（本仓库不含，需单独配置）放入：
+```
+~/.claude/skills/models/SKILL.md
+```
+
+**5. Windows：设置代理开机自启**
+
+将 `start-proxy.vbs` 的快捷方式放入 Windows 启动文件夹：
+```
+Win+R → shell:startup → 粘贴 start-proxy.vbs 的快捷方式
+```
+
+**6. 验证**
+```bash
+# 启动代理
+bash ~/.claude/proxy/start.sh
+
+# 检查代理是否运行
+netstat -an | grep 47891 | grep LISTENING
+
+# 启动 Claude Code
+claude
+# 然后在会话内输入 /models
 ```
 
 ## 运行时状态验证

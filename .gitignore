@@ -1,0 +1,13 @@
+# runtime state
+proxy.log
+proxy-err.log
+.proxy.pid
+current-model.json
+
+# per-session files (window-specific, not shared)
+sessions/
+
+# windows launch helpers (machine-specific paths)
+start-claude.ps1
+start-proxy.vbs
+claude.cmd

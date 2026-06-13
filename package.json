@@ -1,0 +1,7 @@
+{
+  "name": "claude-proxy",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Model routing proxy for Claude Code",
+  "main": "server.js"
+}

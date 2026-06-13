@@ -436,9 +436,9 @@ ANTHROPIC_BASE_URL=http://127.0.0.1:47891
 
 **4. 安装 /models 技能**
 
-将 `SKILL.md`（本仓库不含，需单独配置）放入：
-```
-~/.claude/skills/models/SKILL.md
+将本仓库的 `skills/models/SKILL.md` 复制到：
+```bash
+cp skills/models/SKILL.md ~/.claude/skills/models/SKILL.md
 ```
 
 **5. Windows：设置代理开机自启**

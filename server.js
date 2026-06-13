@@ -12,6 +12,50 @@ const SESSIONS_DIR = path.join(PROXY_DIR, 'sessions')
 
 try { fs.mkdirSync(SESSIONS_DIR, { recursive: true }) } catch {}
 
+const LAST_CLEANUP_FILE = path.join(SESSIONS_DIR, '.last-cleanup')
+const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000
+const MAX_SESSION_FILES = 50000
+
+function cleanupSessions() {
+  const now = Date.now()
+  try {
+    const last = parseInt(fs.readFileSync(LAST_CLEANUP_FILE, 'utf8'), 10)
+    // Skip if last cleanup was recent; also handles clock-skew: if last > now, force cleanup
+    if (!isNaN(last) && last <= now && now - last < THIRTY_DAYS) return
+  } catch {}
+
+  try {
+    const files = fs.readdirSync(SESSIONS_DIR)
+      .filter(f => f !== '.last-cleanup')
+      .map(f => {
+        try { return { path: path.join(SESSIONS_DIR, f), mtime: fs.statSync(path.join(SESSIONS_DIR, f)).mtimeMs } }
+        catch { return null }
+      })
+      .filter(Boolean)
+
+    files.sort((a, b) => a.mtime - b.mtime)
+
+    let toDelete
+    if (files.length > MAX_SESSION_FILES) {
+      // FIFO: trim oldest until at limit
+      toDelete = files.slice(0, files.length - MAX_SESSION_FILES)
+      console.log(`[proxy] Cleanup: FIFO removed ${toDelete.length} oldest session files (was ${files.length})`)
+    } else {
+      // Age-based: delete files not touched in 30 days
+      const cutoff = now - THIRTY_DAYS
+      toDelete = files.filter(f => f.mtime < cutoff)
+      if (toDelete.length > 0) console.log(`[proxy] Cleanup: removed ${toDelete.length} session files older than 30 days`)
+    }
+
+    for (const f of toDelete) try { fs.unlinkSync(f.path) } catch {}
+    fs.writeFileSync(LAST_CLEANUP_FILE, String(now))
+  } catch (err) {
+    console.error('[proxy] Cleanup error:', err.message)
+  }
+}
+
+cleanupSessions()
+
 // Shared read-only cache — loaded once at startup, safe across all sessions.
 // models.json rarely changes; restart the proxy to pick up new entries.
 let cachedModels = null
@@ -49,7 +93,14 @@ function getSessionModel(sessionId) {
   if (!sessionId) return null
   try {
     const file = path.join(SESSIONS_DIR, `${sessionId}.json`)
-    return JSON.parse(fs.readFileSync(file, 'utf8')).model
+    const model = JSON.parse(fs.readFileSync(file, 'utf8')).model
+    // Touch mtime at most once per day so active sessions are never aged out by cleanup
+    const now = new Date()
+    const oneDayAgo = now.getTime() - 24 * 60 * 60 * 1000
+    try {
+      if (fs.statSync(file).mtimeMs < oneDayAgo) fs.utimesSync(file, now, now)
+    } catch {}
+    return model
   } catch {
     return null
   }

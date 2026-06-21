@@ -4,6 +4,132 @@
 
 为 Claude Code 构建一个本地轻量代理服务器，实现在 **不修改 `ANTHROPIC_BASE_URL`、不重启会话** 的前提下，通过 `/models` 交互式命令即时切换底层 LLM 提供商（Anthropic / DeepSeek / Claude 订阅版），并支持订阅额度耗尽后自动 fallback 到 API Key。
 
+## 代码逻辑流程图
+
+### 总览：请求完整生命周期
+
+```mermaid
+flowchart TD
+    CC[Claude Code 发出请求] --> PARSE["parseSessionUrl(url)"]
+
+    PARSE -->|"/s/{id}/v1/..."| WITH_SID["sessionId = id\nactualUrl = /v1/..."]
+    PARSE -->|"/v1/... 无 session 前缀"| NO_SID["sessionId = null\nactualUrl = 原始 URL"]
+
+    WITH_SID --> ROUTE{路由判断}
+    NO_SID  --> ROUTE
+
+    ROUTE -->|"GET *.../models"| MODELS_LIST["handleModelsList()\n读 models.json → 200 返回列表"]
+    ROUTE -->|其他请求| COLLECT["收集 body chunks\nreq.on('data')"]
+
+    COLLECT -->|"req.on('error')"| E_REQ["→ 400 空响应"]
+    COLLECT -->|"req.on('end')"| RESOLVE["resolveModelId(rawBody, sessionId)"]
+```
+
+### resolveModelId：模型优先级与 quota 路由
+
+```mermaid
+flowchart TD
+    R_IN["resolveModelId 入口"] --> GSESS["getSessionModel(sessionId)\n读 sessions/{id}.json"]
+
+    GSESS -->|"sessionId=null\n文件不存在\nJSON解析失败"| GBODY["解析 body.model"]
+    GSESS -->|"model 存在且在 models.json"| SESS_WIN["modelId = session model ✓"]
+
+    GBODY -->|"body.model 在 models.json"| BODY_WIN["modelId = body.model ✓"]
+    GBODY -->|"body 解析失败\n或 model 不在注册表"| GFB["getFallbackModelId()\n读 current-model.json"]
+
+    GFB -->|"读取/解析失败"| HARD["modelId = 'claude-haiku-4-5' (硬编码)"]
+    GFB -->|"成功"| CURR["modelId = current-model.json 值"]
+
+    SESS_WIN --> QC["quota 检查"]
+    BODY_WIN --> QC
+    HARD      --> QC
+    CURR      --> QC
+
+    QC --> HAS_FB{"config.fallback_model\n存在?"}
+    HAS_FB -->|否| USE_ID["return modelId（直接使用）"]
+    HAS_FB -->|是| EXHAUSTED{"isQuotaExhausted\n(config.provider)?"}
+
+    EXHAUSTED -->|false| USE_ID
+    EXHAUSTED -->|true| FB_VALID{"getModelConfig\n(fallback_model)?"}
+
+    FB_VALID -->|"null → log ERROR"| USE_ID
+    FB_VALID -->|"找到"| USE_FB["return fallback_model\n⚡ 静默切换"]
+```
+
+### isQuotaExhausted：24h 状态机
+
+```mermaid
+flowchart TD
+    QE_IN["isQuotaExhausted(provider)"] --> READ_QS["读 quota-status.json"]
+
+    READ_QS -->|"文件不存在\nJSON 解析失败"| QFALSE["return false"]
+    READ_QS -->|"entry 不存在"| QFALSE
+    READ_QS -->|"entry.exhausted = false"| QFALSE
+
+    READ_QS -->|"entry.exhausted = true"| CHK_TS{"exhausted_at 检查"}
+
+    CHK_TS -->|"== null（数据损坏）"| AUTO_RESET["删除 entry\n写回文件\nreturn false\n（视为已过期）"]
+    CHK_TS -->|"Date.now()-exhausted_at > 24h"| AUTO_RESET
+    CHK_TS -->|"Date.now()-exhausted_at ≤ 24h"| QTRUE["return true（仍在限流中）"]
+    CHK_TS -->|"exhausted_at 在未来\n（时钟偏移）"| QTRUE["return true（diff 为负，视为未过期）"]
+```
+
+### proxyRequest：转发与异常处理
+
+```mermaid
+flowchart TD
+    PR_IN["proxyRequest 入口\n(modelId 已解析)"] --> GET_CFG["getModelConfig(modelId)"]
+
+    GET_CFG -->|"null → 未知 model"| E_500["→ 500\nUnknown model: {id}"]
+    GET_CFG -->|"找到"| REWRITE["覆写 body.model\n= modelConfig.id"]
+
+    REWRITE -->|"body JSON 解析失败"| RAW["bodyStr = 原始 buffer\n（不覆写 model 字段）"]
+    REWRITE -->|"成功"| PATCHED["bodyStr = 更新后 JSON"]
+
+    RAW    --> BH["buildHeaders(req.headers, modelConfig)"]
+    PATCHED --> BH
+
+    BH -->|"provider = anthropic"| H_ANT["透传 x-api-key\nauthorization\nanthropic-version / beta"]
+    BH -->|"provider = deepseek\nDEEPSEEK_API_KEY 未设置"| E_400["→ 400\ninvalid_request_error\n缺少环境变量"]
+    BH -->|"provider = deepseek\nkey 存在"| H_DS["x-api-key = DEEPSEEK_API_KEY\nanthropic-version / beta"]
+    BH -->|"provider = claude-ai\nCLAUDE_SESSION_TOKEN 未设置"| E_400
+    BH -->|"provider = claude-ai\ntoken 存在"| H_AI["Authorization: Bearer token\nanthropic-version / beta"]
+
+    H_ANT --> SEND["https.request → 上游"]
+    H_DS  --> SEND
+    H_AI  --> SEND
+
+    SEND -->|"DNS/TCP/TLS 失败"| E_502["→ 502\nProxy upstream error"]
+    SEND -->|"收到响应头"| STATUS{"proxyRes.statusCode?"}
+
+    STATUS -->|"429 且 provider = claude-ai"| MARK["markQuotaExhausted('claude-ai')\n写 quota-status.json"]
+    MARK --> E_529["→ 529 overload_error\n'请重试'\n（Claude Code 自动重试\n下次走 fallback_model）"]
+
+    STATUS -->|"其他所有状态码"| PIPE["pipe proxyRes → res\n透传 statusCode + headers + body\n（含流式 SSE）"]
+```
+
+### 启动阶段：cleanupSessions
+
+```mermaid
+flowchart TD
+    START["代理进程启动"] --> READ_LAST["读 .last-cleanup 时间戳"]
+
+    READ_LAST -->|"读取失败\n或时间戳损坏"| DO_CLEAN["执行清理"]
+    READ_LAST -->|"距上次 < 30 天"| SKIP["跳过（return）"]
+    READ_LAST -->|"last > now（时钟回拨）"| DO_CLEAN
+
+    DO_CLEAN --> COUNT{"sessions/ 文件数\n> 50000?"}
+
+    COUNT -->|"是（FIFO）"| DEL_OLD["删除最旧的 N 个文件\n保留 50000 个"]
+    COUNT -->|"否（按龄）"| DEL_AGE["删除 mtime < 30天前 的文件"]
+
+    DEL_OLD --> WRITE_TS["写 .last-cleanup = now"]
+    DEL_AGE --> WRITE_TS
+
+    WRITE_TS --> LISTEN["server.listen :47891"]
+    SKIP --> LISTEN
+```
+
 ## 架构
 
 ```

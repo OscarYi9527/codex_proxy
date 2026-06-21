@@ -74,8 +74,9 @@ function getQuotaStatus() {
 function isQuotaExhausted(provider) {
   const entry = getQuotaStatus()[provider]
   if (!entry || !entry.exhausted) return false
-  // Auto-reset after 24h — subscription rate limits typically reset daily
-  if (entry.exhausted_at && Date.now() - entry.exhausted_at > 24 * 60 * 60 * 1000) {
+  // Use != null to guard against null/undefined exhausted_at (falsy short-circuit bug)
+  // exhausted_at == null means corrupt/missing → treat as expired, auto-reset
+  if (entry.exhausted_at == null || Date.now() - entry.exhausted_at > 24 * 60 * 60 * 1000) {
     const status = getQuotaStatus()
     delete status[provider]
     try { fs.writeFileSync(QUOTA_STATUS_FILE, JSON.stringify(status, null, 2)) } catch {}
@@ -159,6 +160,10 @@ function resolveModelId(rawBody, sessionId) {
 
   const config = getModelConfig(modelId)
   if (config && config.fallback_model && isQuotaExhausted(config.provider)) {
+    if (!getModelConfig(config.fallback_model)) {
+      console.error(`[proxy] fallback_model "${config.fallback_model}" not found in models.json — check config`)
+      return modelId
+    }
     console.log(`[proxy] ${config.provider} quota exhausted, routing to fallback: ${config.fallback_model}`)
     return config.fallback_model
   }
@@ -178,10 +183,12 @@ function buildHeaders(originalHeaders, modelConfig) {
     if (originalHeaders['anthropic-version']) headers['anthropic-version'] = originalHeaders['anthropic-version']
     if (originalHeaders['anthropic-beta'])    headers['anthropic-beta']    = originalHeaders['anthropic-beta']
   } else if (modelConfig.provider === 'deepseek') {
+    if (!process.env.DEEPSEEK_API_KEY) throw new Error('DEEPSEEK_API_KEY environment variable is not set')
     headers['x-api-key']         = process.env.DEEPSEEK_API_KEY
     headers['anthropic-version'] = originalHeaders['anthropic-version'] || '2023-06-01'
     if (originalHeaders['anthropic-beta']) headers['anthropic-beta'] = originalHeaders['anthropic-beta']
   } else if (modelConfig.provider === 'claude-ai') {
+    if (!process.env.CLAUDE_SESSION_TOKEN) throw new Error('CLAUDE_SESSION_TOKEN environment variable is not set')
     headers['authorization']     = `Bearer ${process.env.CLAUDE_SESSION_TOKEN}`
     if (originalHeaders['anthropic-version']) headers['anthropic-version'] = originalHeaders['anthropic-version']
     if (originalHeaders['anthropic-beta'])    headers['anthropic-beta']    = originalHeaders['anthropic-beta']
@@ -224,7 +231,15 @@ function proxyRequest(req, res, rawBody, sessionId, effectiveUrl) {
 
   const providerConfig = PROVIDER_HOSTS[modelConfig.provider]
   const targetPath = providerConfig.pathPrefix + effectiveUrl
-  const headers = buildHeaders(req.headers, modelConfig)
+  let headers
+  try {
+    headers = buildHeaders(req.headers, modelConfig)
+  } catch (err) {
+    console.error(`[proxy] Header build error: ${err.message}`)
+    res.writeHead(400, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: err.message } }))
+    return
+  }
   headers['content-length'] = Buffer.byteLength(bodyStr)
 
   const options = {

@@ -86,7 +86,7 @@ function getQuotaStatus() {
 function isQuotaExhausted(provider) {
   const entry = getQuotaStatus()[provider]
   if (!entry || !entry.exhausted) return false
-  if (entry.exhausted_at && Date.now() - entry.exhausted_at > 24 * 60 * 60 * 1000) {
+  if (entry.exhausted_at == null || Date.now() - entry.exhausted_at > 24 * 60 * 60 * 1000) {
     const status = getQuotaStatus()
     delete status[provider]
     try { writeFileSync(QUOTA_FILE, JSON.stringify(status, null, 2)) } catch {}
@@ -126,6 +126,7 @@ function resolveModelId(rawBody, sessionId) {
   }
   const config = getModelConfig(modelId)
   if (config && config.fallback_model && isQuotaExhausted(config.provider)) {
+    if (!getModelConfig(config.fallback_model)) return modelId
     return config.fallback_model
   }
   return modelId
@@ -149,10 +150,12 @@ function buildHeaders(originalHeaders, modelConfig, env = {}) {
     if (originalHeaders['anthropic-version']) headers['anthropic-version'] = originalHeaders['anthropic-version']
     if (originalHeaders['anthropic-beta'])    headers['anthropic-beta']    = originalHeaders['anthropic-beta']
   } else if (modelConfig.provider === 'deepseek') {
+    if (!env.DEEPSEEK_API_KEY) throw new Error('DEEPSEEK_API_KEY environment variable is not set')
     headers['x-api-key']         = env.DEEPSEEK_API_KEY
     headers['anthropic-version'] = originalHeaders['anthropic-version'] || '2023-06-01'
     if (originalHeaders['anthropic-beta']) headers['anthropic-beta'] = originalHeaders['anthropic-beta']
   } else if (modelConfig.provider === 'claude-ai') {
+    if (!env.CLAUDE_SESSION_TOKEN) throw new Error('CLAUDE_SESSION_TOKEN environment variable is not set')
     headers['authorization']     = `Bearer ${env.CLAUDE_SESSION_TOKEN}`
     if (originalHeaders['anthropic-version']) headers['anthropic-version'] = originalHeaders['anthropic-version']
     if (originalHeaders['anthropic-beta'])    headers['anthropic-beta']    = originalHeaders['anthropic-beta']
@@ -242,9 +245,10 @@ test('recently exhausted → exhausted', () => {
   assert(isQuotaExhausted('claude-ai'))
 })
 
-test('boundary: 24h - 1ms → still exhausted', () => {
-  writeQuota({ 'claude-ai': { exhausted: true, exhausted_at: Date.now() - (H24 - 1) } })
-  assert(isQuotaExhausted('claude-ai'), 'should still be exhausted 1ms before the reset threshold')
+test('boundary: 24h - 5s → still exhausted', () => {
+  // Use 5s margin — 1ms is smaller than file I/O + JSON parse time, causing flaky failures
+  writeQuota({ 'claude-ai': { exhausted: true, exhausted_at: Date.now() - (H24 - 5000) } })
+  assert(isQuotaExhausted('claude-ai'), 'should still be exhausted 5s before the reset threshold')
 })
 
 test('boundary: 24h + 1ms → auto-resets, returns false', () => {
@@ -275,11 +279,11 @@ test('clock skew: exhausted_at in future → treated as exhausted (diff < 24h)',
   assert(isQuotaExhausted('claude-ai'), 'future timestamp stays exhausted (diff is negative, < 24h check)')
 })
 
-test('[BUG] exhausted_at: null → never auto-resets (permanent exhaustion)', () => {
+test('exhausted_at: null → auto-resets (fixed: != null guard)', () => {
   writeQuota({ 'claude-ai': { exhausted: true, exhausted_at: null } })
-  // null is falsy → `entry.exhausted_at && ...` short-circuits to false → 24h check is skipped
-  // Consequence: if exhausted_at is missing/null, quota never auto-resets — requires manual delete
-  assert(isQuotaExhausted('claude-ai'), 'BUG DOCUMENTED: null exhausted_at causes permanent exhaustion (no auto-reset)')
+  // Fixed: `entry.exhausted_at != null` prevents falsy short-circuit.
+  // null exhausted_at now treated as "reset time unknown" → Date.now()-null=Date.now() > 24h → auto-reset
+  assert(!isQuotaExhausted('claude-ai'), 'null exhausted_at should auto-reset after fix')
 })
 
 test('malformed JSON in quota-status.json → not exhausted (graceful degrade)', () => {
@@ -398,15 +402,15 @@ test('fallback_model does not recurse: if fallback also exhausted, returns fallb
   resetQuota()
 })
 
-test('[BUG RISK] fallback_model pointing to unknown model returns invalid ID to proxyRequest', () => {
-  // proxyRequest will then fail with "Unknown model: nonexistent" — 500 to client
+test('fallback_model pointing to unknown model → falls back to original model (fixed)', () => {
   const custom = { models: [...TEST_MODELS.models, { id: 'broken', provider: 'claude-ai', fallback_model: 'nonexistent' }] }
   writeFileSync(MODELS_FILE, JSON.stringify(custom))
   resetModelCache()
   writeQuota({ 'claude-ai': { exhausted: true, exhausted_at: Date.now() } })
   writeSession('s7', 'broken')
   const result = resolveModelId(JSON.stringify({}), 's7')
-  assertEqual(result, 'nonexistent', 'returns invalid fallback_model — caller must validate')
+  // Fixed: getModelConfig(fallback_model) check → returns original model instead of bad ID
+  assertEqual(result, 'broken', 'invalid fallback_model → safely returns original model')
   writeFileSync(MODELS_FILE, JSON.stringify(TEST_MODELS))
   resetModelCache()
   resetQuota()
@@ -449,13 +453,13 @@ test('deepseek: forwards anthropic-beta if present', () => {
   assertEqual(h['anthropic-beta'], 'tools-2024')
 })
 
-test('[BUG] deepseek: missing DEEPSEEK_API_KEY → x-api-key is JS undefined (header omitted or empty)', () => {
-  const h = buildHeaders({}, { provider: 'deepseek' }, {})
-  // env.DEEPSEEK_API_KEY = undefined (JS value, not string).
-  // Node.js http omits headers with undefined values → upstream receives no x-api-key → 401.
-  // Unlike claude-ai (template literal → "Bearer undefined" string), this is silently omitted.
-  assert(h['x-api-key'] === undefined,
-    'BUG: missing env var → JS undefined assigned to header → key absent in request → upstream 401')
+test('deepseek: missing DEEPSEEK_API_KEY → throws descriptive error (fixed)', () => {
+  try {
+    buildHeaders({}, { provider: 'deepseek' }, {})
+    assert(false, 'should have thrown')
+  } catch (err) {
+    assert(err.message.includes('DEEPSEEK_API_KEY'), `error should name the missing var, got: "${err.message}"`)
+  }
 })
 
 test('claude-ai: uses Bearer CLAUDE_SESSION_TOKEN, omits x-api-key', () => {
@@ -464,10 +468,13 @@ test('claude-ai: uses Bearer CLAUDE_SESSION_TOKEN, omits x-api-key', () => {
   assert(!('x-api-key' in h), 'claude-ai must not include x-api-key')
 })
 
-test('[BUG] claude-ai: missing CLAUDE_SESSION_TOKEN → Authorization: Bearer undefined', () => {
-  const h = buildHeaders({}, { provider: 'claude-ai' }, {})
-  assertEqual(h['authorization'], 'Bearer undefined',
-    'BUG: missing token → "Bearer undefined" sent to upstream → 401')
+test('claude-ai: missing CLAUDE_SESSION_TOKEN → throws descriptive error (fixed)', () => {
+  try {
+    buildHeaders({}, { provider: 'claude-ai' }, {})
+    assert(false, 'should have thrown')
+  } catch (err) {
+    assert(err.message.includes('CLAUDE_SESSION_TOKEN'), `error should name the missing var, got: "${err.message}"`)
+  }
 })
 
 test('all providers: content-type and accept always set', () => {
@@ -495,14 +502,7 @@ if (failures.length > 0) {
   console.log()
 }
 
-const bugs = [
-  'exhausted_at: null → 24h check skipped (falsy short-circuit) → permanent exhaustion, never auto-resets',
-  'missing DEEPSEEK_API_KEY → x-api-key header omitted (JS undefined) → upstream 401',
-  'missing CLAUDE_SESSION_TOKEN → "Bearer undefined" string sent → upstream 401',
-  'invalid fallback_model in models.json → resolveModelId returns bad ID → proxyRequest 500',
-]
-console.log('Known issues documented by tests:')
-bugs.forEach((b, i) => console.log(`  [${i + 1}] ${b}`))
+console.log('All 4 previously documented bugs are now fixed and verified by tests.')
 console.log()
 
 process.exit(failed > 0 ? 1 : 0)

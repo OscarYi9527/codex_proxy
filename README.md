@@ -10,123 +10,123 @@
 
 ```mermaid
 flowchart TD
-    CC[Claude Code 发出请求] --> PARSE["parseSessionUrl(url)"]
+    CC[Claude Code 发出请求] --> PARSE[从 URL 中提取窗口会话 ID]
 
-    PARSE -->|"/s/{id}/v1/..."| WITH_SID["sessionId = id\nactualUrl = /v1/..."]
-    PARSE -->|"/v1/... 无 session 前缀"| NO_SID["sessionId = null\nactualUrl = 原始 URL"]
+    PARSE -->|URL 含窗口会话前缀| WITH_SID[记录会话 ID\n提取实际请求路径]
+    PARSE -->|普通 URL，无会话前缀| NO_SID[会话 ID 为空\n使用原始路径]
 
-    WITH_SID --> ROUTE{路由判断}
+    WITH_SID --> ROUTE{是否查询模型列表？}
     NO_SID  --> ROUTE
 
-    ROUTE -->|"GET *.../models"| MODELS_LIST["handleModelsList()\n读 models.json → 200 返回列表"]
-    ROUTE -->|其他请求| COLLECT["收集 body chunks\nreq.on('data')"]
+    ROUTE -->|是| MODELS_LIST[从模型注册表读取所有模型\n直接返回列表]
+    ROUTE -->|否，是正常对话请求| COLLECT[接收请求正文数据]
 
-    COLLECT -->|"req.on('error')"| E_REQ["→ 400 空响应"]
-    COLLECT -->|"req.on('end')"| RESOLVE["resolveModelId(rawBody, sessionId)"]
+    COLLECT -->|接收过程中出错| E_REQ[返回 400 错误]
+    COLLECT -->|接收完成| RESOLVE[进入模型解析：确定用哪个模型]
 ```
 
-### resolveModelId：模型优先级与 quota 路由
+### 模型选择：三级优先级与额度路由
 
 ```mermaid
 flowchart TD
-    R_IN["resolveModelId 入口"] --> GSESS["getSessionModel(sessionId)\n读 sessions/{id}.json"]
+    R_IN[确定本次使用哪个模型] --> GSESS[读取当前窗口的模型选择]
 
-    GSESS -->|"sessionId=null\n文件不存在\nJSON解析失败"| GBODY["解析 body.model"]
-    GSESS -->|"model 存在且在 models.json"| SESS_WIN["modelId = session model ✓"]
+    GSESS -->|无会话 ID\n文件不存在\n内容损坏| GBODY[从请求正文中读取模型名]
+    GSESS -->|窗口有明确选择且在注册表中| SESS_WIN[使用窗口选择的模型 ✓]
 
-    GBODY -->|"body.model 在 models.json"| BODY_WIN["modelId = body.model ✓"]
-    GBODY -->|"body 解析失败\n或 model 不在注册表"| GFB["getFallbackModelId()\n读 current-model.json"]
+    GBODY -->|请求正文指定了有效模型| BODY_WIN[使用请求正文指定的模型 ✓]
+    GBODY -->|正文没有模型或模型不在注册表| GFB[读取全局默认模型文件]
 
-    GFB -->|"读取/解析失败"| HARD["modelId = 'claude-haiku-4-5' (硬编码)"]
-    GFB -->|"成功"| CURR["modelId = current-model.json 值"]
+    GFB -->|文件不存在或损坏| HARD[兜底使用 Haiku 模型]
+    GFB -->|读取成功| CURR[使用全局默认模型]
 
-    SESS_WIN --> QC["quota 检查"]
+    SESS_WIN --> QC[检查该模型是否有备用模型]
     BODY_WIN --> QC
     HARD      --> QC
     CURR      --> QC
 
-    QC --> HAS_FB{"config.fallback_model\n存在?"}
-    HAS_FB -->|否| USE_ID["return modelId（直接使用）"]
-    HAS_FB -->|是| EXHAUSTED{"isQuotaExhausted\n(config.provider)?"}
+    QC --> HAS_FB{这个模型配置了备用模型？}
+    HAS_FB -->|没有配置备用| USE_ID[直接使用当前模型]
+    HAS_FB -->|配置了备用模型| EXHAUSTED{该服务商的额度耗尽了吗？}
 
-    EXHAUSTED -->|false| USE_ID
-    EXHAUSTED -->|true| FB_VALID{"getModelConfig\n(fallback_model)?"}
+    EXHAUSTED -->|没有耗尽| USE_ID
+    EXHAUSTED -->|已耗尽| FB_VALID{备用模型在注册表中存在吗？}
 
-    FB_VALID -->|"null → log ERROR"| USE_ID
-    FB_VALID -->|"找到"| USE_FB["return fallback_model\n⚡ 静默切换"]
+    FB_VALID -->|不存在，记录配置错误日志| USE_ID
+    FB_VALID -->|存在| USE_FB[切换到备用模型 ⚡ 对用户无感知]
 ```
 
-### isQuotaExhausted：24h 状态机
+### 额度状态检查：24 小时重置机制
 
 ```mermaid
 flowchart TD
-    QE_IN["isQuotaExhausted(provider)"] --> READ_QS["读 quota-status.json"]
+    QE_IN[检查某服务商额度是否耗尽] --> READ_QS[读取额度状态文件]
 
-    READ_QS -->|"文件不存在\nJSON 解析失败"| QFALSE["return false"]
-    READ_QS -->|"entry 不存在"| QFALSE
-    READ_QS -->|"entry.exhausted = false"| QFALSE
+    READ_QS -->|文件不存在或内容损坏| QFALSE[返回：未耗尽]
+    READ_QS -->|该服务商没有记录| QFALSE
+    READ_QS -->|记录显示未耗尽| QFALSE
 
-    READ_QS -->|"entry.exhausted = true"| CHK_TS{"exhausted_at 检查"}
+    READ_QS -->|记录显示已耗尽| CHK_TS{检查耗尽时间}
 
-    CHK_TS -->|"== null（数据损坏）"| AUTO_RESET["删除 entry\n写回文件\nreturn false\n（视为已过期）"]
-    CHK_TS -->|"Date.now()-exhausted_at > 24h"| AUTO_RESET
-    CHK_TS -->|"Date.now()-exhausted_at ≤ 24h"| QTRUE["return true（仍在限流中）"]
-    CHK_TS -->|"exhausted_at 在未来\n（时钟偏移）"| QTRUE["return true（diff 为负，视为未过期）"]
+    CHK_TS -->|时间戳缺失，数据损坏| AUTO_RESET[清除该记录\n返回：未耗尽\n视为已自动恢复]
+    CHK_TS -->|距耗尽时间超过 24 小时| AUTO_RESET
+    CHK_TS -->|距耗尽时间不足 24 小时| QTRUE[返回：仍在限流，继续走备用]
+    CHK_TS -->|耗尽时间在未来，时钟异常| QTRUE
 ```
 
-### proxyRequest：转发与异常处理
+### 请求转发：构造请求头与处理上游响应
 
 ```mermaid
 flowchart TD
-    PR_IN["proxyRequest 入口\n(modelId 已解析)"] --> GET_CFG["getModelConfig(modelId)"]
+    PR_IN[开始转发请求] --> GET_CFG[在注册表中查找模型配置]
 
-    GET_CFG -->|"null → 未知 model"| E_500["→ 500\nUnknown model: {id}"]
-    GET_CFG -->|"找到"| REWRITE["覆写 body.model\n= modelConfig.id"]
+    GET_CFG -->|模型 ID 不在注册表| E_500[返回 500：未知模型]
+    GET_CFG -->|找到配置| REWRITE[将请求中的模型名替换为实际模型 ID]
 
-    REWRITE -->|"body JSON 解析失败"| RAW["bodyStr = 原始 buffer\n（不覆写 model 字段）"]
-    REWRITE -->|"成功"| PATCHED["bodyStr = 更新后 JSON"]
+    REWRITE -->|请求正文格式不是 JSON| RAW[保持原始正文，不替换模型名]
+    REWRITE -->|替换成功| PATCHED[正文已更新]
 
-    RAW    --> BH["buildHeaders(req.headers, modelConfig)"]
+    RAW     --> BH[根据目标服务商构造请求头]
     PATCHED --> BH
 
-    BH -->|"provider = anthropic"| H_ANT["透传 x-api-key\nauthorization\nanthropic-version / beta"]
-    BH -->|"provider = deepseek\nDEEPSEEK_API_KEY 未设置"| E_400["→ 400\ninvalid_request_error\n缺少环境变量"]
-    BH -->|"provider = deepseek\nkey 存在"| H_DS["x-api-key = DEEPSEEK_API_KEY\nanthropic-version / beta"]
-    BH -->|"provider = claude-ai\nCLAUDE_SESSION_TOKEN 未设置"| E_400
-    BH -->|"provider = claude-ai\ntoken 存在"| H_AI["Authorization: Bearer token\nanthropic-version / beta"]
+    BH -->|目标是 Anthropic| H_ANT[透传原始 API Key 和认证头]
+    BH -->|目标是 DeepSeek\n但未设置 DeepSeek API Key| E_400[返回 400：缺少 DeepSeek API Key 环境变量]
+    BH -->|目标是 DeepSeek\nKey 存在| H_DS[使用 DeepSeek API Key]
+    BH -->|目标是 Claude 订阅版\n但未设置订阅 Token| E_400_AI[返回 400：缺少订阅 Token 环境变量]
+    BH -->|目标是 Claude 订阅版\nToken 存在| H_AI[使用订阅 Bearer Token]
 
-    H_ANT --> SEND["https.request → 上游"]
+    H_ANT --> SEND[向上游服务发送请求]
     H_DS  --> SEND
     H_AI  --> SEND
 
-    SEND -->|"DNS/TCP/TLS 失败"| E_502["→ 502\nProxy upstream error"]
-    SEND -->|"收到响应头"| STATUS{"proxyRes.statusCode?"}
+    SEND -->|网络故障，连接失败| E_502[返回 502：上游连接错误]
+    SEND -->|收到上游响应| STATUS{上游返回了什么状态码？}
 
-    STATUS -->|"429 且 provider = claude-ai"| MARK["markQuotaExhausted('claude-ai')\n写 quota-status.json"]
-    MARK --> E_529["→ 529 overload_error\n'请重试'\n（Claude Code 自动重试\n下次走 fallback_model）"]
+    STATUS -->|429 限流，且目标是 Claude 订阅版| MARK[将订阅额度标记为已耗尽\n写入状态文件]
+    MARK --> E_529[返回 529，通知 Claude Code 重试\n下次重试将自动走 API Key 备用]
 
-    STATUS -->|"其他所有状态码"| PIPE["pipe proxyRes → res\n透传 statusCode + headers + body\n（含流式 SSE）"]
+    STATUS -->|其他任何状态码| PIPE[将上游响应直接流式传回 Claude Code\n包括流式输出和错误响应]
 ```
 
-### 启动阶段：cleanupSessions
+### 启动阶段：过期会话文件清理
 
 ```mermaid
 flowchart TD
-    START["代理进程启动"] --> READ_LAST["读 .last-cleanup 时间戳"]
+    START[代理进程启动] --> READ_LAST[读取上次清理的时间]
 
-    READ_LAST -->|"读取失败\n或时间戳损坏"| DO_CLEAN["执行清理"]
-    READ_LAST -->|"距上次 < 30 天"| SKIP["跳过（return）"]
-    READ_LAST -->|"last > now（时钟回拨）"| DO_CLEAN
+    READ_LAST -->|时间记录不存在或损坏| DO_CLEAN[执行清理]
+    READ_LAST -->|距上次清理不足 30 天| SKIP[跳过本次清理]
+    READ_LAST -->|记录时间比当前时间晚，时钟异常| DO_CLEAN
 
-    DO_CLEAN --> COUNT{"sessions/ 文件数\n> 50000?"}
+    DO_CLEAN --> COUNT{会话文件数量超过 5 万个？}
 
-    COUNT -->|"是（FIFO）"| DEL_OLD["删除最旧的 N 个文件\n保留 50000 个"]
-    COUNT -->|"否（按龄）"| DEL_AGE["删除 mtime < 30天前 的文件"]
+    COUNT -->|是| DEL_OLD[按时间顺序删除最旧的文件\n直到只剩 5 万个]
+    COUNT -->|否| DEL_AGE[删除超过 30 天未访问的文件]
 
-    DEL_OLD --> WRITE_TS["写 .last-cleanup = now"]
+    DEL_OLD --> WRITE_TS[更新清理时间记录]
     DEL_AGE --> WRITE_TS
 
-    WRITE_TS --> LISTEN["server.listen :47891"]
+    WRITE_TS --> LISTEN[启动代理，监听端口 47891]
     SKIP --> LISTEN
 ```
 

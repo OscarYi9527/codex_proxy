@@ -1,6 +1,13 @@
 {
   "models": [
     {
+      "id": "claude-subscription",
+      "name": "Claude 订阅版",
+      "provider": "claude-ai",
+      "description": "优先消耗订阅额度，耗尽后自动切 API Key",
+      "fallback_model": "claude-sonnet-4-6"
+    },
+    {
       "id": "claude-opus-4-8",
       "name": "Claude Opus 4.8",
       "provider": "anthropic",

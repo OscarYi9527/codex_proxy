@@ -39,9 +39,10 @@ Codex 发往代理的 `body.model` 是实际路由依据。旧的线程路由文
 GPT 请求保持 Responses API 格式。代理转发 Codex 提供的订阅鉴权、账户、线程和
 客户端元数据，然后把上游流直接返回给 Codex。
 
-代理不会向 ChatGPT 上游转发
-`X-OpenAI-Internal-Codex-Responses-Lite`。混合模型目录可以声明 GPT 支持 Lite，
-但该内部请求头会导致部分 GPT 模型被上游拒绝，因此必须在代理边界过滤。
+代理首次会向 ChatGPT 上游保留
+`X-OpenAI-Internal-Codex-Responses-Lite`。如果上游明确返回该模型不支持 Lite 的
+`unsupported_value`，代理会自动取消 Lite 并重试一次，同时在当前进程内记住该
+模型不支持 Lite。其他 400 错误不会触发降级。
 
 ### DeepSeek 路由
 
@@ -294,7 +295,8 @@ node --check .\codex-proxy.js
 
 ### `X-OpenAI-Internal-Codex-Responses-Lite` 不支持
 
-确保运行的是包含 Lite 请求头过滤逻辑的最新版代理，并重启旧进程：
+确保运行的是包含 Lite 自适应重试逻辑的最新版代理，并重启旧进程。代理会先保留
+Lite；仅在上游明确拒绝时改用标准 Responses：
 
 ```powershell
 .\stop-codex-proxy.ps1

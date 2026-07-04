@@ -289,7 +289,51 @@ await testAsync('forwards native GPT model selections with Codex subscription he
     assert.equal(seen[0].body.reasoning.effort, 'xhigh')
     assert.equal(seen[0].options.headers.authorization, 'Bearer test-token')
     assert.equal(seen[0].options.headers['chatgpt-account-id'], 'test-account')
-    assert.equal(seen[0].options.headers['x-openai-internal-codex-responses-lite'], undefined)
+    assert.equal(seen[0].options.headers['x-openai-internal-codex-responses-lite'], 'true')
+  } finally {
+    await new Promise(resolve => server.close(resolve))
+  }
+})
+
+await testAsync('retries GPT without Responses Lite only when the upstream rejects it', async () => {
+  const seen = []
+  const server = createServer({
+    fetchImpl: async (_url, options) => {
+      seen.push(options.headers)
+      if (seen.length === 1) {
+        return new Response(JSON.stringify({
+          type: 'error',
+          error: {
+            type: 'invalid_request_error',
+            code: 'unsupported_value',
+            message: 'This model is not supported when using X-OpenAI-Internal-Codex-Responses-Lite.',
+            param: 'model'
+          }
+        }), { status: 400, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({
+        id: 'resp_standard', object: 'response', status: 'completed', model: 'gpt-5.4', output: []
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address()
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Bearer test-token',
+        'chatgpt-account-id': 'test-account',
+        'x-openai-internal-codex-responses-lite': 'true'
+      },
+      body: JSON.stringify({ model: 'gpt-5.4', input: 'hello', stream: false })
+    })
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).model, 'gpt-5.4')
+    assert.equal(seen.length, 2)
+    assert.equal(seen[0]['x-openai-internal-codex-responses-lite'], 'true')
+    assert.equal(seen[1]['x-openai-internal-codex-responses-lite'], undefined)
   } finally {
     await new Promise(resolve => server.close(resolve))
   }

@@ -11,8 +11,10 @@ const UPSTREAM_URL = process.env.DEEPSEEK_ANTHROPIC_URL || 'https://api.deepseek
 const CHATGPT_RESPONSES_URL = process.env.CODEX_CHATGPT_RESPONSES_URL || 'https://chatgpt.com/backend-api/codex/responses'
 const DEFAULT_MODEL = process.env.CODEX_PROXY_DEFAULT_MODEL || 'deepseek-v4-pro'
 const MAX_BODY_BYTES = 16 * 1024 * 1024
+const RESPONSES_LITE_HEADER = 'x-openai-internal-codex-responses-lite'
 const PROXY_DIR = path.dirname(fileURLToPath(import.meta.url))
 const THREAD_ROUTES_DIR = process.env.CODEX_PROXY_THREAD_ROUTES_DIR || path.join(PROXY_DIR, 'codex-thread-routes')
+const responsesLiteUnsupportedModels = new Set()
 
 const REQUEST_LOG = path.join(os.homedir(), '.claude', 'proxy', 'codex-proxy-requests.log')
 
@@ -125,21 +127,38 @@ export function isChatGptModel(model) {
   return typeof model === 'string' && /^gpt-/i.test(model)
 }
 
-function chatGptHeaders(req) {
+function chatGptHeaders(req, { includeResponsesLite = true } = {}) {
   const headers = { 'content-type': 'application/json', accept: 'text/event-stream' }
-  // Do not forward x-openai-internal-codex-responses-lite. The mixed catalog
-  // includes GPT models that work through the normal Responses path but are
-  // rejected when that internal Lite mode reaches the ChatGPT upstream.
   const forwarded = [
     'authorization', 'chatgpt-account-id', 'originator', 'session-id',
     'thread-id', 'user-agent', 'x-client-request-id', 'x-codex-beta-features',
     'x-codex-turn-metadata', 'x-codex-window-id'
   ]
+  if (includeResponsesLite) forwarded.push(RESPONSES_LITE_HEADER)
   for (const name of forwarded) {
     const value = req.headers[name]
     if (value) headers[name] = value
   }
   return headers
+}
+
+async function isResponsesLiteUnsupported(response) {
+  if (response.status !== 400) return false
+  let text
+  try {
+    text = await response.clone().text()
+  } catch {
+    return false
+  }
+  if (!/responses-lite|x-openai-internal-codex-responses-lite/i.test(text)) return false
+  try {
+    const payload = JSON.parse(text)
+    const error = payload?.error || payload
+    return error?.code === 'unsupported_value'
+      || /not supported|unsupported/i.test(error?.message || '')
+  } catch {
+    return /not supported|unsupported_value/i.test(text)
+  }
 }
 
 async function pipeResponsesUpstream(upstream, res) {
@@ -753,16 +772,31 @@ export function createServer({ fetchImpl = fetch } = {}) {
               error: { type: 'authentication_error', message: 'ChatGPT subscription headers were not provided by Codex' }
             })
           }
-          const upstream = await fetchImpl(CHATGPT_RESPONSES_URL, {
-            method: 'POST',
-            headers: chatGptHeaders(req),
-            body: JSON.stringify({
-              ...body,
-              model: resolved.model,
-              ...(resolved.reasoningEffort ? { reasoning: { ...(body.reasoning || {}), effort: resolved.reasoningEffort } } : {})
-            }),
-            signal: AbortSignal.timeout(300000)
+          const upstreamBody = JSON.stringify({
+            ...body,
+            model: resolved.model,
+            ...(resolved.reasoningEffort ? { reasoning: { ...(body.reasoning || {}), effort: resolved.reasoningEffort } } : {})
           })
+          const requestedResponsesLite = Boolean(req.headers[RESPONSES_LITE_HEADER])
+          const tryResponsesLite = requestedResponsesLite
+            && !responsesLiteUnsupportedModels.has(resolved.model)
+          const upstreamOptions = {
+            method: 'POST',
+            headers: chatGptHeaders(req, { includeResponsesLite: tryResponsesLite }),
+            body: upstreamBody,
+            signal: AbortSignal.timeout(300000)
+          }
+          let upstream = await fetchImpl(CHATGPT_RESPONSES_URL, upstreamOptions)
+          if (tryResponsesLite && await isResponsesLiteUnsupported(upstream)) {
+            responsesLiteUnsupportedModels.add(resolved.model)
+            requestLog(req, `model=${resolved.model} responses_lite=unsupported retry=standard`)
+            await upstream.body?.cancel()
+            upstream = await fetchImpl(CHATGPT_RESPONSES_URL, {
+              ...upstreamOptions,
+              headers: chatGptHeaders(req, { includeResponsesLite: false }),
+              signal: AbortSignal.timeout(300000)
+            })
+          }
           return pipeResponsesUpstream(upstream, res)
         }
         if (!process.env.DEEPSEEK_API_KEY) {

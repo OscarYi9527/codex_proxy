@@ -76,10 +76,12 @@ flowchart TD
     E -->|是| F{有 Authorization<br/>和 chatgpt-account-id?}
     F -->|否| G[401 authentication_error]
     F -->|是| H[构造 GPT 上游 headers]
-    H --> I[删除 Responses-Lite 内部头]
-    I --> J[保留 Responses body 和 reasoning effort]
-    J --> K[转发 ChatGPT Responses]
-    K --> L[流式或普通响应透传]
+    H --> I[保留 Responses-Lite 内部头]
+    I --> J[转发 ChatGPT Responses]
+    J --> K{上游明确拒绝 Lite?}
+    K -->|是| K2[删除 Lite 并重试一次]
+    K -->|否| L[流式或普通响应透传]
+    K2 --> L
 
     E -->|否| M{有 DEEPSEEK_API_KEY?}
     M -->|否| N[503 authentication_error]
@@ -130,9 +132,10 @@ flowchart LR
 - `x-codex-turn-metadata`
 - `x-codex-window-id`
 
-`x-openai-internal-codex-responses-lite` 被明确排除。模型目录中的
-`use_responses_lite` 是 Codex 客户端能力描述，不意味着该内部头可以安全地转发到
-混合代理后的所有 ChatGPT 模型。
+`x-openai-internal-codex-responses-lite` 默认原样转发。如果 ChatGPT 上游以
+`unsupported_value` 明确指出当前模型不支持 Responses Lite，代理会取消该头重试
+一次，并在当前进程内缓存该模型的结果。其他错误不会触发此降级，因此支持 Lite 的
+模型始终保留原生行为。
 
 ## 6. DeepSeek 协议转换
 

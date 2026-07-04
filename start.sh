@@ -4,9 +4,11 @@ PROXY_DIR="$HOME/.claude/proxy"
 PID_FILE="$PROXY_DIR/.proxy.pid"
 LOG_FILE="$PROXY_DIR/proxy.log"
 PORT=47891
+RESTART_MODE="${1:-}"
 
 # Check if port is already in use (works cross-platform)
-if netstat -an 2>/dev/null | grep -q ":$PORT .*LISTENING"; then
+# Skip guard in restart mode so we can hot-reload
+if [ "$RESTART_MODE" != "--restart" ] && netstat -an 2>/dev/null | grep -q ":$PORT .*LISTENING"; then
   echo "[proxy] Already running on localhost:$PORT"
   exit 0
 fi

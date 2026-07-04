@@ -1,10 +1,31 @@
 # runtime state
+*.log
+*.pid
+*.tmp
+.detach-restart.sh
 proxy.log
 proxy-err.log
 .proxy.pid
 current-model.json
 
-# per-session files (window-specific, not shared)
+# per-session files
 sessions/
+codex-thread-routes/
+backup/
 
-# no machine-specific exclusions — launch scripts use portable paths
+# machine-specific state/config
+.auth-debug.log
+debug-*.log
+restart-detached.log
+restart-proxy.log
+codex-global-config.toml
+quota-status.json
+auto-model.json
+
+# Codex Responses proxy runtime state
+.codex-proxy.pid
+codex-proxy.log
+codex-proxy.error.log
+codex-proxy-requests.log
+codex-proxy-watchdog.log
+codex-proxy-watchdog.pid

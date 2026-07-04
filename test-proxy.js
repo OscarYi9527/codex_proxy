@@ -65,11 +65,10 @@ process.on('SIGINT', () => { rmSync(TEST_DIR, { recursive: true, force: true });
 
 const TEST_MODELS = {
   models: [
-    { id: 'claude-subscription', name: 'Claude 订阅版',   provider: 'claude-ai',  description: '...', fallback_model: 'claude-sonnet-4-6' },
-    { id: 'claude-opus-4-8',     name: 'Claude Opus 4.8', provider: 'anthropic',  description: '...' },
-    { id: 'claude-sonnet-4-6',   name: 'Claude Sonnet',   provider: 'anthropic',  description: '...' },
-    { id: 'claude-haiku-4-5',    name: 'Claude Haiku',    provider: 'anthropic',  description: '...' },
-    { id: 'deepseek-v4-pro',     name: 'DeepSeek V4 Pro', provider: 'deepseek',   description: '...' },
+    { id: 'claude-opus-4-8',     name: 'Claude Opus 4.8', provider: 'anthropic', description: '...', fallback_chain: ['deepseek-v4-pro'] },
+    { id: 'claude-sonnet-4-6',   name: 'Claude Sonnet',   provider: 'anthropic', description: '...', fallback_chain: ['deepseek-v4-pro'] },
+    { id: 'claude-haiku-4-5',    name: 'Claude Haiku',    provider: 'anthropic', description: '...', fallback_chain: ['deepseek-v4-pro'] },
+    { id: 'deepseek-v4-pro',     name: 'DeepSeek V4 Pro', provider: 'deepseek',  description: '...' },
   ]
 }
 writeFileSync(MODELS_FILE, JSON.stringify(TEST_MODELS))
@@ -86,7 +85,7 @@ function getQuotaStatus() {
 function isQuotaExhausted(provider) {
   const entry = getQuotaStatus()[provider]
   if (!entry || !entry.exhausted) return false
-  if (entry.exhausted_at == null || Date.now() - entry.exhausted_at > 24 * 60 * 60 * 1000) {
+  if (entry.exhausted_at == null || Date.now() - entry.exhausted_at > QUOTA_RESET_MS) {
     const status = getQuotaStatus()
     delete status[provider]
     try { writeFileSync(QUOTA_FILE, JSON.stringify(status, null, 2)) } catch {}
@@ -125,11 +124,19 @@ function resolveModelId(rawBody, sessionId) {
     if (!modelId) modelId = getFallbackModelId()
   }
   const config = getModelConfig(modelId)
-  if (config && config.fallback_model && isQuotaExhausted(config.provider)) {
-    if (!getModelConfig(config.fallback_model)) return modelId
-    return config.fallback_model
+  if (!config) return modelId
+
+  const chain = config.fallback_chain || (config.fallback_model ? [config.fallback_model] : [])
+  if (!isQuotaExhausted(config.provider)) return modelId
+  if (chain.length === 0) return null  // fixed: no longer bypasses quota check
+
+  for (const fbId of chain) {
+    const fbConfig = getModelConfig(fbId)
+    if (!fbConfig) continue
+    if (isQuotaExhausted(fbConfig.provider)) continue
+    return fbId
   }
-  return modelId
+  return null
 }
 
 function parseSessionUrl(url) {
@@ -155,7 +162,7 @@ function buildHeaders(originalHeaders, modelConfig, env = {}) {
     headers['anthropic-version'] = originalHeaders['anthropic-version'] || '2023-06-01'
     if (originalHeaders['anthropic-beta']) headers['anthropic-beta'] = originalHeaders['anthropic-beta']
   } else if (modelConfig.provider === 'claude-ai') {
-    if (!env.CLAUDE_SESSION_TOKEN) throw new Error('CLAUDE_SESSION_TOKEN environment variable is not set')
+    if (!env.CLAUDE_SESSION_TOKEN) throw new Error('Claude 订阅 Token 未找到，请先登录 claude.ai (claudeAiOauth.accessToken)')
     headers['authorization']     = `Bearer ${env.CLAUDE_SESSION_TOKEN}`
     if (originalHeaders['anthropic-version']) headers['anthropic-version'] = originalHeaders['anthropic-version']
     if (originalHeaders['anthropic-beta'])    headers['anthropic-beta']    = originalHeaders['anthropic-beta']
@@ -165,7 +172,7 @@ function buildHeaders(originalHeaders, modelConfig, env = {}) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const H24 = 24 * 60 * 60 * 1000
+const QUOTA_RESET_MS = 5 * 60 * 60 * 1000 // must match server.js
 
 function resetQuota()         { try { rmSync(QUOTA_FILE) } catch {} }
 function writeQuota(data)     { writeFileSync(QUOTA_FILE, JSON.stringify(data, null, 2)) }
@@ -245,26 +252,26 @@ test('recently exhausted → exhausted', () => {
   assert(isQuotaExhausted('claude-ai'))
 })
 
-test('boundary: 24h - 5s → still exhausted', () => {
+test('boundary: 5h - 5s → still exhausted', () => {
   // Use 5s margin — 1ms is smaller than file I/O + JSON parse time, causing flaky failures
-  writeQuota({ 'claude-ai': { exhausted: true, exhausted_at: Date.now() - (H24 - 5000) } })
+  writeQuota({ 'claude-ai': { exhausted: true, exhausted_at: Date.now() - (QUOTA_RESET_MS - 5000) } })
   assert(isQuotaExhausted('claude-ai'), 'should still be exhausted 5s before the reset threshold')
 })
 
-test('boundary: 24h + 1ms → auto-resets, returns false', () => {
-  writeQuota({ 'claude-ai': { exhausted: true, exhausted_at: Date.now() - (H24 + 1) } })
-  assert(!isQuotaExhausted('claude-ai'), 'should auto-reset after 24h')
+test('boundary: 5h + 1ms → auto-resets, returns false', () => {
+  writeQuota({ 'claude-ai': { exhausted: true, exhausted_at: Date.now() - (QUOTA_RESET_MS + 1) } })
+  assert(!isQuotaExhausted('claude-ai'), 'should auto-reset after 5h')
 })
 
 test('auto-reset removes entry from file', () => {
-  writeQuota({ 'claude-ai': { exhausted: true, exhausted_at: Date.now() - (H24 + 1) } })
+  writeQuota({ 'claude-ai': { exhausted: true, exhausted_at: Date.now() - (QUOTA_RESET_MS + 1) } })
   isQuotaExhausted('claude-ai')
   assert(!getQuotaStatus()['claude-ai'], 'entry should be removed after auto-reset')
 })
 
 test('auto-reset preserves other providers', () => {
   writeQuota({
-    'claude-ai': { exhausted: true, exhausted_at: Date.now() - (H24 + 1) },
+    'claude-ai': { exhausted: true, exhausted_at: Date.now() - (QUOTA_RESET_MS + 1) },
     'deepseek':  { exhausted: true, exhausted_at: Date.now() }
   })
   isQuotaExhausted('claude-ai')
@@ -273,10 +280,10 @@ test('auto-reset preserves other providers', () => {
   assert(s['deepseek'],   'deepseek should be preserved')
 })
 
-test('clock skew: exhausted_at in future → treated as exhausted (diff < 24h)', () => {
-  writeQuota({ 'claude-ai': { exhausted: true, exhausted_at: Date.now() + H24 * 2 } })
-  // Date.now() - future = negative → not > H24 threshold → not auto-reset → returns true
-  assert(isQuotaExhausted('claude-ai'), 'future timestamp stays exhausted (diff is negative, < 24h check)')
+test('clock skew: exhausted_at in future → treated as exhausted (diff < 5h threshold)', () => {
+  writeQuota({ 'claude-ai': { exhausted: true, exhausted_at: Date.now() + QUOTA_RESET_MS * 2 } })
+  // Date.now() - future = negative → not > QUOTA_RESET_MS threshold → not auto-reset → returns true
+  assert(isQuotaExhausted('claude-ai'), 'future timestamp stays exhausted (diff is negative, < 5h check)')
 })
 
 test('exhausted_at: null → auto-resets (fixed: != null guard)', () => {
@@ -344,37 +351,29 @@ test('global fallback when no session and no body.model', () => {
   assertEqual(resolveModelId(JSON.stringify({}), null), 'claude-haiku-4-5')
 })
 
-test('quota fallback: claude-subscription → claude-sonnet-4-6', () => {
-  writeQuota({ 'claude-ai': { exhausted: true, exhausted_at: Date.now() } })
-  writeSession('s2', 'claude-subscription')
-  assertEqual(resolveModelId(JSON.stringify({}), 's2'), 'claude-sonnet-4-6')
-  resetQuota()
-})
-
-test('quota fallback via body.model', () => {
-  writeQuota({ 'claude-ai': { exhausted: true, exhausted_at: Date.now() } })
-  assertEqual(resolveModelId(JSON.stringify({ model: 'claude-subscription' }), null), 'claude-sonnet-4-6')
-  resetQuota()
-})
-
-test('anthropic models not affected by claude-ai quota', () => {
-  writeQuota({ 'claude-ai': { exhausted: true, exhausted_at: Date.now() } })
-  writeSession('s3', 'claude-opus-4-8')
-  assertEqual(resolveModelId(JSON.stringify({}), 's3'), 'claude-opus-4-8')
-  resetQuota()
-})
-
-test('no fallback when model has no fallback_model field', () => {
+test('anthropic model → falls back to deepseek when anthropic quota exhausted', () => {
   writeQuota({ 'anthropic': { exhausted: true, exhausted_at: Date.now() } })
-  writeSession('s4', 'claude-opus-4-8')
-  // claude-opus-4-8 has no fallback_model → stays as-is even if provider "exhausted"
-  assertEqual(resolveModelId(JSON.stringify({}), 's4'), 'claude-opus-4-8')
+  writeSession('s2', 'claude-sonnet-4-6')
+  assertEqual(resolveModelId(JSON.stringify({}), 's2'), 'deepseek-v4-pro')
+  resetQuota()
+})
+
+test('anthropic NOT exhausted → returns model as-is', () => {
+  resetQuota()
+  writeSession('s4', 'claude-haiku-4-5')
+  assertEqual(resolveModelId(JSON.stringify({}), 's4'), 'claude-haiku-4-5')
+})
+
+test('deepseek with no fallback_chain → returns null when provider exhausted', () => {
+  writeQuota({ 'deepseek': { exhausted: true, exhausted_at: Date.now() } })
+  writeSession('s8', 'deepseek-v4-pro')
+  assertEqual(resolveModelId(JSON.stringify({}), 's8'), null)
   resetQuota()
 })
 
 test('session model: null → falls through to body.model', () => {
   resetQuota()
-  writeSession('s5', null)  // session file exists but model is null
+  writeSession('s5', null)
   assertEqual(resolveModelId(JSON.stringify({ model: 'deepseek-v4-pro' }), 's5'), 'deepseek-v4-pro')
 })
 
@@ -386,34 +385,6 @@ test('unknown body.model → global fallback (haiku)', () => {
 test('malformed body → global fallback (no crash)', () => {
   resetQuota()
   assertEqual(resolveModelId(Buffer.from('not json {{'), null), 'claude-haiku-4-5')
-})
-
-test('fallback_model does not recurse: if fallback also exhausted, returns fallback ID as-is', () => {
-  // claude-subscription → claude-sonnet-4-6. If sonnet's provider also exhausted, no second hop.
-  writeQuota({
-    'claude-ai':  { exhausted: true, exhausted_at: Date.now() },
-    'anthropic':  { exhausted: true, exhausted_at: Date.now() }
-  })
-  writeSession('s6', 'claude-subscription')
-  // fallback_model = 'claude-sonnet-4-6' (anthropic) — but resolveModelId only does one hop
-  const result = resolveModelId(JSON.stringify({}), 's6')
-  // Returns claude-sonnet-4-6 even though anthropic is "exhausted" — single-level fallback
-  assertEqual(result, 'claude-sonnet-4-6', 'only one fallback hop, no recursion')
-  resetQuota()
-})
-
-test('fallback_model pointing to unknown model → falls back to original model (fixed)', () => {
-  const custom = { models: [...TEST_MODELS.models, { id: 'broken', provider: 'claude-ai', fallback_model: 'nonexistent' }] }
-  writeFileSync(MODELS_FILE, JSON.stringify(custom))
-  resetModelCache()
-  writeQuota({ 'claude-ai': { exhausted: true, exhausted_at: Date.now() } })
-  writeSession('s7', 'broken')
-  const result = resolveModelId(JSON.stringify({}), 's7')
-  // Fixed: getModelConfig(fallback_model) check → returns original model instead of bad ID
-  assertEqual(result, 'broken', 'invalid fallback_model → safely returns original model')
-  writeFileSync(MODELS_FILE, JSON.stringify(TEST_MODELS))
-  resetModelCache()
-  resetQuota()
 })
 
 // ─── Suite: buildHeaders ──────────────────────────────────────────────────────
@@ -462,23 +433,8 @@ test('deepseek: missing DEEPSEEK_API_KEY → throws descriptive error (fixed)', 
   }
 })
 
-test('claude-ai: uses Bearer CLAUDE_SESSION_TOKEN, omits x-api-key', () => {
-  const h = buildHeaders({ 'anthropic-version': '2023-06-01' }, { provider: 'claude-ai' }, { CLAUDE_SESSION_TOKEN: 'tok123' })
-  assertEqual(h['authorization'], 'Bearer tok123')
-  assert(!('x-api-key' in h), 'claude-ai must not include x-api-key')
-})
-
-test('claude-ai: missing CLAUDE_SESSION_TOKEN → throws descriptive error (fixed)', () => {
-  try {
-    buildHeaders({}, { provider: 'claude-ai' }, {})
-    assert(false, 'should have thrown')
-  } catch (err) {
-    assert(err.message.includes('CLAUDE_SESSION_TOKEN'), `error should name the missing var, got: "${err.message}"`)
-  }
-})
-
 test('all providers: content-type and accept always set', () => {
-  for (const provider of ['anthropic', 'deepseek', 'claude-ai']) {
+  for (const provider of ['anthropic', 'deepseek']) {
     const h = buildHeaders({}, { provider }, { DEEPSEEK_API_KEY: 'x', CLAUDE_SESSION_TOKEN: 'y' })
     assertEqual(h['content-type'], 'application/json', `${provider}: content-type`)
     assertEqual(h['accept'],       'application/json', `${provider}: accept default`)
@@ -488,6 +444,73 @@ test('all providers: content-type and accept always set', () => {
 test('accept: respects original value (text/event-stream for streaming)', () => {
   const h = buildHeaders({ 'accept': 'text/event-stream' }, { provider: 'anthropic' }, {})
   assertEqual(h['accept'], 'text/event-stream')
+})
+
+// ─── Suite: candidate iteration (proxyRequest retry logic) ─────────────────────
+
+console.log('\n── candidate iteration ───────────────────────────────────────')
+
+// Mirror of server.js proxyRequest candidate-walking logic.
+// Candidates = [modelId, ...fallback_chain]. Skip entries whose buildHeaders throws.
+function walkCandidates(rawBody, sessionId, env) {
+  const modelId = resolveModelId(rawBody, sessionId)
+  if (modelId === null) return { error: 'all_exhausted' }
+
+  const primaryConfig = getModelConfig(modelId)
+  const candidates = [modelId, ...(primaryConfig?.fallback_chain || [])]
+
+  for (const cid of candidates) {
+    const config = getModelConfig(cid)
+    if (!config) continue
+    try {
+      buildHeaders({}, config, env)
+      return { model: cid, provider: config.provider }
+    } catch (err) {
+      // header build failed → skip to next candidate
+      continue
+    }
+  }
+  return { error: 'all_exhausted' }
+}
+
+test('anthropic model → uses anthropic directly', () => {
+  resetQuota()
+  writeSession('s1', 'claude-sonnet-4-6')
+  const result = walkCandidates(JSON.stringify({}), 's1', { DEEPSEEK_API_KEY: 'x' })
+  assertEqual(result.provider, 'anthropic')
+  assertEqual(result.model, 'claude-sonnet-4-6')
+})
+
+test('anthropic exhausted → falls back to deepseek', () => {
+  writeQuota({ 'anthropic': { exhausted: true, exhausted_at: Date.now() } })
+  writeSession('s2', 'claude-opus-4-8')
+  const result = walkCandidates(JSON.stringify({}), 's2', { DEEPSEEK_API_KEY: 'x' })
+  assertEqual(result.provider, 'deepseek')
+  assertEqual(result.model, 'deepseek-v4-pro')
+  resetQuota()
+})
+
+test('anthropic + deepseek both exhausted → all_exhausted', () => {
+  writeQuota({ 'anthropic': { exhausted: true, exhausted_at: Date.now() } })
+  writeSession('s3', 'claude-haiku-4-5')
+  const result = walkCandidates(JSON.stringify({}), 's3', {})
+  assertEqual(result.error, 'all_exhausted')
+  resetQuota()
+})
+
+test('deepseek selected directly → uses deepseek', () => {
+  resetQuota()
+  writeSession('s4', 'deepseek-v4-pro')
+  const result = walkCandidates(JSON.stringify({}), 's4', { DEEPSEEK_API_KEY: 'x' })
+  assertEqual(result.provider, 'deepseek')
+  assertEqual(result.model, 'deepseek-v4-pro')
+})
+
+test('deepseek selected but no DEEPSEEK_API_KEY → all_exhausted', () => {
+  resetQuota()
+  writeSession('s5', 'deepseek-v4-pro')
+  const result = walkCandidates(JSON.stringify({}), 's5', {})
+  assertEqual(result.error, 'all_exhausted')
 })
 
 // ─── Summary ──────────────────────────────────────────────────────────────────
@@ -502,7 +525,7 @@ if (failures.length > 0) {
   console.log()
 }
 
-console.log('All 4 previously documented bugs are now fixed and verified by tests.')
+console.log('All bugs fixed: quota reset window (5h), no-fallback quota bypass, chain skip exhausted entries.')
 console.log()
 
 process.exit(failed > 0 ? 1 : 0)

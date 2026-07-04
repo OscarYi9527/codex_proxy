@@ -222,6 +222,11 @@ if ($selectedRoute -eq 'deepseek') {
         '-c', 'model_providers.local_multi_proxy.wire_api="responses"',
         '-c', ("model_catalog_json='{0}'" -f $catalog)
     ) + $forwardArgs
+} elseif ($selectedRoute -eq 'gpt-subscription') {
+    # Override the global config which may still point to local_multi_proxy
+    $launchArgs = @(
+        '-c', 'model_provider="openai"'
+    ) + $forwardArgs
 }
 
 switch ($selectedRoute) {

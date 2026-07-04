@@ -160,6 +160,20 @@ test('keeps valid tool results directly after matching tool calls', () => {
   assert.equal(messages[1].content[1].text, 'extra context')
 })
 
+test('moves assistant text before tool calls when Codex records it after them', () => {
+  const { request } = responsesToAnthropic({
+    input: [
+      { type: 'function_call', call_id: 'call_1', name: 'lookup', arguments: '{"q":"x"}' },
+      { type: 'function_call', call_id: 'call_2', name: 'lookup', arguments: '{"q":"y"}' },
+      { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Running both lookups.' }] },
+      { type: 'function_call_output', call_id: 'call_1', output: 'first' },
+      { type: 'function_call_output', call_id: 'call_2', output: 'second' }
+    ]
+  })
+  assert.deepEqual(request.messages[0].content.map(block => block.type), ['text', 'tool_use', 'tool_use'])
+  assert.deepEqual(request.messages[1].content.map(block => block.type), ['tool_result', 'tool_result'])
+})
+
 test('wraps custom tools for Anthropic and restores custom calls', () => {
   const converted = responsesToAnthropic({
     input: 'patch it',
@@ -260,6 +274,7 @@ await testAsync('forwards native GPT model selections with Codex subscription he
         'content-type': 'application/json',
         authorization: 'Bearer test-token',
         'chatgpt-account-id': 'test-account',
+        'x-openai-internal-codex-responses-lite': 'true',
         'x-codex-turn-metadata': '{"thread_id":"gpt-thread"}'
       },
       body: JSON.stringify({
@@ -274,6 +289,7 @@ await testAsync('forwards native GPT model selections with Codex subscription he
     assert.equal(seen[0].body.reasoning.effort, 'xhigh')
     assert.equal(seen[0].options.headers.authorization, 'Bearer test-token')
     assert.equal(seen[0].options.headers['chatgpt-account-id'], 'test-account')
+    assert.equal(seen[0].options.headers['x-openai-internal-codex-responses-lite'], undefined)
   } finally {
     await new Promise(resolve => server.close(resolve))
   }

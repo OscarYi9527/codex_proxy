@@ -127,6 +127,9 @@ export function isChatGptModel(model) {
 
 function chatGptHeaders(req) {
   const headers = { 'content-type': 'application/json', accept: 'text/event-stream' }
+  // Do not forward x-openai-internal-codex-responses-lite. The mixed catalog
+  // includes GPT models that work through the normal Responses path but are
+  // rejected when that internal Lite mode reaches the ChatGPT upstream.
   const forwarded = [
     'authorization', 'chatgpt-account-id', 'originator', 'session-id',
     'thread-id', 'user-agent', 'x-client-request-id', 'x-codex-beta-features',
@@ -257,14 +260,26 @@ export function sanitizeAnthropicMessages(messages = []) {
 
       const next = messages[i + 1]
       const nextResultIds = new Set(next?.role === 'user' ? toolResultIds(next) : [])
-      const content = message.content.flatMap(block => {
-        if (block?.type !== 'tool_use') return block ? [block] : []
+      const normalContent = []
+      const matchedToolUses = []
+      for (const block of message.content) {
+        if (!block) continue
+        if (block.type !== 'tool_use') {
+          normalContent.push(block)
+          continue
+        }
         // Codex may trim large histories and leave old function_call items
         // without their function_call_output. DeepSeek's Anthropic endpoint
         // rejects that entire request, so keep the transcript readable but
         // remove the structural tool_use marker when its result is missing.
-        return nextResultIds.has(block.id) ? [block] : [toolBlockAsText(block)]
-      })
+        if (nextResultIds.has(block.id)) matchedToolUses.push(block)
+        else normalContent.push(toolBlockAsText(block))
+      }
+      // Codex can serialize an assistant status message after function_call
+      // items but before their outputs. DeepSeek treats content after a
+      // tool_use as breaking the required immediate tool_result boundary, so
+      // keep all matched tool_use blocks at the end of the assistant message.
+      const content = [...normalContent, ...matchedToolUses]
       pushSanitizedMessage(sanitized, { role: 'assistant', content })
       continue
     }

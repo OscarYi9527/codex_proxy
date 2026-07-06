@@ -29,3 +29,6 @@ codex-proxy.error.log
 codex-proxy-requests.log
 codex-proxy-watchdog.log
 codex-proxy-watchdog.pid
+codex-vscode-launcher.exe
+OFFICIAL_CODEX_*_NOTES.md
+patch-official-codex-app-model-filter.js

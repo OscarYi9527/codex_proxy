@@ -6,6 +6,8 @@ param(
     [switch]$InstallAutostart,
     [switch]$NoAutostart,
     [switch]$StartProxy,
+    [switch]$InstallVSCodeCompat,
+    [switch]$PatchVSCodeWebview,
     [switch]$DryRun,
     [switch]$Force,
     [string]$DeepSeekApiKey
@@ -30,6 +32,8 @@ $FilesToInstall = @(
     'start-codex-proxy.vbs',
     'install-codex-proxy-autostart.ps1',
     'uninstall-codex-proxy-autostart.ps1',
+    'install-vscode-codex-compat.ps1',
+    'repair-codex-model-cache.ps1',
     'test-codex-proxy.js',
     'test-codex-routing.ps1',
     'test-codex-lite-matrix.ps1'
@@ -136,6 +140,7 @@ sandbox = "elevated"
 name = "$ProviderName"
 base_url = "$baseUrl"
 wire_api = "responses"
+requires_openai_auth = true
 "@
     $text = $text.TrimEnd() + $providerBlock + "`r`n"
 
@@ -213,11 +218,33 @@ if ($StartProxy) {
     }
 }
 
+if ($InstallVSCodeCompat) {
+    $vscodeScript = Join-Path $InstallDir 'install-vscode-codex-compat.ps1'
+    $vscodeArgs = @('-File', $vscodeScript, '-InstallDir', $InstallDir, '-UpdateSettings')
+    if ($PatchVSCodeWebview) {
+        $vscodeArgs += '-PatchWebview'
+    }
+
+    if ($DryRun) {
+        Write-Step "would install VS Code Codex compatibility via: $vscodeScript"
+        if ($PatchVSCodeWebview) {
+            Write-Step "would patch VS Code Codex webview model list"
+        }
+    } else {
+        & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -ExecutionPolicy Bypass @vscodeArgs
+    }
+} elseif ($PatchVSCodeWebview) {
+    Write-Warning '-PatchVSCodeWebview was provided without -InstallVSCodeCompat; skipping VS Code patch.'
+}
+
 Write-Step "done"
 Write-Host ""
 Write-Host "Next commands:"
 Write-Host "  powershell -ExecutionPolicy Bypass -File `"$InstallDir\start-codex-proxy.ps1`""
 Write-Host "  powershell -ExecutionPolicy Bypass -File `"$InstallDir\codex-mode.ps1`" deepseek"
+if (-not $InstallVSCodeCompat) {
+    Write-Host "  powershell -ExecutionPolicy Bypass -File `"$InstallDir\install-vscode-codex-compat.ps1`" -UpdateSettings -PatchWebview"
+}
 Write-Host ""
 Write-Host "Autostart:"
 if ($shouldInstallAutostart) {

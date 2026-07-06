@@ -21,6 +21,7 @@ Assert ($deepseek.mode -eq 'deepseek') 'DeepSeek route was not selected.'
 Assert ($deepseek.arguments -contains 'deepseek-v4-pro') 'DeepSeek model override is missing.'
 Assert ($deepseek.arguments -contains 'model_provider="local_multi_proxy"') 'Local multi-upstream provider override is missing.'
 Assert ($deepseek.arguments -contains 'model_providers.local_multi_proxy.base_url="http://localhost:47892/v1"') 'Local multi-upstream base URL must use localhost for Codex compatibility.'
+Assert ($deepseek.arguments -contains 'model_providers.local_multi_proxy.requires_openai_auth=true') 'Local multi-upstream provider must keep ChatGPT account info visible.'
 Assert (($deepseek.arguments | Where-Object { $_ -like 'model_catalog_json=*' }).Count -eq 1) 'DeepSeek model catalog override is missing.'
 
 $subscription = Invoke-DryRun 'gpt-subscription'

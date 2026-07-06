@@ -43,7 +43,11 @@ if ($Route -eq 'Proxy') {
         $text = $text.TrimEnd() + "`r`n`r`n[model_providers.local_multi_proxy]`r`n" +
             "name = `"Local Multi-Upstream Proxy`"`r`n" +
             "base_url = `"http://localhost:47892/v1`"`r`n" +
-            "wire_api = `"responses`"`r`n"
+            "wire_api = `"responses`"`r`n" +
+            "requires_openai_auth = true`r`n"
+    } elseif ($text -match '(?m)^\[model_providers\.local_multi_proxy\]\s*$' -and
+        $text -notmatch '(?m)^requires_openai_auth\s*=') {
+        $text = $text -replace '(?m)(^\[model_providers\.local_multi_proxy\]\s*(?:\r?\n(?!\[).*)*)', "`$1`r`nrequires_openai_auth = true"
     }
 } else {
     $text = Set-TopLevelValue $text 'model' '"gpt-5.5"'

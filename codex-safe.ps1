@@ -220,6 +220,7 @@ if ($selectedRoute -eq 'deepseek') {
         '-c', 'model_providers.local_multi_proxy.name="Local Multi-Upstream Proxy"',
         '-c', ('model_providers.local_multi_proxy.base_url="{0}/v1"' -f $proxyBaseUrl),
         '-c', 'model_providers.local_multi_proxy.wire_api="responses"',
+        '-c', 'model_providers.local_multi_proxy.requires_openai_auth=true',
         '-c', ("model_catalog_json='{0}'" -f $catalog)
     ) + $forwardArgs
 } elseif ($selectedRoute -eq 'gpt-subscription') {

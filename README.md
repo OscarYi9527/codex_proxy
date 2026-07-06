@@ -90,6 +90,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
   -StartProxy
 ```
 
+如果还需要 VS Code Codex 扩展也能在模型菜单中选择 `deepseek-v4-pro`，可以一键安装 VS Code 兼容层并 patch 扩展前端模型过滤：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  .\install-codex-local-multi-proxy.ps1 `
+  -DeepSeekApiKey "你的 DeepSeek API Key" `
+  -StartProxy `
+  -InstallVSCodeCompat `
+  -PatchVSCodeWebview
+```
+
+> `-PatchVSCodeWebview` 会修改本机 VS Code OpenAI/Codex 扩展的 `model-list-filter-*.js`，升级扩展后可能需要重新执行安装器。
+
 默认安装目录：
 
 ```text
@@ -102,8 +115,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
 2. 在覆盖已有文件前创建时间戳备份。
 3. 备份并更新 `%USERPROFILE%\.codex\config.toml`。
 4. 注册 `local_multi_proxy`，地址为 `http://localhost:47892/v1`。
-5. 安装 Windows 登录自启动 watchdog。
-6. 在使用 `-StartProxy` 时立即启动代理。
+5. 为 `local_multi_proxy` 写入 `requires_openai_auth = true`，确保官方 Codex 桌面应用仍能显示 ChatGPT 账号信息。
+6. 安装 Windows 登录自启动 watchdog。
+7. 在使用 `-StartProxy` 时立即启动代理。
+8. 在使用 `-InstallVSCodeCompat` 时生成 VS Code launcher 并更新 `chatgpt.cliExecutable`。
 
 不需要登录自启动：
 
@@ -254,7 +269,10 @@ model_catalog_json = "C:\\Users\\you\\.codex-local-multi-proxy\\codex-models.jso
 name = "Local Multi-Upstream Proxy"
 base_url = "http://localhost:47892/v1"
 wire_api = "responses"
+requires_openai_auth = true
 ```
+
+`requires_openai_auth = true` 很重要：Codex 桌面应用的账号/Profile UI 会通过 app-server 的 `account/read` 判断是否有 ChatGPT 账号。如果自定义 provider 没有声明需要 OpenAI auth，官方应用可能返回 `account: null`，导致 GPT 仍可用但右上角账号信息不显示。
 
 ## 日志和诊断
 
@@ -320,13 +338,38 @@ Lite；仅在上游明确拒绝时改用标准 Responses：
 先使用默认 Codex Home 登录 ChatGPT，然后通过 `gpt-subscription` 或混合代理启动。
 不要把 GPT 订阅模式指向一个没有登录状态的独立 `CODEX_HOME`。
 
+### 官方 Codex 应用不显示账号信息
+
+确保 `[model_providers.local_multi_proxy]` 中包含：
+
+```toml
+requires_openai_auth = true
+```
+
+修复后需要重启官方 Codex 桌面应用，让内置 app-server 重新读取配置。可用临时 app-server 验证：`account/read` 应返回 ChatGPT 邮箱和 `requiresOpenaiAuth: true`。
+
+### VS Code Codex 看不到或无法选择 deepseek
+
+重新执行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  .\install-codex-local-multi-proxy.ps1 `
+  -InstallVSCodeCompat `
+  -PatchVSCodeWebview
+```
+
+VS Code 兼容层会把 `chatgpt.cliExecutable` 指向 `codex-vscode-launcher.exe`，并在前端模型过滤中同时加入 `models` 和 `availableModels`，否则 deepseek 可能显示但不能生效。
+
 ## 仓库结构
 
 - `codex-proxy.js`：当前 Codex Responses 多上游代理。
 - `codex-models.json`：Codex 模型目录。
 - `codex-safe.ps1`：安全启动、模式隔离、监控和故障转移。
 - `codex-mode.ps1`：三种路由模式的简化入口。
-- `install-codex-local-multi-proxy.ps1`：安装器。
+- `install-codex-local-multi-proxy.ps1`：一键安装器，可选安装 VS Code 兼容层。
+- `install-vscode-codex-compat.ps1`：生成 VS Code launcher，并可 patch VS Code Codex 模型菜单。
+- `repair-codex-model-cache.ps1`：旧版官方应用模型缓存修复辅助脚本。
 - `start/stop-codex-proxy.ps1`：服务管理。
 - `codex-proxy-watchdog.ps1`：登录自启动后的守护进程。
 - `ARCHITECTURE.md`：详细组件、数据流和流程图。

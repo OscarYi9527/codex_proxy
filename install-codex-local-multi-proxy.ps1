@@ -29,6 +29,7 @@ $FilesToInstall = @(
     'set-codex-route.ps1',
     'start-codex-proxy.ps1',
     'stop-codex-proxy.ps1',
+    'codex-proxy-watchdog.ps1',
     'start-codex-proxy.vbs',
     'install-codex-proxy-autostart.ps1',
     'uninstall-codex-proxy-autostart.ps1',

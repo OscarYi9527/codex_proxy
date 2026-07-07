@@ -34,4 +34,9 @@ Assert ($api.mode -eq 'gpt-api') 'GPT API route was not selected.'
 Assert ($api.codex_home -like '*\.codex-modes\gpt-api') 'GPT API CODEX_HOME is incorrect.'
 Assert ($api.arguments -notcontains 'deepseek-v4-pro') 'GPT API route leaked DeepSeek arguments.'
 
+$installer = Get-Content -Raw (Join-Path $PSScriptRoot 'install-codex-local-multi-proxy.ps1')
+Assert ($installer -match "'codex-proxy-watchdog\.ps1'") 'Installer must copy codex-proxy-watchdog.ps1 for autostart.'
+Assert ($installer -match "'install-vscode-codex-compat\.ps1'") 'Installer must copy the VS Code compatibility installer.'
+Assert ($installer -match 'requires_openai_auth\s*=\s*true') 'Installer must preserve ChatGPT account visibility for local_multi_proxy.'
+
 Write-Output 'codex routing tests: ok'

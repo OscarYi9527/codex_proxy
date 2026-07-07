@@ -17,6 +17,34 @@ function Ensure-Directory([string]$Path) {
     }
 }
 
+function Set-JsonObjectPropertyText([string]$Text, [string]$Key, [string]$JsonValue) {
+    $newline = if ($Text.Contains("`r`n")) { "`r`n" } else { "`n" }
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return "{$newline  `"$Key`": $JsonValue$newline}$newline"
+    }
+
+    $pattern = '(?m)^(\s*)"' + [regex]::Escape($Key) + '"\s*:\s*("[^"\\]*(?:\\.[^"\\]*)*"|[^,\r\n]*)(\s*,?)'
+    if ([regex]::IsMatch($Text, $pattern)) {
+        $evaluator = [System.Text.RegularExpressions.MatchEvaluator]{
+            param($match)
+            return $match.Groups[1].Value + '"' + $Key + '": ' + $JsonValue + $match.Groups[3].Value
+        }
+        return [regex]::Replace($Text, $pattern, $evaluator, 1)
+    }
+
+    $close = $Text.LastIndexOf('}')
+    if ($close -lt 0) {
+        throw "VS Code settings.json is not a JSON object. Set chatgpt.cliExecutable manually to: $launcherPath"
+    }
+
+    $before = $Text.Substring(0, $close).TrimEnd()
+    $after = $Text.Substring($close).TrimStart()
+    if ($before -notmatch '^\s*\{\s*$' -and $before -notmatch ',\s*$') {
+        $before += ','
+    }
+    return $before + $newline + '  "' + $Key + '": ' + $JsonValue + $newline + $after.TrimEnd() + $newline
+}
+
 $launcherPath = Join-Path $InstallDir 'codex-vscode-launcher.exe'
 $catalogPath = Join-Path $InstallDir 'codex-models.json'
 
@@ -230,19 +258,15 @@ if ($UpdateSettings) {
         '{}'
     }
 
-    try {
-        $settings = $settingsText | ConvertFrom-Json
-    } catch {
-        throw "VS Code settings are not plain JSON. Set chatgpt.cliExecutable manually to: $launcherPath"
+    $launcherJson = $launcherPath | ConvertTo-Json -Compress
+    $json = Set-JsonObjectPropertyText $settingsText 'chatgpt.cliExecutable' $launcherJson
+    if ((Test-Path -LiteralPath $VSCodeSettingsPath) -and $settingsText -ne $json) {
+        $backupPath = "$VSCodeSettingsPath.codex-local-proxy.bak"
+        if (-not (Test-Path -LiteralPath $backupPath)) {
+            Copy-Item -LiteralPath $VSCodeSettingsPath -Destination $backupPath -Force
+        }
     }
-
-    if ($null -eq $settings) {
-        $settings = [pscustomobject]@{}
-    }
-
-    $settings | Add-Member -NotePropertyName 'chatgpt.cliExecutable' -NotePropertyValue $launcherPath -Force
-    $json = $settings | ConvertTo-Json -Depth 20
-    [IO.File]::WriteAllText($VSCodeSettingsPath, $json + "`r`n", [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($VSCodeSettingsPath, $json, [Text.UTF8Encoding]::new($false))
     Write-Step "updated VS Code setting chatgpt.cliExecutable"
 }
 

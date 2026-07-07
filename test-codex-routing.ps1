@@ -42,5 +42,6 @@ Assert ($installer -match '\[string\]\$OpenAIApiKey') 'Installer must support pe
 
 $vscodeCompat = Get-Content -Raw (Join-Path $PSScriptRoot 'install-vscode-codex-compat.ps1')
 Assert ($vscodeCompat -match 'openai-api-gpt-5\.5') 'VS Code compatibility patch must include GPT API model variants.'
+Assert ($vscodeCompat -match 'Set-JsonObjectPropertyText') 'VS Code compatibility installer must support JSONC settings.json.'
 
 Write-Output 'codex routing tests: ok'

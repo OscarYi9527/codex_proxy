@@ -9,12 +9,20 @@ const PORT = Number(process.env.CODEX_PROXY_PORT || 47892)
 const HOST = process.env.CODEX_PROXY_HOST || '127.0.0.1'
 const UPSTREAM_URL = process.env.DEEPSEEK_ANTHROPIC_URL || 'https://api.deepseek.com/anthropic/v1/messages'
 const CHATGPT_RESPONSES_URL = process.env.CODEX_CHATGPT_RESPONSES_URL || 'https://chatgpt.com/backend-api/codex/responses'
+const OPENAI_API_BASE_URL = (process.env.CODEX_OPENAI_API_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '')
+const OPENAI_API_RESPONSES_URL = process.env.CODEX_OPENAI_API_RESPONSES_URL || `${OPENAI_API_BASE_URL}/responses`
+const OPENAI_API_CHAT_COMPLETIONS_URL = process.env.CODEX_OPENAI_API_CHAT_COMPLETIONS_URL || `${OPENAI_API_BASE_URL}/chat/completions`
 const DEFAULT_MODEL = process.env.CODEX_PROXY_DEFAULT_MODEL || 'deepseek-v4-pro'
 const MAX_BODY_BYTES = 16 * 1024 * 1024
 const RESPONSES_LITE_HEADER = 'x-openai-internal-codex-responses-lite'
 const PROXY_DIR = path.dirname(fileURLToPath(import.meta.url))
 const THREAD_ROUTES_DIR = process.env.CODEX_PROXY_THREAD_ROUTES_DIR || path.join(PROXY_DIR, 'codex-thread-routes')
 const responsesLiteUnsupportedModels = new Set()
+const GPT_API_MODEL_MAP = new Map([
+  ['gpt-5.5-api', 'gpt-5.5'],
+  ['gpt-5.4-api', 'gpt-5.4'],
+  ['gpt-5.4-api-mini', 'gpt-5.4-mini']
+])
 
 const REQUEST_LOG = path.join(os.homedir(), '.claude', 'proxy', 'codex-proxy-requests.log')
 
@@ -124,7 +132,16 @@ export function resolveCodexModel(body = {}) {
 }
 
 export function isChatGptModel(model) {
-  return typeof model === 'string' && /^gpt-/i.test(model)
+  return typeof model === 'string' && /^gpt-/i.test(model) && !isGptApiModel(model)
+}
+
+export function isGptApiModel(model) {
+  return typeof model === 'string' && GPT_API_MODEL_MAP.has(model.toLowerCase())
+}
+
+export function toOpenAIApiModel(model) {
+  if (typeof model !== 'string') return model
+  return GPT_API_MODEL_MAP.get(model.toLowerCase()) || model
 }
 
 function chatGptHeaders(req, { includeResponsesLite = true } = {}) {
@@ -140,6 +157,26 @@ function chatGptHeaders(req, { includeResponsesLite = true } = {}) {
     if (value) headers[name] = value
   }
   return headers
+}
+
+function openAIApiHeaders() {
+  const headers = {
+    'content-type': 'application/json',
+    accept: 'text/event-stream',
+    authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+  }
+  if (process.env.OPENAI_ORG_ID) headers['openai-organization'] = process.env.OPENAI_ORG_ID
+  if (process.env.OPENAI_PROJECT_ID) headers['openai-project'] = process.env.OPENAI_PROJECT_ID
+  return headers
+}
+
+function openAIApiBody(body, resolved, upstreamModel) {
+  const { client_metadata: _clientMetadata, ...apiBody } = body
+  return {
+    ...apiBody,
+    model: upstreamModel,
+    ...(resolved.reasoningEffort ? { reasoning: { ...(body.reasoning || {}), effort: resolved.reasoningEffort } } : {})
+  }
 }
 
 async function isResponsesLiteUnsupported(response) {
@@ -766,6 +803,20 @@ export function createServer({ fetchImpl = fetch } = {}) {
         const body = await readJson(req)
         const resolved = resolveCodexModel(body)
         requestLog(req, `model=${resolved.model} effort=${resolved.reasoningEffort || 'default'} thread=${resolved.threadId || 'none'} stream=${body.stream}`)
+        if (isGptApiModel(resolved.model)) {
+          if (!process.env.OPENAI_API_KEY) {
+            return sendJson(res, 503, { error: { type: 'authentication_error', message: 'OPENAI_API_KEY is not set' } })
+          }
+          const upstreamModel = toOpenAIApiModel(resolved.model)
+          const upstream = await fetchWithRetry(fetchImpl, OPENAI_API_RESPONSES_URL, {
+            method: 'POST',
+            headers: openAIApiHeaders(),
+            body: JSON.stringify(openAIApiBody(body, resolved, upstreamModel)),
+            signal: AbortSignal.timeout(300000)
+          })
+          requestLog(req, `model=${resolved.model} openai_api_model=${upstreamModel} status=${upstream.status}`)
+          return pipeResponsesUpstream(upstream, res)
+        }
         if (isChatGptModel(resolved.model)) {
           if (!req.headers.authorization || !req.headers['chatgpt-account-id']) {
             return sendJson(res, 401, {
@@ -847,13 +898,27 @@ export function createServer({ fetchImpl = fetch } = {}) {
     // ── Chat Completions API: POST /v1/chat/completions ──
     // If Codex falls back to Chat Completions for custom providers, handle it
     if (req.method === 'POST' && url.pathname.endsWith('/chat/completions')) {
-      if (!process.env.DEEPSEEK_API_KEY) {
-        return sendJson(res, 503, { error: { type: 'authentication_error', message: 'DEEPSEEK_API_KEY is not set' } })
-      }
       try {
         const body = await readJson(req)
         const resolved = resolveCodexModel(body)
         requestLog(req, `chat-completions model=${resolved.model} thread=${resolved.threadId || 'none'} stream=${body.stream}`)
+        if (isGptApiModel(resolved.model)) {
+          if (!process.env.OPENAI_API_KEY) {
+            return sendJson(res, 503, { error: { type: 'authentication_error', message: 'OPENAI_API_KEY is not set' } })
+          }
+          const upstreamModel = toOpenAIApiModel(resolved.model)
+          const upstream = await fetchWithRetry(fetchImpl, OPENAI_API_CHAT_COMPLETIONS_URL, {
+            method: 'POST',
+            headers: openAIApiHeaders(),
+            body: JSON.stringify({ ...body, model: upstreamModel }),
+            signal: AbortSignal.timeout(300000)
+          })
+          requestLog(req, `chat-completions model=${resolved.model} openai_api_model=${upstreamModel} status=${upstream.status}`)
+          return pipeResponsesUpstream(upstream, res)
+        }
+        if (!process.env.DEEPSEEK_API_KEY) {
+          return sendJson(res, 503, { error: { type: 'authentication_error', message: 'DEEPSEEK_API_KEY is not set' } })
+        }
         // Convert Chat Completions format to Anthropic Messages
         const messages = (body.messages || []).map(m => ({
           role: m.role === 'assistant' ? 'assistant' : 'user',

@@ -38,5 +38,9 @@ $installer = Get-Content -Raw (Join-Path $PSScriptRoot 'install-codex-local-mult
 Assert ($installer -match "'codex-proxy-watchdog\.ps1'") 'Installer must copy codex-proxy-watchdog.ps1 for autostart.'
 Assert ($installer -match "'install-vscode-codex-compat\.ps1'") 'Installer must copy the VS Code compatibility installer.'
 Assert ($installer -match 'requires_openai_auth\s*=\s*true') 'Installer must preserve ChatGPT account visibility for local_multi_proxy.'
+Assert ($installer -match '\[string\]\$OpenAIApiKey') 'Installer must support persisting OPENAI_API_KEY for GPT API models.'
+
+$vscodeCompat = Get-Content -Raw (Join-Path $PSScriptRoot 'install-vscode-codex-compat.ps1')
+Assert ($vscodeCompat -match 'gpt-5\.5-api') 'VS Code compatibility patch must include GPT API model variants.'
 
 Write-Output 'codex routing tests: ok'

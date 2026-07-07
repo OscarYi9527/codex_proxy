@@ -6,9 +6,18 @@
       "description": "DeepSeek through the local Responses proxy",
       "default_reasoning_level": "high",
       "supported_reasoning_levels": [
-        { "effort": "low", "description": "Faster responses" },
-        { "effort": "medium", "description": "Balanced reasoning" },
-        { "effort": "high", "description": "Deeper reasoning" }
+        {
+          "effort": "low",
+          "description": "Faster responses"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deeper reasoning"
+        }
       ],
       "shell_type": "shell_command",
       "visibility": "list",
@@ -20,7 +29,10 @@
       "default_verbosity": "low",
       "apply_patch_tool_type": "freeform",
       "web_search_tool_type": "text_and_image",
-      "truncation_policy": { "mode": "tokens", "limit": 10000 },
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
       "supports_parallel_tool_calls": false,
       "supports_image_detail_original": false,
       "supports_search_tool": true,
@@ -28,7 +40,9 @@
       "experimental_supported_tools": [],
       "context_window": 1000000,
       "effective_context_window_percent": 95,
-      "input_modalities": ["text"],
+      "input_modalities": [
+        "text"
+      ],
       "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
     },
     {
@@ -37,10 +51,22 @@
       "description": "Frontier model for complex coding, research, and real-world work.",
       "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
-        { "effort": "low", "description": "Fast responses with lighter reasoning" },
-        { "effort": "medium", "description": "Balanced speed and reasoning" },
-        { "effort": "high", "description": "Greater reasoning depth" },
-        { "effort": "xhigh", "description": "Maximum reasoning depth" }
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced speed and reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Maximum reasoning depth"
+        }
       ],
       "shell_type": "shell_command",
       "visibility": "list",
@@ -52,7 +78,10 @@
       "default_verbosity": "low",
       "apply_patch_tool_type": "freeform",
       "web_search_tool_type": "text_and_image",
-      "truncation_policy": { "mode": "tokens", "limit": 10000 },
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
       "supports_parallel_tool_calls": true,
       "supports_image_detail_original": true,
       "supports_search_tool": true,
@@ -60,7 +89,10 @@
       "experimental_supported_tools": [],
       "context_window": 372000,
       "effective_context_window_percent": 95,
-      "input_modalities": ["text", "image"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
     },
     {
@@ -69,10 +101,22 @@
       "description": "Strong model for everyday coding.",
       "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
-        { "effort": "low", "description": "Fast responses with lighter reasoning" },
-        { "effort": "medium", "description": "Balanced speed and reasoning" },
-        { "effort": "high", "description": "Greater reasoning depth" },
-        { "effort": "xhigh", "description": "Maximum reasoning depth" }
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced speed and reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Maximum reasoning depth"
+        }
       ],
       "shell_type": "shell_command",
       "visibility": "list",
@@ -84,7 +128,10 @@
       "default_verbosity": "low",
       "apply_patch_tool_type": "freeform",
       "web_search_tool_type": "text_and_image",
-      "truncation_policy": { "mode": "tokens", "limit": 10000 },
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
       "supports_parallel_tool_calls": true,
       "supports_image_detail_original": true,
       "supports_search_tool": true,
@@ -92,7 +139,10 @@
       "experimental_supported_tools": [],
       "context_window": 372000,
       "effective_context_window_percent": 95,
-      "input_modalities": ["text", "image"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
     },
     {
@@ -101,10 +151,22 @@
       "description": "Small, fast model for simpler coding tasks.",
       "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
-        { "effort": "low", "description": "Fast responses with lighter reasoning" },
-        { "effort": "medium", "description": "Balanced speed and reasoning" },
-        { "effort": "high", "description": "Greater reasoning depth" },
-        { "effort": "xhigh", "description": "Maximum reasoning depth" }
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced speed and reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Maximum reasoning depth"
+        }
       ],
       "shell_type": "shell_command",
       "visibility": "list",
@@ -116,7 +178,10 @@
       "default_verbosity": "low",
       "apply_patch_tool_type": "freeform",
       "web_search_tool_type": "text_and_image",
-      "truncation_policy": { "mode": "tokens", "limit": 10000 },
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
       "supports_parallel_tool_calls": true,
       "supports_image_detail_original": true,
       "supports_search_tool": true,
@@ -124,7 +189,160 @@
       "experimental_supported_tools": [],
       "context_window": 372000,
       "effective_context_window_percent": 95,
-      "input_modalities": ["text", "image"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
+    },
+    {
+      "slug": "gpt-5.5-api",
+      "display_name": "GPT-5.5-API",
+      "description": "OpenAI API route for GPT-5.5 through the local proxy.",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced speed and reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 4,
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "none",
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "freeform",
+      "web_search_tool_type": "text_and_image",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "supports_search_tool": true,
+      "use_responses_lite": false,
+      "experimental_supported_tools": [],
+      "context_window": 372000,
+      "effective_context_window_percent": 95,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
+    },
+    {
+      "slug": "gpt-5.4-api",
+      "display_name": "GPT-5.4-API",
+      "description": "OpenAI API route for GPT-5.4 through the local proxy.",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced speed and reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 5,
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "none",
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "freeform",
+      "web_search_tool_type": "text_and_image",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "supports_search_tool": true,
+      "use_responses_lite": false,
+      "experimental_supported_tools": [],
+      "context_window": 372000,
+      "effective_context_window_percent": 95,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
+    },
+    {
+      "slug": "gpt-5.4-api-mini",
+      "display_name": "GPT-5.4-API Mini",
+      "description": "OpenAI API route for GPT-5.4 Mini through the local proxy.",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced speed and reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 6,
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "none",
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "freeform",
+      "web_search_tool_type": "text_and_image",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "supports_search_tool": true,
+      "use_responses_lite": false,
+      "experimental_supported_tools": [],
+      "context_window": 372000,
+      "effective_context_window_percent": 95,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
     }
   ]

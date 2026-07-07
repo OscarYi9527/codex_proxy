@@ -10,7 +10,8 @@ param(
     [switch]$PatchVSCodeWebview,
     [switch]$DryRun,
     [switch]$Force,
-    [string]$DeepSeekApiKey
+    [string]$DeepSeekApiKey,
+    [string]$OpenAIApiKey
 )
 
 $ErrorActionPreference = 'Stop'
@@ -181,6 +182,16 @@ if ($DeepSeekApiKey) {
         [Environment]::SetEnvironmentVariable('DEEPSEEK_API_KEY', $DeepSeekApiKey, 'User')
         $env:DEEPSEEK_API_KEY = $DeepSeekApiKey
         Write-Step "set user DEEPSEEK_API_KEY"
+    }
+}
+
+if ($OpenAIApiKey) {
+    if ($DryRun) {
+        Write-Step "would set user OPENAI_API_KEY"
+    } else {
+        [Environment]::SetEnvironmentVariable('OPENAI_API_KEY', $OpenAIApiKey, 'User')
+        $env:OPENAI_API_KEY = $OpenAIApiKey
+        Write-Step "set user OPENAI_API_KEY"
     }
 }
 

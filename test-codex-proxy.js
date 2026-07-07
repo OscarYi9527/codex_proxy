@@ -12,12 +12,15 @@ const {
   createServer,
   buildModelsResponse,
   getThreadId,
+  isChatGptModel,
+  isGptApiModel,
   parseThreadMetadata,
   readThreadRoute,
   readThreadRouteState,
   resolveCodexModel,
   responsesToAnthropic,
   sanitizeAnthropicMessages,
+  toOpenAIApiModel,
   writeThreadRoute
 } = await import('./codex-proxy.js')
 
@@ -221,6 +224,16 @@ test('serves both Codex and OpenAI model catalog shapes', () => {
   assert.deepEqual(response.data.map(model => model.id), ['deepseek-v4-pro', 'gpt-5.5'])
 })
 
+test('classifies GPT subscription and API model variants separately', () => {
+  assert.equal(isChatGptModel('gpt-5.5'), true)
+  assert.equal(isChatGptModel('gpt-5.5-api'), false)
+  assert.equal(isGptApiModel('gpt-5.5-api'), true)
+  assert.equal(isGptApiModel('gpt-5.4-api-mini'), true)
+  assert.equal(toOpenAIApiModel('gpt-5.5-api'), 'gpt-5.5')
+  assert.equal(toOpenAIApiModel('gpt-5.4-api'), 'gpt-5.4')
+  assert.equal(toOpenAIApiModel('gpt-5.4-api-mini'), 'gpt-5.4-mini')
+})
+
 await testAsync('control route survives PUT, GET, DELETE, and a following request', async () => {
   const server = createServer()
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -247,7 +260,8 @@ await testAsync('control route survives PUT, GET, DELETE, and a following reques
     const models = await fetch(`${base}/v1/models`)
     assert.equal(models.status, 200)
     assert.deepEqual((await models.json()).data.map(model => model.id), [
-      'deepseek-v4-pro', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'
+      'deepseek-v4-pro', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini',
+      'gpt-5.5-api', 'gpt-5.4-api', 'gpt-5.4-api-mini'
     ])
   } finally {
     await new Promise(resolve => server.close(resolve))
@@ -292,6 +306,50 @@ await testAsync('forwards native GPT model selections with Codex subscription he
     assert.equal(seen[0].options.headers['x-openai-internal-codex-responses-lite'], 'true')
   } finally {
     await new Promise(resolve => server.close(resolve))
+  }
+})
+
+await testAsync('routes GPT API model variants to OpenAI API key upstream', async () => {
+  const previousKey = process.env.OPENAI_API_KEY
+  process.env.OPENAI_API_KEY = 'sk-test-openai'
+  const seen = []
+  const server = createServer({
+    fetchImpl: async (url, options) => {
+      seen.push({ url, options, body: JSON.parse(options.body) })
+      return new Response(JSON.stringify({
+        id: 'resp_api', object: 'response', status: 'completed', model: 'gpt-5.5', output: []
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address()
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-openai-internal-codex-responses-lite': 'true'
+      },
+      body: JSON.stringify({
+        model: 'gpt-5.5-api',
+        reasoning: { effort: 'high' },
+        input: 'hello',
+        client_metadata: { 'x-codex-turn-metadata': '{"thread_id":"api-thread"}' }
+      })
+    })
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).model, 'gpt-5.5')
+    assert.equal(seen[0].url, 'https://api.openai.com/v1/responses')
+    assert.equal(seen[0].body.model, 'gpt-5.5')
+    assert.equal(seen[0].body.reasoning.effort, 'high')
+    assert.equal(seen[0].body.client_metadata, undefined)
+    assert.equal(seen[0].options.headers.authorization, 'Bearer sk-test-openai')
+    assert.equal(seen[0].options.headers['chatgpt-account-id'], undefined)
+    assert.equal(seen[0].options.headers['x-openai-internal-codex-responses-lite'], undefined)
+  } finally {
+    await new Promise(resolve => server.close(resolve))
+    if (previousKey == null) delete process.env.OPENAI_API_KEY
+    else process.env.OPENAI_API_KEY = previousKey
   }
 })
 

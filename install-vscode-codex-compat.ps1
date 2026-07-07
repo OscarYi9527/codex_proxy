@@ -195,15 +195,20 @@ if ($PatchWebview) {
     }
 
     $needle = 'function t({authMethod:t,availableModels:n,defaultModel:r,enabledReasoningEfforts:i,includeUltraReasoningEffort:a,models:o,useHiddenModels:s}){let c=[]'
-    $deepseekModel = 'o=o.some(e=>e.model===`deepseek-v4-pro`)?o:[{id:`deepseek-v4-pro`,model:`deepseek-v4-pro`,displayName:`DeepSeek V4 Pro`,description:`DeepSeek through the local Responses proxy`,hidden:!1,isDefault:!1,defaultReasoningEffort:`high`,supportedReasoningEfforts:[{reasoningEffort:`low`,description:`Faster responses`},{reasoningEffort:`medium`,description:`Balanced reasoning`},{reasoningEffort:`high`,description:`Deeper reasoning`}],inputModalities:[`text`],additionalSpeedTiers:[],serviceTiers:[],defaultServiceTier:null,availabilityNux:null,supportsPersonality:!1,upgrade:null},...o];n&&typeof n.add===`function`&&n.add(`deepseek-v4-pro`);let c=[]'
+    $legacyDeepseekModel = 'o=o.some(e=>e.model===`deepseek-v4-pro`)?o:[{id:`deepseek-v4-pro`,model:`deepseek-v4-pro`,displayName:`DeepSeek V4 Pro`,description:`DeepSeek through the local Responses proxy`,hidden:!1,isDefault:!1,defaultReasoningEffort:`high`,supportedReasoningEfforts:[{reasoningEffort:`low`,description:`Faster responses`},{reasoningEffort:`medium`,description:`Balanced reasoning`},{reasoningEffort:`high`,description:`Deeper reasoning`}],inputModalities:[`text`],additionalSpeedTiers:[],serviceTiers:[],defaultServiceTier:null,availabilityNux:null,supportsPersonality:!1,upgrade:null},...o];n&&typeof n.add===`function`&&n.add(`deepseek-v4-pro`);let c=[]'
+    $customModels = 'for(const l of [{id:`deepseek-v4-pro`,model:`deepseek-v4-pro`,displayName:`DeepSeek V4 Pro`,description:`DeepSeek through the local Responses proxy`,hidden:!1,isDefault:!1,defaultReasoningEffort:`high`,supportedReasoningEfforts:[{reasoningEffort:`low`,description:`Faster responses`},{reasoningEffort:`medium`,description:`Balanced reasoning`},{reasoningEffort:`high`,description:`Deeper reasoning`}],inputModalities:[`text`],additionalSpeedTiers:[],serviceTiers:[],defaultServiceTier:null,availabilityNux:null,supportsPersonality:!1,upgrade:null},{id:`gpt-5.5-api`,model:`gpt-5.5-api`,displayName:`GPT-5.5-API`,description:`OpenAI API route for GPT-5.5 through the local proxy.`,hidden:!1,isDefault:!1,defaultReasoningEffort:`medium`,supportedReasoningEfforts:[{reasoningEffort:`low`,description:`Fast responses with lighter reasoning`},{reasoningEffort:`medium`,description:`Balanced speed and reasoning`},{reasoningEffort:`high`,description:`Greater reasoning depth`},{reasoningEffort:`xhigh`,description:`Maximum reasoning depth`}],inputModalities:[`text`,`image`],additionalSpeedTiers:[],serviceTiers:[],defaultServiceTier:null,availabilityNux:null,supportsPersonality:!1,upgrade:null},{id:`gpt-5.4-api`,model:`gpt-5.4-api`,displayName:`GPT-5.4-API`,description:`OpenAI API route for GPT-5.4 through the local proxy.`,hidden:!1,isDefault:!1,defaultReasoningEffort:`medium`,supportedReasoningEfforts:[{reasoningEffort:`low`,description:`Fast responses with lighter reasoning`},{reasoningEffort:`medium`,description:`Balanced speed and reasoning`},{reasoningEffort:`high`,description:`Greater reasoning depth`},{reasoningEffort:`xhigh`,description:`Maximum reasoning depth`}],inputModalities:[`text`,`image`],additionalSpeedTiers:[],serviceTiers:[],defaultServiceTier:null,availabilityNux:null,supportsPersonality:!1,upgrade:null},{id:`gpt-5.4-api-mini`,model:`gpt-5.4-api-mini`,displayName:`GPT-5.4-API Mini`,description:`OpenAI API route for GPT-5.4 Mini through the local proxy.`,hidden:!1,isDefault:!1,defaultReasoningEffort:`medium`,supportedReasoningEfforts:[{reasoningEffort:`low`,description:`Fast responses with lighter reasoning`},{reasoningEffort:`medium`,description:`Balanced speed and reasoning`},{reasoningEffort:`high`,description:`Greater reasoning depth`},{reasoningEffort:`xhigh`,description:`Maximum reasoning depth`}],inputModalities:[`text`,`image`],additionalSpeedTiers:[],serviceTiers:[],defaultServiceTier:null,availabilityNux:null,supportsPersonality:!1,upgrade:null}]){o=o.some(e=>e.model===l.model)?o:[l,...o];n&&typeof n.add===`function`&&n.add(l.model)}let c=[]'
 
     foreach ($assetFile in $assetFiles) {
         $text = [IO.File]::ReadAllText($assetFile.FullName)
-        if ($text.Contains('deepseek-v4-pro')) {
+        if ($text.Contains('gpt-5.5-api')) {
             Write-Step "already patched: $($assetFile.FullName)"
             continue
         }
-        if (-not $text.Contains($needle)) {
+        if ($text.Contains($legacyDeepseekModel)) {
+            $patched = $text.Replace($legacyDeepseekModel, $customModels)
+        } elseif ($text.Contains($needle)) {
+            $patched = $text.Replace($needle, $needle.Replace('let c=[]', $customModels))
+        } else {
             Write-Warning "Could not patch unexpected asset format: $($assetFile.FullName)"
             continue
         }
@@ -212,7 +217,6 @@ if ($PatchWebview) {
         if (-not (Test-Path -LiteralPath $backupPath)) {
             Copy-Item -LiteralPath $assetFile.FullName -Destination $backupPath -Force
         }
-        $patched = $text.Replace($needle, $needle.Replace('let c=[]', $deepseekModel))
         [IO.File]::WriteAllText($assetFile.FullName, $patched, [Text.UTF8Encoding]::new($false))
         Write-Step "patched webview model list: $($assetFile.FullName)"
     }

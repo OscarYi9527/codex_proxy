@@ -41,6 +41,6 @@ Assert ($installer -match 'requires_openai_auth\s*=\s*true') 'Installer must pre
 Assert ($installer -match '\[string\]\$OpenAIApiKey') 'Installer must support persisting OPENAI_API_KEY for GPT API models.'
 
 $vscodeCompat = Get-Content -Raw (Join-Path $PSScriptRoot 'install-vscode-codex-compat.ps1')
-Assert ($vscodeCompat -match 'gpt-5\.5-api') 'VS Code compatibility patch must include GPT API model variants.'
+Assert ($vscodeCompat -match 'openai-api-gpt-5\.5') 'VS Code compatibility patch must include GPT API model variants.'
 
 Write-Output 'codex routing tests: ok'

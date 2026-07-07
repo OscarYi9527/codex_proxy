@@ -196,7 +196,7 @@
       "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
     },
     {
-      "slug": "gpt-5.5-api",
+      "slug": "openai-api-gpt-5.5",
       "display_name": "GPT-5.5-API",
       "description": "OpenAI API route for GPT-5.5 through the local proxy.",
       "default_reasoning_level": "medium",
@@ -246,7 +246,7 @@
       "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
     },
     {
-      "slug": "gpt-5.4-api",
+      "slug": "openai-api-gpt-5.4",
       "display_name": "GPT-5.4-API",
       "description": "OpenAI API route for GPT-5.4 through the local proxy.",
       "default_reasoning_level": "medium",
@@ -296,7 +296,7 @@
       "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
     },
     {
-      "slug": "gpt-5.4-api-mini",
+      "slug": "openai-api-gpt-5.4-mini",
       "display_name": "GPT-5.4-API Mini",
       "description": "OpenAI API route for GPT-5.4 Mini through the local proxy.",
       "default_reasoning_level": "medium",

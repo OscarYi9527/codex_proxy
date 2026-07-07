@@ -19,6 +19,14 @@ const PROXY_DIR = path.dirname(fileURLToPath(import.meta.url))
 const THREAD_ROUTES_DIR = process.env.CODEX_PROXY_THREAD_ROUTES_DIR || path.join(PROXY_DIR, 'codex-thread-routes')
 const responsesLiteUnsupportedModels = new Set()
 const GPT_API_MODEL_MAP = new Map([
+  // Catalog slugs intentionally do not start with "gpt-" because Codex
+  // validates unknown gpt-* names against the active ChatGPT account before
+  // custom-provider requests reach this proxy.
+  ['openai-api-gpt-5.5', 'gpt-5.5'],
+  ['openai-api-gpt-5.4', 'gpt-5.4'],
+  ['openai-api-gpt-5.4-mini', 'gpt-5.4-mini'],
+  // Backward-compatible aliases for direct HTTP calls/tests. Do not expose
+  // these in codex-models.json under a ChatGPT-authenticated provider.
   ['gpt-5.5-api', 'gpt-5.5'],
   ['gpt-5.4-api', 'gpt-5.4'],
   ['gpt-5.4-api-mini', 'gpt-5.4-mini']

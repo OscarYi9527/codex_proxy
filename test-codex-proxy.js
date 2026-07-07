@@ -226,12 +226,14 @@ test('serves both Codex and OpenAI model catalog shapes', () => {
 
 test('classifies GPT subscription and API model variants separately', () => {
   assert.equal(isChatGptModel('gpt-5.5'), true)
+  assert.equal(isChatGptModel('openai-api-gpt-5.5'), false)
+  assert.equal(isGptApiModel('openai-api-gpt-5.5'), true)
+  assert.equal(isGptApiModel('openai-api-gpt-5.4-mini'), true)
   assert.equal(isChatGptModel('gpt-5.5-api'), false)
   assert.equal(isGptApiModel('gpt-5.5-api'), true)
-  assert.equal(isGptApiModel('gpt-5.4-api-mini'), true)
-  assert.equal(toOpenAIApiModel('gpt-5.5-api'), 'gpt-5.5')
-  assert.equal(toOpenAIApiModel('gpt-5.4-api'), 'gpt-5.4')
-  assert.equal(toOpenAIApiModel('gpt-5.4-api-mini'), 'gpt-5.4-mini')
+  assert.equal(toOpenAIApiModel('openai-api-gpt-5.5'), 'gpt-5.5')
+  assert.equal(toOpenAIApiModel('openai-api-gpt-5.4'), 'gpt-5.4')
+  assert.equal(toOpenAIApiModel('openai-api-gpt-5.4-mini'), 'gpt-5.4-mini')
 })
 
 await testAsync('control route survives PUT, GET, DELETE, and a following request', async () => {
@@ -261,7 +263,7 @@ await testAsync('control route survives PUT, GET, DELETE, and a following reques
     assert.equal(models.status, 200)
     assert.deepEqual((await models.json()).data.map(model => model.id), [
       'deepseek-v4-pro', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini',
-      'gpt-5.5-api', 'gpt-5.4-api', 'gpt-5.4-api-mini'
+      'openai-api-gpt-5.5', 'openai-api-gpt-5.4', 'openai-api-gpt-5.4-mini'
     ])
   } finally {
     await new Promise(resolve => server.close(resolve))
@@ -331,7 +333,7 @@ await testAsync('routes GPT API model variants to OpenAI API key upstream', asyn
         'x-openai-internal-codex-responses-lite': 'true'
       },
       body: JSON.stringify({
-        model: 'gpt-5.5-api',
+        model: 'openai-api-gpt-5.5',
         reasoning: { effort: 'high' },
         input: 'hello',
         client_metadata: { 'x-codex-turn-metadata': '{"thread_id":"api-thread"}' }

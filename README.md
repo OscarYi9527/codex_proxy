@@ -49,13 +49,13 @@ Codex 发往代理的 `body.model` 是实际路由依据。旧的线程路由文
 
 ### GPT API 路由
 
-带 `-API` 后缀的模型通过 OpenAI API Key 调用，不使用 ChatGPT 订阅登录态：
+带 `-API` 后缀的模型通过 OpenAI API Key 调用，不使用 ChatGPT 订阅登录态。菜单显示名保持 `GPT-*-API`，内部 slug 使用 `openai-api-gpt-*`，避免 Codex 在 ChatGPT 登录态下把未知 `gpt-*` 名称提前拦截：
 
 | 菜单显示 | 模型 slug | 上游 API model |
 |---|---|---|
-| `GPT-5.5-API` | `gpt-5.5-api` | `gpt-5.5` |
-| `GPT-5.4-API` | `gpt-5.4-api` | `gpt-5.4` |
-| `GPT-5.4-API Mini` | `gpt-5.4-api-mini` | `gpt-5.4-mini` |
+| `GPT-5.5-API` | `openai-api-gpt-5.5` | `gpt-5.5` |
+| `GPT-5.4-API` | `openai-api-gpt-5.4` | `gpt-5.4` |
+| `GPT-5.4-API Mini` | `openai-api-gpt-5.4-mini` | `gpt-5.4-mini` |
 
 使用这些模型前需要设置 `OPENAI_API_KEY`。可选设置
 `CODEX_OPENAI_API_BASE_URL`、`CODEX_OPENAI_API_RESPONSES_URL` 或
@@ -363,6 +363,10 @@ Lite；仅在上游明确拒绝时改用标准 Responses：
 
 先使用默认 Codex Home 登录 ChatGPT，然后通过 `gpt-subscription` 或混合代理启动。
 不要把 GPT 订阅模式指向一个没有登录状态的独立 `CODEX_HOME`。
+
+### GPT API 模型提示 “not supported when using Codex with a ChatGPT account”
+
+不要把 API 模型的目录 slug 暴露成未知的 `gpt-*` 名称。Codex 在 ChatGPT 登录态下会先按 ChatGPT 账号校验 `gpt-*` 模型，未命中官方模型时请求不会到达本地代理。当前目录使用 `openai-api-gpt-*` 作为内部 slug，菜单显示名仍是 `GPT-*-API`。
 
 ### 官方 Codex 应用不显示账号信息
 

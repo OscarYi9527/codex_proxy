@@ -1,9 +1,13 @@
 {
+  "//": "Codex multi-upstream model catalog. Three channels:",
+  "//_gpt_subscription": "gpt-* models use ChatGPT subscription (Codex auth headers)",
+  "//_openai_api": "openai-api-* models use OpenAI-compatible API (user API key)",
+  "//_deepseek": "deepseek-v4-pro uses Anthropic-compatible API (user API key)",
   "models": [
     {
       "slug": "deepseek-v4-pro",
       "display_name": "DeepSeek V4 Pro",
-      "description": "DeepSeek through the local Responses proxy",
+      "description": "DeepSeek V4 Pro via Anthropic API",
       "default_reasoning_level": "high",
       "supported_reasoning_levels": [
         {
@@ -47,8 +51,8 @@
     },
     {
       "slug": "gpt-5.5",
-      "display_name": "GPT-5.5",
-      "description": "Frontier model for complex coding, research, and real-world work.",
+      "display_name": "GPT-5.5 (Subscription)",
+      "description": "GPT-5.5 via ChatGPT subscription. Requires active ChatGPT account.",
       "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
         {
@@ -97,8 +101,8 @@
     },
     {
       "slug": "gpt-5.4",
-      "display_name": "GPT-5.4",
-      "description": "Strong model for everyday coding.",
+      "display_name": "GPT-5.4 (Subscription)",
+      "description": "GPT-5.4 via ChatGPT subscription. Strong model for everyday coding.",
       "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
         {
@@ -147,8 +151,8 @@
     },
     {
       "slug": "gpt-5.4-mini",
-      "display_name": "GPT-5.4 Mini",
-      "description": "Small, fast model for simpler coding tasks.",
+      "display_name": "GPT-5.4 Mini (Subscription)",
+      "description": "GPT-5.4 Mini via ChatGPT subscription. Small, fast model for simpler coding tasks.",
       "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
         {
@@ -197,8 +201,8 @@
     },
     {
       "slug": "openai-api-gpt-5.5",
-      "display_name": "GPT-5.5-API",
-      "description": "OpenAI API route for GPT-5.5 through the local proxy.",
+      "display_name": "GPT-5.5 (API Key)",
+      "description": "GPT-5.5 via OpenAI-compatible API. Requires OPENAI_API_KEY.",
       "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
         {
@@ -247,8 +251,8 @@
     },
     {
       "slug": "openai-api-gpt-5.4",
-      "display_name": "GPT-5.4-API",
-      "description": "OpenAI API route for GPT-5.4 through the local proxy.",
+      "display_name": "GPT-5.4 (API Key)",
+      "description": "GPT-5.4 via OpenAI-compatible API. Requires OPENAI_API_KEY.",
       "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
         {
@@ -297,8 +301,8 @@
     },
     {
       "slug": "openai-api-gpt-5.4-mini",
-      "display_name": "GPT-5.4-API Mini",
-      "description": "OpenAI API route for GPT-5.4 Mini through the local proxy.",
+      "display_name": "GPT-5.4 Mini (API Key)",
+      "description": "GPT-5.4 Mini via OpenAI-compatible API. Requires OPENAI_API_KEY.",
       "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
         {

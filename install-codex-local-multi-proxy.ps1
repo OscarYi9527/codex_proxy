@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$InstallDir = (Join-Path $HOME '.codex-local-multi-proxy'),
     [string]$CodexHome = (Join-Path $HOME '.codex'),
     [string]$DefaultModel = 'gpt-5.5',
@@ -22,8 +22,28 @@ $SourceDir = $PSScriptRoot
 
 $FilesToInstall = @(
     'package.json',
-    'codex-proxy.js',
+    'index.js',
     'codex-models.json',
+    'src\config.js',
+    'src\logger.js',
+    'src\models.js',
+    'src\server-utils.js',
+    'src\server.js',
+    'src\stats.js',
+    'src\sync-models.js',
+    'src\admin.js',
+    'src\admin_app.js',
+    'src\admin.html',
+    'src\admin_html_head.txt',
+    'src\convert\anthropic.js',
+    'src\convert\chat-completions.js',
+    'src\convert\stream.js',
+    'src\routes\chatgpt-sub.js',
+    'src\routes\deepseek.js',
+    'src\routes\openai-api.js',
+    'src\routes\relay.js',
+    'src\routes\thread-route.js',
+    'src\routes\ping.js',
     'codex-safe.ps1',
     'codex-mode.ps1',
     'codex-env-proxy.ps1',
@@ -36,7 +56,7 @@ $FilesToInstall = @(
     'uninstall-codex-proxy-autostart.ps1',
     'install-vscode-codex-compat.ps1',
     'repair-codex-model-cache.ps1',
-    'test-codex-proxy.js',
+    'tests\test-codex-proxy.js',
     'test-codex-routing.ps1',
     'test-codex-lite-matrix.ps1'
 )
@@ -89,6 +109,30 @@ function Backup-And-Copy([string]$RelativePath, [string]$BackupRoot) {
     }
     Copy-Item -LiteralPath $src -Destination $dst -Force
     Write-Step "installed: $RelativePath"
+}
+
+function Seed-ConfigIfMissing {
+    $src = Join-Path $SourceDir 'codex-proxy-config.json'
+    $dst = Join-Path $InstallDir 'codex-proxy-config.json'
+
+    if (-not (Test-Path -LiteralPath $src)) {
+        Write-Step "skip missing seed source: codex-proxy-config.json"
+        return
+    }
+
+    if (Test-Path -LiteralPath $dst) {
+        Write-Step "codex-proxy-config.json already exists at install dir, skip seeding (preserving admin-panel edits)"
+        return
+    }
+
+    if ($DryRun) {
+        Write-Step "would seed: codex-proxy-config.json -> $dst"
+        return
+    }
+
+    Ensure-Directory $InstallDir
+    Copy-Item -LiteralPath $src -Destination $dst -Force
+    Write-Step "seeded: codex-proxy-config.json"
 }
 
 function Remove-ConfigBlock([string]$Text, [string]$BlockName) {
@@ -200,6 +244,8 @@ $backupRoot = Join-Path $InstallDir ('.install-backup\{0}' -f (Get-Date -Format 
 foreach ($file in $FilesToInstall) {
     Backup-And-Copy $file $backupRoot
 }
+
+Seed-ConfigIfMissing
 
 Update-CodexConfig
 

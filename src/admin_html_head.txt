@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Codex ?? - ????</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Microsoft YaHei",sans-serif;background:#0d1117;color:#c9d1d9;min-height:100vh}
+.header{background:#161b22;border-bottom:1px solid #30363d;padding:16px 24px;display:flex;align-items:center;justify-content:space-between}
+.header h1{font-size:18px;color:#58a6ff}
+.status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
+.status-dot.ok{background:#3fb950}
+.status-dot.err{background:#f85149}
+.container{max-width:960px;margin:0 auto;padding:24px 16px}
+.section{background:#161b22;border:1px solid #30363d;border-radius:6px;margin-bottom:16px;overflow:hidden}
+.section-header{background:#21262d;padding:12px 16px;border-bottom:1px solid #30363d;font-weight:600;font-size:13px;display:flex;align-items:center;gap:8px}
+.section-body{padding:16px}
+.form-row{display:flex;align-items:center;margin-bottom:12px;gap:12px}
+.form-row:last-child{margin-bottom:0}
+.form-row label{width:160px;flex-shrink:0;font-size:12px;color:#8b949e;text-align:right}
+.form-row input{flex:1;background:#0d1117;border:1px solid #30363d;border-radius:4px;padding:8px 12px;color:#c9d1d9;font-size:13px;font-family:monospace}
+.form-row input:focus{outline:none;border-color:#58a6ff;box-shadow:0 0 0 2px rgba(88,166,255,.15)}
+.btn{font-size:12px;padding:6px 14px;border-radius:4px;border:1px solid #30363d;cursor:pointer;background:#21262d;color:#c9d1d9;transition:all .15s}
+.btn:hover{background:#30363d}
+.btn-primary{background:#238636;border-color:#238636;color:#fff}
+.btn-primary:hover{background:#2ea043}
+.btn-danger{background:#da3633;border-color:#da3633;color:#fff}
+.btn-danger:hover{background:#f85149}
+.btn-sm{padding:4px 10px;font-size:11px}
+.actions{padding:16px;display:flex;gap:8px;justify-content:flex-end;border-top:1px solid #30363d}
+.toast{position:fixed;bottom:24px;right:24px;padding:12px 20px;border-radius:6px;font-size:13px;z-index:999;animation:fadeIn .2s;box-shadow:0 4px 12px rgba(0,0,0,.4)}
+.toast.success{background:#238636;color:#fff}
+.toast.error{background:#da3633;color:#fff}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.badge{font-size:10px;padding:2px 8px;border-radius:10px;background:#1f6feb33;color:#58a6ff;border:1px solid #1f6feb44;margin-left:8px}
+.provider-icon{width:22px;height:22px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0}
+.provider-icon.chatgpt-sub{background:#10a37f;color:#fff}
+.provider-icon.deepseek{background:#4d6bfe;color:#fff}
+.provider-icon.openai-api{background:#74aa9c;color:#fff}
+.provider-icon.relay{background:#d29922;color:#fff}
+.tab-btn{font-size:13px;padding:8px 18px;border:none;background:none;color:#8b949e;cursor:pointer;border-bottom:2px solid transparent;transition:all .15s}
+.tab-btn:hover{color:#c9d1d9}
+.tab-btn.active{color:#58a6ff;border-bottom-color:#58a6ff}
+.relay-card{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:12px 16px;margin-bottom:8px}
+.relay-card-header{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.relay-card-header .name{font-weight:600;color:#c9d1d9}
+.relay-card-header .url{font-size:11px;color:#8b949e;font-family:monospace;flex:1}
+.relay-card-models{display:flex;flex-wrap:wrap;gap:4px}
+.model-tag{font-size:11px;padding:2px 8px;border-radius:3px;background:#21262d;color:#8b949e;font-family:monospace;border:1px solid #30363d}
+.empty-state{text-align:center;padding:40px 16px;color:#484f58}
+.empty-state .icon{font-size:48px;margin-bottom:12px}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:flex;align-items:center;justify-content:center}
+.modal{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:24px;min-width:480px;max-width:560px}
+.modal h3{font-size:16px;margin-bottom:16px;color:#58a6ff}
+.modal .form-row label{width:100px}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+.ping-btn{font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid #30363d;cursor:pointer;background:transparent;color:#8b949e;transition:all .15s;margin-left:8px}
+.ping-btn:hover{background:#21262d;color:#c9d1d9}
+.ping-btn.testing{animation:pulse 1s infinite;color:#d29922}
+.ping-btn.ok{color:#3fb950;border-color:#3fb95044}
+.ping-btn.fail{color:#f85149;border-color:#f8514944}
+.ping-result{font-size:11px;margin-left:8px;white-space:nowrap}
+.ping-result.ok{color:#3fb950}
+.ping-result.fail{color:#f85149}
+.ping-btn-all{padding:6px 16px;font-size:12px;margin-left:auto}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>⚙ Codex 代理管理</h1>
+  <span id="status"><span class="status-dot ok"></span>运行中</span>
+</div>
+<div class="container" id="app"></div>

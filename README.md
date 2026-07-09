@@ -260,6 +260,9 @@ powershell -ExecutionPolicy Bypass -File `
 | `GET` | `/v1/responses/:id` | Responses 查询兼容接口 |
 | `POST` | `/v1/chat/completions` | Chat Completions 兼容入口 |
 | `PUT/GET/DELETE` | `/control/threads/:id/route` | 旧线程路由诊断接口 |
+| `GET` | `/admin` | 管理后台 Web 界面 |
+| `GET` | `/admin/api/config` | 获取当前配置（密钥掩码） |
+| `PUT` | `/admin/api/config` | 保存配置并热重载 |
 
 控制接口只应通过 localhost 使用，不要把代理监听地址暴露到公网。
 
@@ -283,6 +286,66 @@ powershell -ExecutionPolicy Bypass -File `
 | `CODEX_PROXY_DEFAULT_MODEL` | `deepseek-v4-pro` | 请求未指定模型时的默认值 |
 | `CODEX_SAFE_AUTO_FAILOVER` | `0` | 设为 `1` 启用自动 GPT 回退 |
 | `CODEX_ROUTE` | `deepseek` | `codex-safe.ps1` 默认启动路由 |
+
+
+### 配置文件方式（无需修改环境变量）
+
+将 codex-proxy-config.json 放在代理安装目录下，即可覆盖默认 API 地址，无需修改系统环境变量。
+
+优先级：**环境变量 > 配置文件 > 内置默认值**
+
+
+### 管理后台 Web 界面
+
+代理启动后访问 http://127.0.0.1:47892/admin 打开管理后台。
+
+功能：
+- 可视化编辑所有 API 地址和密钥
+- 修改后一键保存并热重载，无需重启代理
+- 后续将扩展用量统计和消耗分析（已实现，见 Usage Stats 标签页）
+
+用量统计 API：
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/admin/api/stats` | 获取所有用量统计 |
+| `DELETE` | `/admin/api/stats` | 重置用量统计 |
+
+统计维度：
+- 按 provider 分组：`chatgpt`、`openai-api`、`deepseek`
+- 每 provider 包含：请求数、输入/输出 token 数
+- 每 provider 按 model 细分统计
+- 数据自动每 30 秒持久化到 `codex-proxy-stats.json`
+
+API 端点：
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | /admin | 管理后台 HTML 页面 |
+| GET | /admin/api/config | 获取当前配置（密钥已掩码） |
+| PUT | /admin/api/config | 保存配置到文件并热重载 |
+
+配置文件支持以下字段（均可通过管理后台修改）：
+| 字段 | 说明 |
+|---|---|
+| chatgpt_responses_url | ChatGPT 订阅鉴权转发地址 |
+| upstream_url | DeepSeek Anthropic 兼容 API 地址 |
+| deepseek_api_key | DeepSeek API 密钥 |
+| openai_api_base_url | OpenAI API Base URL |
+| openai_api_key | OpenAI API 密钥 |
+| openai_org_id | OpenAI Organization ID（可选） |
+| openai_project_id | OpenAI Project ID（可选） |
+| openai_api_responses_url | OpenAI Responses 地址（可选） |
+| openai_api_chat_completions_url | OpenAI Chat Completions 地址（可选） |
+| default_model | 默认模型 |
+
+
+`json
+{
+  "chatgpt_responses_url": "https://your-custom-chatgpt.com/backend-api/codex/responses",
+  "upstream_url": "https://your-custom-deepseek.com/anthropic/v1/messages",
+  "openai_api_base_url": "https://your-custom-openai.com/v1"
+}
+`
+
 
 模型能力位于 `codex-models.json`。Codex provider 配置示例：
 

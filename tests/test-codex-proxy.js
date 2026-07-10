@@ -1,7 +1,11 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert'
-import { resolveCodexModel, isChatGptSubModel, isOpenAIApiModel, isRelayModel, parseRelayModel, buildModelsResponse, getThreadId } from '../src/models.js'
-import { recordUsage, getStats, resetStats, saveStats } from '../src/stats.js'
+
+// Keep src/stats.js from installing its runtime auto-save interval during tests.
+process.env.NODE_ENV = 'test'
+
+const { resolveCodexModel, isChatGptSubModel, isOpenAIApiModel, isRelayModel, buildModelsResponse } = await import('../src/models.js')
+const { recordUsage, getStats, resetStats } = await import('../src/stats.js')
 
 describe('模型解析', () => {
   it('解析 body.model', () => {

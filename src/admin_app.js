@@ -3,10 +3,12 @@ let cfg={}
 let activeTab='config'
 let statsData=null
 let editingRelay=null
+let addingAccount=false
 
 const NAV_TABS=[
   {id:'config',icon:'⚙',label:'配置'},
   {id:'relays',icon:'🛰️',label:'中转站'},
+  {id:'accounts',icon:'👤',label:'账号池'},
   {id:'stats',icon:'📊',label:'统计'}
 ]
 
@@ -231,6 +233,86 @@ async function removeRelay(id){
   }catch(e){showToast(e.message,'error')}
 }
 
+function fmtHM(ts){if(!ts)return'';var d=new Date(ts);return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')}
+
+function renderAccounts(){
+  var accounts=cfg.chatgptAccounts||[]
+  var h='<div class="section"><div class="section-header">'
+  h+='<span class="provider-icon relay">A</span>ChatGPT 账号池<span class="badge">'+accounts.length+' 个</span>'
+  h+='<button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="showAddAccount()">+ 添加账号</button>'
+  h+='</div><div class="section-body">'
+  if(accounts.length===0){
+    h+='<div class="empty-state"><div class="icon">👤</div>'
+    h+='<div style="color:#8b949e;margin-bottom:8px">还没有配置账号池</div>'
+    h+='<div style="font-size:12px;color:#484f58">粘贴 codex login 生成的 auth.json 内容，让代理持有多个官方账号，额度用尽自动切换</div>'
+    h+='<div style="margin-top:12px"><button class="btn btn-primary btn-sm" onclick="showAddAccount()">+ 添加第一个账号</button></div></div>'
+  }
+  for(var ai=0;ai<accounts.length;ai++){
+    var acc=accounts[ai]
+    var isCooldown=acc.status==='cooldown'
+    var statusHtml=isCooldown
+      ?'<span class="badge" style="background:#3a2e0a;color:#e3b341">冷却至 '+fmtHM(acc.cooldown_until)+'</span>'
+      :'<span class="badge" style="background:#0d3320;color:#3fb950">active</span>'
+    h+='<div class="relay-card">'
+    h+='<div class="relay-card-header">'
+    h+='<span class="provider-icon relay">A</span>'
+    h+='<span class="name">'+esc(acc.label)+'</span>'
+    h+='<span class="badge">'+esc(acc.account_id)+'</span>'
+    h+='<span style="font-size:11px;color:#484f58">Token: '+maskKey(acc.access_token)+'</span>'
+    h+=statusHtml
+    h+='<button class="btn btn-sm btn-danger" onclick="removeAccount(\x27'+acc.id+'\x27)">删除</button>'
+    h+='</div></div>'
+  }
+  h+='</div></div>'
+  return h
+}
+
+function showAddAccount(){addingAccount=true;renderAccountModal()}
+
+function renderAccountModal(){
+  if(!addingAccount)return
+  var overlay=document.createElement('div')
+  overlay.className='modal-overlay'
+  overlay.onclick=function(e){if(e.target===overlay){overlay.remove();addingAccount=false}}
+  overlay.innerHTML='<div class="modal"><h3>添加 ChatGPT 账号</h3>'
+    +'<div class="form-row"><label>备注名</label><input id="acct_label" placeholder="如: 账号1"></div>'
+    +'<div class="form-row"><label>auth.json 内容</label><textarea id="acct_json" rows="8" placeholder="粘贴 ~/.codex/auth.json 的完整内容"></textarea></div>'
+    +'<div class="modal-actions"><button class="btn" onclick="this.closest(\x27.modal-overlay\x27).remove();addingAccount=false">取消</button>'
+    +'<button class="btn btn-primary" onclick="saveAccount()">保存</button></div></div>'
+  document.body.appendChild(overlay)
+}
+
+async function saveAccount(){
+  var label=document.getElementById('acct_label').value.trim()
+  var authJson=document.getElementById('acct_json').value.trim()
+  if(!authJson){
+    showToast('请粘贴 auth.json 内容','error')
+    return
+  }
+  try{
+    var r=await fetch('/admin/api/chatgpt-accounts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({label:label,auth_json:authJson})})
+    if(!r.ok)throw new Error((await r.json()).error?.message||'保存失败')
+    var data=await r.json()
+    cfg=data.config
+    document.querySelector('.modal-overlay')?.remove()
+    addingAccount=false
+    render()
+    showToast('账号已添加','success')
+  }catch(e){showToast(e.message,'error')}
+}
+
+async function removeAccount(id){
+  if(!confirm('确定删除该账号吗？'))return
+  try{
+    var r=await fetch('/admin/api/chatgpt-accounts/'+encodeURIComponent(id),{method:'DELETE'})
+    if(!r.ok)throw new Error((await r.json()).error?.message||'删除失败')
+    var data=await r.json()
+    cfg=data.config
+    render()
+    showToast('账号已删除','success')
+  }catch(e){showToast(e.message,'error')}
+}
+
 function fmtTok(n){if(!n||n===0)return'0';if(n>=1000000)return(n/1e6).toFixed(1)+'M';if(n>=1000)return(n/1e3).toFixed(1)+'K';return String(n)}
 
 function statBar(input,output){
@@ -424,7 +506,7 @@ function renderNav(){
   }
   var navEl=document.getElementById('nav')
   if(navEl)navEl.innerHTML=h
-  var titles={config:'配置',relays:'中转站管理',stats:'使用统计'}
+  var titles={config:'配置',relays:'中转站管理',accounts:'账号池',stats:'使用统计'}
   var titleEl=document.getElementById('topbar-title')
   if(titleEl)titleEl.textContent=titles[activeTab]||''
 }
@@ -449,6 +531,8 @@ function render(){
     html+='<div class="actions"><button class="btn btn-primary" onclick="save()">💾 保存并热重载</button></div>'
   }else if(activeTab==='relays'){
     html+=renderRelays()
+  }else if(activeTab==='accounts'){
+    html+=renderAccounts()
   }else{
     html+=renderStats()
   }

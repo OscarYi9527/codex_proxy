@@ -50,6 +50,156 @@
       "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
     },
     {
+      "slug": "gpt-5.6-sol",
+      "display_name": "GPT-5.6 Sol (Subscription)",
+      "description": "GPT-5.6 Sol via ChatGPT subscription. Flagship tier: highest capability, for hard multi-step problems and complex coding.",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced speed and reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 1,
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "none",
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "freeform",
+      "web_search_tool_type": "text_and_image",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "supports_search_tool": true,
+      "use_responses_lite": true,
+      "experimental_supported_tools": [],
+      "context_window": 372000,
+      "effective_context_window_percent": 95,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
+    },
+    {
+      "slug": "gpt-5.6-terra",
+      "display_name": "GPT-5.6 Terra (Subscription)",
+      "description": "GPT-5.6 Terra via ChatGPT subscription. Balanced tier: competitive with GPT-5.5, the default for everyday coding.",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced speed and reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 2,
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "none",
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "freeform",
+      "web_search_tool_type": "text_and_image",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "supports_search_tool": true,
+      "use_responses_lite": true,
+      "experimental_supported_tools": [],
+      "context_window": 372000,
+      "effective_context_window_percent": 95,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
+    },
+    {
+      "slug": "gpt-5.6-luna",
+      "display_name": "GPT-5.6 Luna (Subscription)",
+      "description": "GPT-5.6 Luna via ChatGPT subscription. Fast & affordable tier: for simpler, repeatable coding tasks.",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced speed and reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 3,
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "none",
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "freeform",
+      "web_search_tool_type": "text_and_image",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "supports_search_tool": true,
+      "use_responses_lite": true,
+      "experimental_supported_tools": [],
+      "context_window": 372000,
+      "effective_context_window_percent": 95,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
+    },
+    {
       "slug": "gpt-5.5",
       "display_name": "GPT-5.5 (Subscription)",
       "description": "GPT-5.5 via ChatGPT subscription. Requires active ChatGPT account.",
@@ -75,7 +225,7 @@
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
-      "priority": 1,
+      "priority": 4,
       "supports_reasoning_summaries": true,
       "default_reasoning_summary": "none",
       "support_verbosity": true,
@@ -125,7 +275,7 @@
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
-      "priority": 2,
+      "priority": 5,
       "supports_reasoning_summaries": true,
       "default_reasoning_summary": "none",
       "support_verbosity": true,
@@ -175,7 +325,7 @@
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
-      "priority": 3,
+      "priority": 6,
       "supports_reasoning_summaries": true,
       "default_reasoning_summary": "none",
       "support_verbosity": true,
@@ -190,6 +340,156 @@
       "supports_image_detail_original": true,
       "supports_search_tool": true,
       "use_responses_lite": true,
+      "experimental_supported_tools": [],
+      "context_window": 372000,
+      "effective_context_window_percent": 95,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
+    },
+    {
+      "slug": "openai-api-gpt-5.6-sol",
+      "display_name": "GPT-5.6 Sol (API Key)",
+      "description": "GPT-5.6 Sol via OpenAI-compatible API. Flagship tier. Requires OPENAI_API_KEY.",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced speed and reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 7,
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "none",
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "freeform",
+      "web_search_tool_type": "text_and_image",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "supports_search_tool": true,
+      "use_responses_lite": false,
+      "experimental_supported_tools": [],
+      "context_window": 372000,
+      "effective_context_window_percent": 95,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
+    },
+    {
+      "slug": "openai-api-gpt-5.6-terra",
+      "display_name": "GPT-5.6 Terra (API Key)",
+      "description": "GPT-5.6 Terra via OpenAI-compatible API. Balanced tier. Requires OPENAI_API_KEY.",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced speed and reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 8,
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "none",
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "freeform",
+      "web_search_tool_type": "text_and_image",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "supports_search_tool": true,
+      "use_responses_lite": false,
+      "experimental_supported_tools": [],
+      "context_window": 372000,
+      "effective_context_window_percent": 95,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
+    },
+    {
+      "slug": "openai-api-gpt-5.6-luna",
+      "display_name": "GPT-5.6 Luna (API Key)",
+      "description": "GPT-5.6 Luna via OpenAI-compatible API. Fast & affordable tier. Requires OPENAI_API_KEY.",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced speed and reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 9,
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "none",
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "freeform",
+      "web_search_tool_type": "text_and_image",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "supports_search_tool": true,
+      "use_responses_lite": false,
       "experimental_supported_tools": [],
       "context_window": 372000,
       "effective_context_window_percent": 95,
@@ -225,7 +525,7 @@
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
-      "priority": 4,
+      "priority": 10,
       "supports_reasoning_summaries": true,
       "default_reasoning_summary": "none",
       "support_verbosity": true,
@@ -275,7 +575,7 @@
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
-      "priority": 5,
+      "priority": 11,
       "supports_reasoning_summaries": true,
       "default_reasoning_summary": "none",
       "support_verbosity": true,
@@ -325,7 +625,7 @@
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
-      "priority": 6,
+      "priority": 12,
       "supports_reasoning_summaries": true,
       "default_reasoning_summary": "none",
       "support_verbosity": true,

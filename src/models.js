@@ -38,6 +38,11 @@ export function parseRelayModel(model) {
 
 // Map catalog slug → upstream API model name for OpenAI API channel
 const OPENAI_API_MODEL_MAP = new Map([
+  ['openai-api-gpt-5.6-sol', 'gpt-5.6-sol'],
+  ['openai-api-gpt-5.6-sol-compact', 'gpt-5.6-sol'],
+  ['openai-api-gpt-5.6-terra', 'gpt-5.6-terra'],
+  ['openai-api-gpt-5.6-terra-compact', 'gpt-5.6-terra'],
+  ['openai-api-gpt-5.6-luna', 'gpt-5.6-luna'],
   ['openai-api-gpt-5.5', 'gpt-5.5'],
   ['openai-api-gpt-5.5-compact', 'gpt-5.5'],
   ['openai-api-gpt-5.4', 'gpt-5.4'],

@@ -27,7 +27,7 @@ export async function handleDeepSeek(req, res, body, resolved) {
     signal: AbortSignal.timeout(300000)
   })
 
-  requestLog(req, `model=${resolved.model} deepseek=1 stream=${body.stream} status=${upstream.status}`)
+  requestLog(req, `model=${resolved.model} body_model=${resolved.bodyModel || '-'} thread=${resolved.threadId || '-'} deepseek=1 stream=${body.stream} status=${upstream.status}`)
 
   if (!upstream.ok) {
     const detail = (await upstream.text().catch(() => '')).slice(0, 2000)
@@ -82,6 +82,8 @@ export async function handleDeepSeekChatCompletions(req, res, body, resolved) {
     }))
   }
   if (body.temperature != null) request.temperature = body.temperature
+
+  requestLog(req, `chat-completions model=${resolved.model} body_model=${resolved.bodyModel || '-'} thread=${resolved.threadId || '-'} deepseek=1 stream=${body.stream}`)
 
   const upstream = await fetchWithRetry(req.fetchImpl, proxyConfig.upstreamUrl, {
     method: 'POST',

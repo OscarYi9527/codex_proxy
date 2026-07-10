@@ -1,4 +1,4 @@
-# 刷新 VSCode Codex 模型列表
+﻿# 刷新 VSCode Codex 模型列表
 # 用法: powershell -ExecutionPolicy Bypass -File refresh-vscode-models.ps1
 
 param([switch]$PatchWebview)
@@ -44,9 +44,15 @@ foreach ($m in $modelsResp.data) {
     
     $displayName = switch -Wildcard ($m.id) {
         'deepseek-v4-pro' { 'DeepSeek V4 Pro' }
+        'gpt-5.6-sol' { 'GPT-5.6 Sol (订阅)' }
+        'gpt-5.6-terra' { 'GPT-5.6 Terra (订阅)' }
+        'gpt-5.6-luna' { 'GPT-5.6 Luna (订阅)' }
         'gpt-5.5' { 'GPT-5.5 (订阅)' }
         'gpt-5.4' { 'GPT-5.4 (订阅)' }
         'gpt-5.4-mini' { 'GPT-5.4 Mini (订阅)' }
+        'openai-api-gpt-5.6-sol' { 'GPT-5.6 Sol (API Key)' }
+        'openai-api-gpt-5.6-terra' { 'GPT-5.6 Terra (API Key)' }
+        'openai-api-gpt-5.6-luna' { 'GPT-5.6 Luna (API Key)' }
         'openai-api-gpt-5.5' { 'GPT-5.5 (API Key)' }
         'openai-api-gpt-5.4' { 'GPT-5.4 (API Key)' }
         'openai-api-gpt-5.4-mini' { 'GPT-5.4 Mini (API Key)' }

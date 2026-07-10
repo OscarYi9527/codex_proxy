@@ -68,7 +68,7 @@ export async function handleOpenAIApi(req, res, body, resolved) {
 
   const upstreamResp = await fetchWithRetry(fetchImpl, upstream.chatCompletionsUrl, fetchOptions)
 
-  requestLog(req, `model=${resolved.model} openai_api_model=${upstreamModel} chat_completions=1 stream=${isStream} status=${upstreamResp.status}`)
+  requestLog(req, `model=${resolved.model} body_model=${resolved.bodyModel || '-'} thread=${resolved.threadId || '-'} openai_api_model=${upstreamModel} chat_completions=1 stream=${isStream} status=${upstreamResp.status}`)
 
   if (!upstreamResp.ok) {
     const detail = (await upstreamResp.text().catch(() => '')).slice(0, 2000)
@@ -107,7 +107,7 @@ export async function handleOpenAIApiChatCompletions(req, res, body, resolved) {
 
   const upstreamResp = await fetchWithRetry(fetchImpl, upstream.chatCompletionsUrl, fetchOptions)
 
-  requestLog(req, `chat-completions model=${resolved.model} openai_api_model=${upstreamModel} status=${upstreamResp.status}`)
+  requestLog(req, `chat-completions model=${resolved.model} body_model=${resolved.bodyModel || '-'} thread=${resolved.threadId || '-'} openai_api_model=${upstreamModel} status=${upstreamResp.status}`)
 
   return pipeResponsesUpstream(upstreamResp, res, {
     onBody: (u) => { recordUsage(resolved.model, 'openai-api', u.prompt_tokens ?? u.input_tokens, u.completion_tokens ?? u.output_tokens); saveStats() }

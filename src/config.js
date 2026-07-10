@@ -17,7 +17,8 @@ const CONFIG_DEFAULTS = {
   openaiApiChatCompletionsUrl: '',
   openaiApiUpstream: 'official',
   defaultModel: 'deepseek-v4-pro',
-  relays: []
+  relays: [],
+  chatgptAccounts: []
 }
 
 function loadProxyConfig() {
@@ -36,6 +37,8 @@ function loadProxyConfig() {
     try { relays = JSON.parse(process.env.CODEX_RELAYS) } catch {}
   }
 
+  const chatgptAccounts = fileCfg.chatgpt_accounts || CONFIG_DEFAULTS.chatgptAccounts
+
   return {
     deepseekApiKey: process.env.DEEPSEEK_API_KEY || fileCfg.deepseek_api_key || CONFIG_DEFAULTS.deepseekApiKey,
     openaiApiKey: process.env.OPENAI_API_KEY || fileCfg.openai_api_key || CONFIG_DEFAULTS.openaiApiKey,
@@ -48,7 +51,8 @@ function loadProxyConfig() {
     openaiApiChatCompletionsUrl: process.env.CODEX_OPENAI_API_CHAT_COMPLETIONS_URL || fileCfg.openai_api_chat_completions_url || base + '/chat/completions',
     openaiApiUpstream: process.env.CODEX_OPENAI_API_UPSTREAM || fileCfg.openai_api_upstream || CONFIG_DEFAULTS.openaiApiUpstream,
     defaultModel: process.env.CODEX_PROXY_DEFAULT_MODEL || fileCfg.default_model || CONFIG_DEFAULTS.defaultModel,
-    relays
+    relays,
+    chatgptAccounts
   }
 }
 
@@ -78,6 +82,11 @@ function saveProxyConfig(fields) {
   // Persist relays if provided
   if (fields.relays !== undefined) {
     existing.relays = fields.relays
+  }
+
+  // Persist chatgpt accounts if provided
+  if (fields.chatgptAccounts !== undefined) {
+    existing.chatgpt_accounts = fields.chatgptAccounts
   }
 
   fs.mkdirSync(path.join(PROXY_DIR, '..'), { recursive: true })
@@ -111,6 +120,24 @@ export function addRelay(relay) {
 export function deleteRelay(relayId) {
   const relays = (proxyConfig.relays || []).filter(r => r.id !== relayId)
   const newCfg = saveProxyConfig({ relays })
+  reloadProxyConfig()
+  return newCfg
+}
+
+// ChatGPT account pool helpers
+export function upsertChatgptAccount(account) {
+  const accounts = [...(proxyConfig.chatgptAccounts || [])]
+  const idx = accounts.findIndex(a => a.id === account.id)
+  if (idx >= 0) accounts[idx] = account
+  else accounts.push(account)
+  const newCfg = saveProxyConfig({ chatgptAccounts: accounts })
+  reloadProxyConfig()
+  return newCfg
+}
+
+export function deleteChatgptAccount(accountId) {
+  const accounts = (proxyConfig.chatgptAccounts || []).filter(a => a.id !== accountId)
+  const newCfg = saveProxyConfig({ chatgptAccounts: accounts })
   reloadProxyConfig()
   return newCfg
 }

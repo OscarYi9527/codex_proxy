@@ -13,7 +13,7 @@ import { handleOpenAIApi, handleOpenAIApiChatCompletions } from './routes/openai
 import { handleDeepSeek, handleDeepSeekChatCompletions } from './routes/deepseek.js'
 import { handleRelay, handleRelayChatCompletions } from './routes/relay.js'
 import { handlePing, handlePingAll } from './routes/ping.js'
-import { getAdminHtml, getAdminAppJs, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete } from './admin.js'
+import { getAdminHtml, getAdminAppJs, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountDelete } from './admin.js'
 
 const PORT = Number(process.env.CODEX_PROXY_PORT || 47892)
 const HOST = process.env.CODEX_PROXY_HOST || '127.0.0.1'
@@ -107,10 +107,10 @@ export function createServer({ fetchImpl = fetch } = {}) {
         const resolved = resolveCodexModel(body)
         requestLog(req, 'model=' + resolved.model + ' effort=' + (resolved.reasoningEffort || 'default') + ' stream=' + body.stream)
 
-        if (isRelayModel(resolved.model)) return handleRelay(req, res, body, resolved)
-        if (shouldRouteViaOpenAIApi(resolved.model)) return handleOpenAIApi(req, res, body, resolved)
-        if (isChatGptSubModel(resolved.model)) return handleChatGptSub(req, res, body, resolved)
-        return handleDeepSeek(req, res, body, resolved)
+        if (isRelayModel(resolved.model)) return await handleRelay(req, res, body, resolved)
+        if (shouldRouteViaOpenAIApi(resolved.model)) return await handleOpenAIApi(req, res, body, resolved)
+        if (isChatGptSubModel(resolved.model)) return await handleChatGptSub(req, res, body, resolved)
+        return await handleDeepSeek(req, res, body, resolved)
       } catch (error) {
         console.error('[codex-proxy] request failed:', error.message)
         if (!res.headersSent) return sendJson(res, 502, { error: { type: 'proxy_error', message: error.message } })
@@ -132,10 +132,10 @@ export function createServer({ fetchImpl = fetch } = {}) {
         const resolved = resolveCodexModel(body)
         requestLog(req, 'chat-completions model=' + resolved.model + ' stream=' + body.stream)
 
-        if (isRelayModel(resolved.model)) return handleRelayChatCompletions(req, res, body, resolved)
-        if (shouldRouteViaOpenAIApi(resolved.model)) return handleOpenAIApiChatCompletions(req, res, body, resolved)
-        if (isChatGptSubModel(resolved.model)) return handleChatGptSubChatCompletions(req, res, body, resolved)
-        return handleDeepSeekChatCompletions(req, res, body, resolved)
+        if (isRelayModel(resolved.model)) return await handleRelayChatCompletions(req, res, body, resolved)
+        if (shouldRouteViaOpenAIApi(resolved.model)) return await handleOpenAIApiChatCompletions(req, res, body, resolved)
+        if (isChatGptSubModel(resolved.model)) return await handleChatGptSubChatCompletions(req, res, body, resolved)
+        return await handleDeepSeekChatCompletions(req, res, body, resolved)
       } catch (error) {
         console.error('[codex-proxy] chat/completions failed:', error.message)
         if (!res.headersSent) return sendJson(res, 502, { error: { type: 'proxy_error', message: error.message } })
@@ -175,6 +175,15 @@ export function createServer({ fetchImpl = fetch } = {}) {
     }
     if (req.method === 'DELETE' && url.pathname.startsWith('/admin/api/relays/')) {
       return handleRelayDelete(req, res, decodeURIComponent(url.pathname.split('/').pop()))
+    }
+
+    // ChatGPT account pool CRUD
+    if (req.method === 'POST' && url.pathname === '/admin/api/chatgpt-accounts') {
+      const body = await readJson(req)
+      return handleChatgptAccountAdd(req, res, body)
+    }
+    if (req.method === 'DELETE' && url.pathname.startsWith('/admin/api/chatgpt-accounts/')) {
+      return handleChatgptAccountDelete(req, res, decodeURIComponent(url.pathname.split('/').pop()))
     }
 
     if (req.method === 'GET' && url.pathname === '/admin/api/stats') return handleStatsGet(req, res)

@@ -5,6 +5,17 @@ import { proxyConfig, reloadProxyConfig, saveProxyConfig, CONFIG_FILE, addRelay,
 import { getStats, resetStats } from './stats.js'
 import { sendJson, readJson } from './server-utils.js'
 import { syncRelayModels } from './sync-models.js'
+import { addChatgptAccount, deleteChatgptAccount } from './chatgpt-accounts.js'
+
+function maskChatgptAccounts(accounts) {
+  if (!accounts) return accounts
+  return accounts.map(a => ({
+    ...a,
+    access_token: a.access_token && a.access_token.length > 6 ? a.access_token.slice(0, 6) + '***' : a.access_token,
+    refresh_token: a.refresh_token && a.refresh_token.length > 6 ? a.refresh_token.slice(0, 6) + '***' : a.refresh_token,
+    id_token: a.id_token && a.id_token.length > 6 ? a.id_token.slice(0, 6) + '***' : a.id_token
+  }))
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const adminHtml = fs.readFileSync(path.join(__dirname, 'admin.html'), 'utf8')
@@ -31,6 +42,7 @@ export function handleAdminConfigGet(req, res) {
       api_key: r.api_key && r.api_key.length > 6 ? r.api_key.slice(0, 6) + '***' : r.api_key
     }))
   }
+  masked.chatgptAccounts = maskChatgptAccounts(masked.chatgptAccounts)
   return sendJson(res, 200, { config: masked, configFile: CONFIG_FILE })
 }
 
@@ -92,6 +104,29 @@ export async function handleRelayDelete(req, res, relayId) {
       }
     }
     return sendJson(res, 200, { config: masked, message: '中转站已删除，已同步到 codex-models.json' })
+  } catch (error) {
+    return sendJson(res, 500, { error: { type: 'server_error', message: error.message } })
+  }
+}
+
+export async function handleChatgptAccountAdd(req, res, body) {
+  try {
+    if (!body.auth_json) {
+      return sendJson(res, 400, { error: { type: 'invalid_request_error', message: 'auth.json 内容为必填项' } })
+    }
+    const newCfg = addChatgptAccount(body.auth_json, body.label)
+    const masked = { ...proxyConfig, chatgptAccounts: maskChatgptAccounts(newCfg.chatgptAccounts) }
+    return sendJson(res, 200, { config: masked, message: '账号已添加' })
+  } catch (error) {
+    return sendJson(res, 400, { error: { type: 'invalid_request_error', message: error.message } })
+  }
+}
+
+export async function handleChatgptAccountDelete(req, res, accountId) {
+  try {
+    const newCfg = deleteChatgptAccount(accountId)
+    const masked = { ...proxyConfig, chatgptAccounts: maskChatgptAccounts(newCfg.chatgptAccounts) }
+    return sendJson(res, 200, { config: masked, message: '账号已删除' })
   } catch (error) {
     return sendJson(res, 500, { error: { type: 'server_error', message: error.message } })
   }

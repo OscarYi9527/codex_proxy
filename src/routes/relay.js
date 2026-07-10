@@ -25,7 +25,7 @@ export async function handleRelay(req, res, body, resolved) {
   const baseUrl = relay.base_url.replace(/\/+$/, '')
   const url = baseUrl + '/chat/completions'
 
-  requestLog(req, `relay=${relay.id}(${relay.name}) model=${upstreamModel} stream=${isStream} url=${baseUrl}`)
+  requestLog(req, `relay=${relay.id}(${relay.name}) model=${upstreamModel} body_model=${resolved.bodyModel || '-'} thread=${resolved.threadId || '-'} stream=${isStream} url=${baseUrl}`)
 
   const upstream = await fetchWithRetry(req.fetchImpl, url, {
     method: 'POST',
@@ -73,6 +73,8 @@ export async function handleRelayChatCompletions(req, res, body, resolved) {
 
   const baseUrl = relay.base_url.replace(/\/+$/, '')
   const url = baseUrl + '/chat/completions'
+
+  requestLog(req, `relay=${relay.id}(${relay.name}) chat-completions model=${upstreamModel} body_model=${resolved.bodyModel || '-'} thread=${resolved.threadId || '-'} url=${baseUrl}`)
 
   const upstream = await fetchWithRetry(req.fetchImpl, url, {
     method: 'POST',

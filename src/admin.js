@@ -3,7 +3,7 @@ import os from 'os'
 import path from 'path'
 import { spawn, spawnSync } from 'child_process'
 import { fileURLToPath } from 'url'
-import { proxyConfig, reloadProxyConfig, saveProxyConfig, CONFIG_FILE, addRelay, deleteRelay, setActiveChatgptAccount, reorderChatgptAccounts, setChatgptAccountRouting, listConfigSnapshots, restoreConfigSnapshot } from './config.js'
+import { proxyConfig, reloadProxyConfig, saveProxyConfig, CONFIG_FILE, addRelay, deleteRelay, setActiveChatgptAccount, reorderChatgptAccounts, renameChatgptAccount, setChatgptAccountRouting, listConfigSnapshots, restoreConfigSnapshot } from './config.js'
 import { getStats, resetStats } from './stats.js'
 import { sendJson, readJson } from './server-utils.js'
 import { syncRelayModels } from './sync-models.js'
@@ -230,9 +230,17 @@ async function importCompletedLogin(session) {
         `登录的是已存在账号「${duplicate.label || duplicate.account_id}」，未覆盖任何账号。请重新开始并在无痕窗口中选择另一个账号。`
       )
     }
-    addChatgptAccount(raw, session.label, { routingEnabled: session.routingEnabled })
+    const newCfg = addChatgptAccount(raw, session.label, { routingEnabled: session.routingEnabled })
+    const account = newCfg.chatgptAccounts.find(item => item.account_id === incoming.account_id)
+    let usageMessage = ''
+    try {
+      if (account) await refreshAccountUsage(account, chinaFetch(fetch))
+      usageMessage = '，额度已同步'
+    } catch {
+      usageMessage = '，首次额度同步失败，可在账号池点击刷新重试'
+    }
     try { session.child?.kill() } catch {}
-    finishLoginSession(session, 'success', '官方登录成功，账号已自动加入账号池')
+    finishLoginSession(session, 'success', `官方登录成功，账号已自动加入账号池${usageMessage}`)
   } catch (error) {
     try { session.child?.kill() } catch {}
     finishLoginSession(session, 'error', error.message)
@@ -378,14 +386,21 @@ export async function handleChatgptAccountAdd(req, res, body) {
     const newCfg = addChatgptAccount(body.auth_json, body.label, {
       routingEnabled: body.routingEnabled === true
     })
-    const masked = publicProxyConfig({ ...proxyConfig, chatgptAccounts: newCfg.chatgptAccounts })
-    return sendJson(res, 200, { config: masked, message: '账号已添加' })
+    const incoming = parseAuthJson(body.auth_json)
+    const account = newCfg.chatgptAccounts.find(item => item.account_id === incoming.account_id)
+    let message = '账号已添加，额度已自动同步'
+    try {
+      if (account) await refreshAccountUsage(account, chinaFetch(fetch))
+    } catch {
+      message = '账号已添加，首次额度同步失败，可点击刷新按钮重试'
+    }
+    return sendJson(res, 200, { config: publicProxyConfig(proxyConfig), message })
   } catch (error) {
     return sendJson(res, 400, { error: { type: 'invalid_request_error', message: error.message } })
   }
 }
 
-export function handleChatgptAccountImportCurrent(req, res) {
+export async function handleChatgptAccountImportCurrent(req, res) {
   try {
     const authFile = getCodexAuthFile()
     if (!fs.existsSync(authFile)) {
@@ -397,11 +412,19 @@ export function handleChatgptAccountImportCurrent(req, res) {
       })
     }
     const raw = fs.readFileSync(authFile, 'utf8')
+    const incoming = parseAuthJson(raw)
     const newCfg = addChatgptAccount(raw, '当前 Codex 账号')
-    const masked = publicProxyConfig({ ...proxyConfig, chatgptAccounts: newCfg.chatgptAccounts })
+    const account = newCfg.chatgptAccounts.find(item => item.account_id === incoming.account_id)
+    let usageMessage = '，额度已自动同步'
+    try {
+      if (account) await refreshAccountUsage(account, chinaFetch(fetch))
+    } catch {
+      usageMessage = '，首次额度同步失败，可在账号池点击刷新重试'
+    }
+    const masked = publicProxyConfig(proxyConfig)
     return sendJson(res, 200, {
       config: masked,
-      message: '已从当前 Codex CLI 快捷导入账号'
+      message: `已从当前 Codex CLI 快捷导入账号${usageMessage}`
     })
   } catch (error) {
     return sendJson(res, 400, { error: { type: 'invalid_request_error', message: error.message } })
@@ -568,6 +591,20 @@ export function handleChatgptAccountsReorder(req, res, body) {
     })
   } catch (error) {
     return sendJson(res, 400, {
+      error: { type: 'invalid_request_error', message: error.message }
+    })
+  }
+}
+
+export function handleChatgptAccountRename(req, res, accountId, body) {
+  try {
+    const newCfg = renameChatgptAccount(accountId, body?.label)
+    return sendJson(res, 200, {
+      config: publicProxyConfig(newCfg),
+      message: '账号名称已更新'
+    })
+  } catch (error) {
+    return sendJson(res, error.message === 'Account not found' ? 404 : 400, {
       error: { type: 'invalid_request_error', message: error.message }
     })
   }

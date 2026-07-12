@@ -21,7 +21,7 @@ const CONFIG_DEFAULTS = {
   openaiApiResponsesUrl: '',
   openaiApiChatCompletionsUrl: '',
   openaiApiUpstream: 'official',
-  defaultModel: 'deepseek-v4-pro',
+  defaultModel: 'gpt-5.6-sol',
   relays: [],
   chatgptAccounts: [],
   activeChatgptAccountId: null,
@@ -253,6 +253,27 @@ export function orderChatgptAccounts(accounts, accountIds) {
 export function reorderChatgptAccounts(accountIds) {
   const reordered = orderChatgptAccounts(proxyConfig.chatgptAccounts || [], accountIds)
   const newCfg = saveProxyConfig({ chatgptAccounts: reordered }, { snapshot: true, reason: 'account-reorder' })
+  reloadProxyConfig()
+  return newCfg
+}
+
+export function renameChatgptAccountInList(accounts, accountId, label) {
+  const normalized = String(label || '').trim()
+  if (!normalized) throw new Error('账号名称不能为空')
+  if (normalized.length > 80) throw new Error('账号名称不能超过 80 个字符')
+  let found = false
+  const renamed = accounts.map(account => {
+    if (account.id !== accountId) return account
+    found = true
+    return { ...account, label: normalized }
+  })
+  if (!found) throw new Error('Account not found')
+  return renamed
+}
+
+export function renameChatgptAccount(accountId, label) {
+  const accounts = renameChatgptAccountInList(proxyConfig.chatgptAccounts || [], accountId, label)
+  const newCfg = saveProxyConfig({ chatgptAccounts: accounts }, { snapshot: true, reason: 'account-rename' })
   reloadProxyConfig()
   return newCfg
 }

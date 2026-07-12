@@ -1,7 +1,7 @@
 ﻿param(
     [string]$InstallDir = (Join-Path $HOME '.codex-local-multi-proxy'),
     [string]$CodexHome = (Join-Path $HOME '.codex'),
-    [string]$DefaultModel = 'gpt-5.5',
+    [string]$DefaultModel = 'gpt-5.6-sol',
     [int]$Port = 47892,
     [switch]$InstallAutostart,
     [switch]$NoAutostart,

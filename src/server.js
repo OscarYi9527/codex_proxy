@@ -17,7 +17,7 @@ import { handleDeepSeek, handleDeepSeekChatCompletions } from './routes/deepseek
 import { handleRelay, handleRelayChatCompletions } from './routes/relay.js'
 import { handlePing, handlePingAll } from './routes/ping.js'
 import { saveStats } from './stats.js'
-import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleConfigSnapshotsGet, handleConfigRollback, handleRuntimeRepair, handleProxyRestart } from './admin.js'
+import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleConfigSnapshotsGet, handleConfigRollback, handleRuntimeRepair, handleProxyRestart } from './admin.js'
 
 const PORT = Number(process.env.CODEX_PROXY_PORT || 47892)
 const HOST = process.env.CODEX_PROXY_HOST || '127.0.0.1'
@@ -285,6 +285,11 @@ export function createServer({ fetchImpl = fetch } = {}) {
     const switchMatch = url.pathname.match(/^\/admin\/api\/chatgpt-accounts\/([^/]+)\/switch$/)
     if (req.method === 'POST' && switchMatch) {
       return handleChatgptAccountSwitch(req, res, decodeURIComponent(switchMatch[1]))
+    }
+    const renameMatch = url.pathname.match(/^\/admin\/api\/chatgpt-accounts\/([^/]+)\/rename$/)
+    if (req.method === 'PATCH' && renameMatch) {
+      const body = await readJson(req)
+      return handleChatgptAccountRename(req, res, decodeURIComponent(renameMatch[1]), body)
     }
     if (req.method === 'POST' && url.pathname === '/admin/api/codex/restart') {
       return handleCodexRestart(req, res)

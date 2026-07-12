@@ -73,7 +73,7 @@ public static class CodexVSCodeLauncher
 
             var forwarded = new List<string>
             {
-                "-c", "model=\"deepseek-v4-pro\"",
+                "-c", "model=\"gpt-5.6-sol\"",
                 "-c", "model_provider=\"local_multi_proxy\"",
                 "-c", "model_providers.local_multi_proxy.name=\"Local Multi-Upstream Proxy\"",
                 "-c", "model_providers.local_multi_proxy.base_url=\"http://localhost:47892/v1\"",

@@ -34,7 +34,7 @@ function Remove-TopLevelValue([string]$Text, [string]$Key) {
 
 $text = [IO.File]::ReadAllText($configFile)
 if ($Route -eq 'Proxy') {
-    $text = Set-TopLevelValue $text 'model' '"deepseek-v4-pro"'
+    $text = Set-TopLevelValue $text 'model' '"gpt-5.6-sol"'
     $text = Set-TopLevelValue $text 'model_provider' '"local_multi_proxy"'
     $catalogToml = "'" + $catalogFile + "'"
     $text = Set-TopLevelValue $text 'model_catalog_json' $catalogToml
@@ -50,7 +50,7 @@ if ($Route -eq 'Proxy') {
         $text = $text -replace '(?m)(^\[model_providers\.local_multi_proxy\]\s*(?:\r?\n(?!\[).*)*)', "`$1`r`nrequires_openai_auth = true"
     }
 } else {
-    $text = Set-TopLevelValue $text 'model' '"gpt-5.5"'
+    $text = Set-TopLevelValue $text 'model' '"gpt-5.6-sol"'
     $text = Set-TopLevelValue $text 'model_provider' '"openai"'
     $text = Remove-TopLevelValue $text 'model_catalog_json'
 }

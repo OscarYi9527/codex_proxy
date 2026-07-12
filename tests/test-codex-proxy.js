@@ -6,7 +6,7 @@ import path from 'node:path'
 import { resolveCodexModel, isChatGptSubModel, isOpenAIApiModel, isRelayModel, parseRelayModel, buildModelsResponse, getThreadId } from '../src/models.js'
 import { recordUsage, recordAccountOutcome, getStats, resetStats, saveStats } from '../src/stats.js'
 import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurrencyLimit, accountRemainingPercent, accountUsageIsFresh, calculateUsageForecast, cooldownMsFromResponseText, ensureFreshToken, extractUsageFromBody, extractUsageFromHeaders, normalizeAccountRoutingStrategy, noteAccountAdaptiveOutcome, noteAccountSuccess, pickActiveAccount, refreshAccountUsage, releaseAccountRequest, renewAccountRequestLease, reserveAccountRequest, resetAccountRequestCounts, resetAccountStickiness } from '../src/chatgpt-accounts.js'
-import { proxyConfig, atomicWriteJson, orderChatgptAccounts } from '../src/config.js'
+import { proxyConfig, atomicWriteJson, orderChatgptAccounts, renameChatgptAccountInList } from '../src/config.js'
 import { assertCircuitAvailable, getCircuitStates, recordCircuitResult, resetCircuits } from '../src/circuit-breaker.js'
 import { fetchWithRetry, proxyMetaHeaders } from '../src/server-utils.js'
 import { redactSecrets } from '../src/logger.js'
@@ -20,6 +20,21 @@ describe('模型解析', () => {
   })
   it('回退到默认模型', () => {
     assert.ok(resolveCodexModel({}).model)
+  })
+})
+
+describe('账号备注管理', () => {
+  it('可以改名且不改变其他账号字段', () => {
+    const accounts = [{ id: 'a', label: '旧名称', routing_enabled: true }, { id: 'b', label: 'B' }]
+    const renamed = renameChatgptAccountInList(accounts, 'a', '  工作账号  ')
+    assert.strictEqual(renamed[0].label, '工作账号')
+    assert.strictEqual(renamed[0].routing_enabled, true)
+    assert.strictEqual(renamed[1], accounts[1])
+  })
+
+  it('拒绝空名称和不存在的账号', () => {
+    assert.throws(() => renameChatgptAccountInList([{ id: 'a' }], 'a', '  '), /不能为空/)
+    assert.throws(() => renameChatgptAccountInList([{ id: 'a' }], 'missing', '名称'), /not found/)
   })
 })
 

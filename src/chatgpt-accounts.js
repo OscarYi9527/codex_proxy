@@ -95,6 +95,8 @@ export function addChatgptAccount(raw, label, { routingEnabled = undefined } = {
     account_id,
     expires_at: decodeJwtExpiry(access_token) || (Date.now() + 3600 * 1000),
     status: 'active',
+    usage_sync_status: existing?.usage_updated_at ? 'synced' : 'pending',
+    usage_sync_error: null,
     routing_enabled: routingEnabled ?? existing?.routing_enabled ?? true,
     cooldown_until: null,
     last_refresh: new Date().toISOString(),
@@ -618,6 +620,8 @@ export function applyAccountUsage(accountId, usage) {
     .filter(item => Date.parse(item.at) >= cutoff)
     .slice(-200)
   account.usage_forecast = calculateUsageForecast(account, proxyConfig.chatgptLowQuotaThreshold ?? 10, now)
+  account.usage_sync_status = 'synced'
+  account.usage_sync_error = null
   persistAccount(account)
 }
 
@@ -707,7 +711,17 @@ async function refreshAccountUsageOnce(account, fetchImpl = fetch) {
 
 export async function refreshAccountUsage(account, fetchImpl = fetch) {
   if (usageRefreshInFlight.has(account.id)) return usageRefreshInFlight.get(account.id)
-  const refreshPromise = refreshAccountUsageOnce(account, fetchImpl)
+  const currentAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || account
+  currentAccount.usage_sync_status = 'refreshing'
+  currentAccount.usage_sync_error = null
+  persistAccount(currentAccount)
+  const refreshPromise = refreshAccountUsageOnce(currentAccount, fetchImpl).catch(error => {
+    const latestAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || currentAccount
+    latestAccount.usage_sync_status = 'error'
+    latestAccount.usage_sync_error = String(error?.message || error).slice(0, 300)
+    persistAccount(latestAccount)
+    throw error
+  })
   usageRefreshInFlight.set(account.id, refreshPromise)
   try {
     return await refreshPromise

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url'
 const PROXY_DIR = path.dirname(fileURLToPath(import.meta.url))
 const CONFIG_FILE = path.join(PROXY_DIR, '..', 'codex-proxy-config.json')
 const CONFIG_BACKUP_DIR = path.join(PROXY_DIR, '..', '.config-backups')
+const ACCOUNT_BACKUP_DIR = path.join(PROXY_DIR, '..', '.account-backups')
 const ACCOUNT_STRATEGIES = new Set([
   'priority', 'round-robin', 'headroom', 'least-used', 'latency',
   'reliable', 'weighted', 'random', 'lkgp'
@@ -94,20 +95,86 @@ function loadProxyConfig() {
   }
 }
 
+const SNAPSHOT_SENSITIVE_KEYS = new Set([
+  'deepseek_api_key',
+  'openai_api_key',
+  'chatgpt_accounts',
+  'active_chatgpt_account_id'
+])
+
+export function configForSettingsSnapshot(config) {
+  const snapshot = structuredClone(config || {})
+  for (const key of SNAPSHOT_SENSITIVE_KEYS) delete snapshot[key]
+  snapshot.relays = (snapshot.relays || []).map(({ api_key, ...relay }) => relay)
+  snapshot._snapshot = {
+    version: 2,
+    scope: 'settings-only',
+    note: 'Credentials and ChatGPT accounts are intentionally excluded.'
+  }
+  return snapshot
+}
+
+export function mergeSettingsSnapshot(snapshot, current) {
+  const safeSnapshot = structuredClone(snapshot || {})
+  for (const key of SNAPSHOT_SENSITIVE_KEYS) delete safeSnapshot[key]
+  delete safeSnapshot._snapshot
+  const currentConfig = structuredClone(current || {})
+  const currentRelayKeys = new Map(
+    (currentConfig.relays || []).map(relay => [relay.id, relay.api_key || ''])
+  )
+  if (Array.isArray(safeSnapshot.relays)) {
+    safeSnapshot.relays = safeSnapshot.relays.map(({ api_key, ...relay }) => ({
+      ...relay,
+      api_key: currentRelayKeys.get(relay.id) || ''
+    }))
+  }
+  return {
+    ...currentConfig,
+    ...safeSnapshot,
+    deepseek_api_key: currentConfig.deepseek_api_key || '',
+    openai_api_key: currentConfig.openai_api_key || '',
+    chatgpt_accounts: currentConfig.chatgpt_accounts || [],
+    active_chatgpt_account_id: currentConfig.active_chatgpt_account_id || null
+  }
+}
+
+function pruneJsonBackups(directory, keep = 10) {
+  const snapshots = fs.readdirSync(directory)
+    .filter(name => name.endsWith('.json'))
+    .sort()
+  for (const stale of snapshots.slice(0, Math.max(0, snapshots.length - keep))) {
+    try { fs.rmSync(path.join(directory, stale), { force: true }) } catch {}
+  }
+}
+
 function createConfigSnapshot(reason = 'change') {
   if (!fs.existsSync(CONFIG_FILE)) return null
   fs.mkdirSync(CONFIG_BACKUP_DIR, { recursive: true })
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
   const safeReason = String(reason).replace(/[^a-z0-9_-]+/gi, '-').slice(0, 40) || 'change'
   const file = path.join(CONFIG_BACKUP_DIR, `${stamp}-${safeReason}.json`)
-  fs.copyFileSync(CONFIG_FILE, file)
+  const current = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'))
+  atomicWriteJson(file, configForSettingsSnapshot(current))
   try { fs.chmodSync(file, 0o600) } catch {}
-  const snapshots = fs.readdirSync(CONFIG_BACKUP_DIR)
-    .filter(name => name.endsWith('.json'))
-    .sort()
-  for (const stale of snapshots.slice(0, Math.max(0, snapshots.length - 10))) {
-    try { fs.rmSync(path.join(CONFIG_BACKUP_DIR, stale), { force: true }) } catch {}
-  }
+  pruneJsonBackups(CONFIG_BACKUP_DIR)
+  return file
+}
+
+function createAccountBackup(reason = 'change') {
+  if (!fs.existsSync(CONFIG_FILE)) return null
+  const current = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'))
+  fs.mkdirSync(ACCOUNT_BACKUP_DIR, { recursive: true })
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const safeReason = String(reason).replace(/[^a-z0-9_-]+/gi, '-').slice(0, 40) || 'change'
+  const file = path.join(ACCOUNT_BACKUP_DIR, `${stamp}-${safeReason}.json`)
+  atomicWriteJson(file, {
+    version: 1,
+    created_at: new Date().toISOString(),
+    chatgpt_accounts: current.chatgpt_accounts || [],
+    active_chatgpt_account_id: current.active_chatgpt_account_id || null
+  })
+  try { fs.chmodSync(file, 0o600) } catch {}
+  pruneJsonBackups(ACCOUNT_BACKUP_DIR)
   return file
 }
 
@@ -126,14 +193,36 @@ export function listConfigSnapshots() {
   }
 }
 
+function sanitizeExistingConfigSnapshots() {
+  try {
+    for (const name of fs.readdirSync(CONFIG_BACKUP_DIR).filter(item => item.endsWith('.json'))) {
+      try {
+        const file = path.join(CONFIG_BACKUP_DIR, name)
+        const parsed = JSON.parse(fs.readFileSync(file, 'utf8'))
+        if (parsed?._snapshot?.scope === 'settings-only') continue
+        atomicWriteJson(file, configForSettingsSnapshot(parsed))
+        try { fs.chmodSync(file, 0o600) } catch {}
+      } catch (error) {
+        console.error('[codex-proxy] failed to sanitize config snapshot %s: %s', name, error.message)
+      }
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.error('[codex-proxy] failed to sanitize an existing config snapshot:', error.message)
+    }
+  }
+}
+
 export function restoreConfigSnapshot(name) {
   const safeName = path.basename(String(name || ''))
   if (!safeName || safeName !== name || !safeName.endsWith('.json')) throw new Error('Invalid snapshot name')
   const source = path.join(CONFIG_BACKUP_DIR, safeName)
   const parsed = JSON.parse(fs.readFileSync(source, 'utf8'))
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Snapshot is invalid')
+  const current = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'))
   createConfigSnapshot('before-rollback')
-  atomicWriteJson(CONFIG_FILE, parsed)
+  createAccountBackup('before-settings-rollback')
+  atomicWriteJson(CONFIG_FILE, mergeSettingsSnapshot(parsed, current))
   return reloadProxyConfig()
 }
 
@@ -181,6 +270,7 @@ function saveProxyConfig(fields, { snapshot = false, reason = 'change' } = {}) {
   return loadProxyConfig()
 }
 
+sanitizeExistingConfigSnapshots()
 let proxyConfig = loadProxyConfig()
 
 function reloadProxyConfig() {
@@ -226,6 +316,7 @@ export function upsertChatgptAccount(account) {
 }
 
 export function deleteChatgptAccount(accountId) {
+  createAccountBackup('before-account-delete')
   const accounts = (proxyConfig.chatgptAccounts || []).filter(a => a.id !== accountId)
   const fields = { chatgptAccounts: accounts }
   if (proxyConfig.activeChatgptAccountId === accountId) fields.activeChatgptAccountId = null

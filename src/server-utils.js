@@ -61,17 +61,48 @@ export function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+export function retryAfterMs(response, now = Date.now()) {
+  const value = response?.headers?.get?.('retry-after')
+  if (!value) return null
+  const seconds = Number(value)
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000)
+  const at = Date.parse(value)
+  return Number.isFinite(at) ? Math.max(0, at - now) : null
+}
+
+function attemptSignal(parentSignal, timeoutMs) {
+  if (!timeoutMs) return { signal: parentSignal, cleanup() {} }
+  const controller = new AbortController()
+  const abortFromParent = () => controller.abort(parentSignal.reason || new Error('Request aborted'))
+  if (parentSignal?.aborted) abortFromParent()
+  else parentSignal?.addEventListener('abort', abortFromParent, { once: true })
+  const timer = setTimeout(
+    () => controller.abort(new Error(`Upstream attempt timed out after ${timeoutMs} ms`)),
+    timeoutMs
+  )
+  timer.unref?.()
+  return {
+    signal: controller.signal,
+    cleanup() {
+      clearTimeout(timer)
+      parentSignal?.removeEventListener('abort', abortFromParent)
+    }
+  }
+}
+
 export async function fetchWithRetry(fetchImpl, url, options, maxAttempts = 5) {
   let lastError
   const {
     circuitKey = null,
     retryStatuses = [429, 502, 503, 504],
+    attemptTimeoutMs = 0,
+    maxRetryDelayMs = 30_000,
     ...fetchOptions
   } = options || {}
   const RETRYABLE_ERRORS = [
     'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND',
     'EAI_AGAIN', 'EPIPE', 'UND_ERR_SOCKET', 'fetch failed',
-    'network timeout', 'Socket timeout', 'NetworkError',
+    'network timeout', 'Socket timeout', 'NetworkError', 'timed out', 'TimeoutError',
     'request to https://api.deepseek.com'
   ]
   function isRetryableError(err) {
@@ -80,15 +111,23 @@ export async function fetchWithRetry(fetchImpl, url, options, maxAttempts = 5) {
   }
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     assertCircuitAvailable(circuitKey)
+    if (fetchOptions.signal?.aborted) throw fetchOptions.signal.reason || new Error('Request aborted')
+    const attemptAbort = attemptSignal(fetchOptions.signal, attemptTimeoutMs)
+    let retryDelayMs = Math.round(500 * Math.pow(2, attempt) * (0.85 + Math.random() * 0.3))
+    let preserveSignalForResponseBody = false
     try {
-      const response = await fetchImpl(url, fetchOptions)
+      const response = await fetchImpl(url, { ...fetchOptions, signal: attemptAbort.signal })
       recordCircuitResult(circuitKey, { status: response.status })
       if (retryStatuses.includes(response.status) && attempt < maxAttempts - 1) {
         const body = await response.text().catch(() => '')
         await response.body?.cancel().catch(() => {})
+        retryDelayMs = Math.min(maxRetryDelayMs, retryAfterMs(response) ?? retryDelayMs)
         lastError = new Error(`Upstream returned HTTP ${response.status} (attempt ${attempt + 1}/${maxAttempts}): ${body.slice(0, 200)}`)
         console.error('[codex-proxy]', lastError.message)
       } else {
+        // The signal must remain active while a streaming response body is
+        // consumed. Its unref'ed timer cleans itself up after the deadline.
+        preserveSignalForResponseBody = true
         return response
       }
     } catch (error) {
@@ -99,8 +138,10 @@ export async function fetchWithRetry(fetchImpl, url, options, maxAttempts = 5) {
       } else {
         throw error
       }
+    } finally {
+      if (!preserveSignalForResponseBody) attemptAbort.cleanup()
     }
-    await delay(500 * Math.pow(2, attempt))
+    await delay(retryDelayMs)
   }
   throw lastError
 }

@@ -6,9 +6,9 @@ import path from 'node:path'
 import { resolveCodexModel, isChatGptSubModel, isOpenAIApiModel, isRelayModel, parseRelayModel, buildModelsResponse, getThreadId } from '../src/models.js'
 import { recordUsage, recordAccountOutcome, getStats, resetStats, saveStats } from '../src/stats.js'
 import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurrencyLimit, accountRemainingPercent, accountUsageIsFresh, calculateUsageForecast, cooldownMsFromResponseText, ensureFreshToken, extractUsageFromBody, extractUsageFromHeaders, normalizeAccountRoutingStrategy, noteAccountAdaptiveOutcome, noteAccountSuccess, pickActiveAccount, refreshAccountUsage, releaseAccountRequest, renewAccountRequestLease, reserveAccountRequest, resetAccountRequestCounts, resetAccountStickiness } from '../src/chatgpt-accounts.js'
-import { proxyConfig, atomicWriteJson, orderChatgptAccounts, renameChatgptAccountInList } from '../src/config.js'
+import { proxyConfig, atomicWriteJson, configForSettingsSnapshot, mergeSettingsSnapshot, orderChatgptAccounts, renameChatgptAccountInList } from '../src/config.js'
 import { assertCircuitAvailable, getCircuitStates, recordCircuitResult, resetCircuits } from '../src/circuit-breaker.js'
-import { fetchWithRetry, proxyMetaHeaders } from '../src/server-utils.js'
+import { fetchWithRetry, proxyMetaHeaders, retryAfterMs } from '../src/server-utils.js'
 import { redactSecrets } from '../src/logger.js'
 import { createServer } from '../src/server.js'
 import { findDuplicateAccount, findPrivateBrowser, parseDeviceAuthOutput, privateBrowserArgs } from '../src/admin.js'
@@ -35,6 +35,46 @@ describe('账号备注管理', () => {
   it('拒绝空名称和不存在的账号', () => {
     assert.throws(() => renameChatgptAccountInList([{ id: 'a' }], 'a', '  '), /不能为空/)
     assert.throws(() => renameChatgptAccountInList([{ id: 'a' }], 'missing', '名称'), /not found/)
+  })
+})
+
+describe('安全配置快照', () => {
+  const current = {
+    default_model: 'gpt-5.6-sol',
+    deepseek_api_key: 'deep-current',
+    openai_api_key: 'openai-current',
+    active_chatgpt_account_id: 'acct-current',
+    chatgpt_accounts: [{ id: 'acct-current', refresh_token: 'refresh-current' }],
+    relays: [{ id: 'relay-a', name: '当前节点', api_key: 'relay-current' }]
+  }
+
+  it('设置快照不包含账号和凭据', () => {
+    const snapshot = configForSettingsSnapshot(current)
+    assert.strictEqual(snapshot.deepseek_api_key, undefined)
+    assert.strictEqual(snapshot.openai_api_key, undefined)
+    assert.strictEqual(snapshot.chatgpt_accounts, undefined)
+    assert.strictEqual(snapshot.active_chatgpt_account_id, undefined)
+    assert.strictEqual(snapshot.relays[0].api_key, undefined)
+    assert.strictEqual(snapshot._snapshot.scope, 'settings-only')
+  })
+
+  it('回滚旧快照也不会回退 Token、API Key 和活动账号', () => {
+    const legacySnapshot = {
+      default_model: 'gpt-5.5',
+      deepseek_api_key: 'deep-stale',
+      openai_api_key: 'openai-stale',
+      active_chatgpt_account_id: 'acct-stale',
+      chatgpt_accounts: [{ id: 'acct-stale', refresh_token: 'refresh-stale' }],
+      relays: [{ id: 'relay-a', name: '旧节点', api_key: 'relay-stale' }]
+    }
+    const restored = mergeSettingsSnapshot(legacySnapshot, current)
+    assert.strictEqual(restored.default_model, 'gpt-5.5')
+    assert.strictEqual(restored.deepseek_api_key, 'deep-current')
+    assert.strictEqual(restored.openai_api_key, 'openai-current')
+    assert.strictEqual(restored.active_chatgpt_account_id, 'acct-current')
+    assert.deepStrictEqual(restored.chatgpt_accounts, current.chatgpt_accounts)
+    assert.strictEqual(restored.relays[0].name, '旧节点')
+    assert.strictEqual(restored.relays[0].api_key, 'relay-current')
   })
 })
 
@@ -362,6 +402,14 @@ describe('Provider 熔断器', () => {
 })
 
 describe('稳定重试策略', () => {
+  it('解析 Retry-After 秒数和 HTTP 日期', () => {
+    assert.strictEqual(retryAfterMs(new Response('', { headers: { 'retry-after': '2' } })), 2000)
+    assert.strictEqual(
+      retryAfterMs(new Response('', { headers: { 'retry-after': 'Wed, 01 Jan 2031 00:00:10 GMT' } }), Date.parse('2031-01-01T00:00:00Z')),
+      10_000
+    )
+  })
+
   it('账号池可以让 429 立即交给账号轮换而不原账号重试', async () => {
     let calls = 0
     const response = await fetchWithRetry(async () => {

@@ -1,5 +1,5 @@
 const API = '/admin/api'
-let cfg = {}, statsData = { providers: {} }, diagnosticsData = { accounts: [], queue: {}, config_snapshots: [] }, modelCatalog = [], activePage = location.hash.slice(1) || 'overview'
+let cfg = {}, statsData = { providers: {} }, diagnosticsData = { accounts: [], queue: {}, config_snapshots: [], circuits: [] }, modelCatalog = [], activePage = location.hash.slice(1) || 'overview'
 let pingResults = {}, modal = null, loginPoll = null, accountsPoll = null, draggedAccountId = null
 
 const icons = {
@@ -55,10 +55,11 @@ function toggleTheme(){ const dark=document.documentElement.dataset.theme!=='dar
 async function load(showMessage=false,includeModels=true){
   const btn=document.getElementById('refreshButton'); btn.innerHTML=svg('refresh')
   try{
-    const [c,s,d,m]=await Promise.all([fetch(API+'/config'),fetch(API+'/stats'),fetch(API+'/diagnostics').catch(()=>null),includeModels?fetch('/v1/models').catch(()=>null):null])
+    const [c,s,d,r,m]=await Promise.all([fetch(API+'/config'),fetch(API+'/stats'),fetch(API+'/diagnostics').catch(()=>null),fetch(API+'/resilience').catch(()=>null),includeModels?fetch('/v1/models').catch(()=>null):null])
     if(!c.ok||!s.ok) throw new Error('服务响应异常')
     cfg=(await c.json()).config||{}; statsData=await s.json()
     if(d?.ok)diagnosticsData=await d.json()
+    if(r?.ok)diagnosticsData.circuits=(await r.json()).circuits||[]
     if(m?.ok)modelCatalog=((await m.json()).data||[]).map(model=>({id:model.id,name:model.display_name||model.id}))
     document.getElementById('side-status').textContent='网关服务运行中'; render(); if(showMessage) toast('数据已刷新')
   }catch(e){ document.getElementById('side-status').textContent='网关服务离线'; document.querySelector('.dot').style.background='var(--red)'; document.getElementById('app').innerHTML=empty('server','无法连接网关服务',e.message) }
@@ -76,16 +77,18 @@ function providerRows(){
     ['relay','中转节点',`${(cfg.relays||[]).length} 个兼容节点`,'relay',(cfg.relays||[]).length?'已配置':'未配置']
   ]
   return providers.map(([logo,name,sub,key,state])=>{
-    const p=(statsData.providers||{})[key]||{}, result=pingResults[key], status=result?(result.ok?'正常':'异常'):(state==='已配置'?'可用':state)
-    return `<div class="provider-row"><div class="provider-name"><span class="provider-logo ${logo}">${logo==='chatgpt'?'G':logo==='openai'?'AI':logo==='deepseek'?'D':'R'}</span><div><strong>${name}</strong><small>${sub}</small></div></div><div class="latency-cell"><span class="status ${status==='正常'||status==='可用'?'':'off'}"><i></i>${status}</span>${result?`<div class="cell-sub">${result.latency||0} ms</div>`:''}</div><div class="usage-cell"><span class="cell-sub">${fmt(p.requests)} 次请求</span><div class="mini-bar"><i style="width:${Math.min(100,(p.requests||0)/Math.max(1,totals().requests)*100)}%"></i></div></div><button class="btn btn-sm" onclick="pingChannel('${key}')">${svg('pulse')}检测</button></div>`
+    const p=(statsData.providers||{})[key]||{}, result=pingResults[key], status=result?(result.ok?'正常':'异常'):state
+    const statusClass=status==='正常'?'':status==='已配置'?'warn':'off'
+    return `<div class="provider-row"><div class="provider-name"><span class="provider-logo ${logo}">${logo==='chatgpt'?'G':logo==='openai'?'AI':logo==='deepseek'?'D':'R'}</span><div><strong>${name}</strong><small>${sub}</small></div></div><div class="latency-cell"><span class="status ${statusClass}"><i></i>${status}</span>${result?`<div class="cell-sub">${result.latency||0} ms</div>`:'<div class="cell-sub">尚未执行连通性检测</div>'}</div><div class="usage-cell"><span class="cell-sub">${fmt(p.requests)} 次请求</span><div class="mini-bar"><i style="width:${Math.min(100,(p.requests||0)/Math.max(1,totals().requests)*100)}%"></i></div></div><button class="btn btn-sm" onclick="pingChannel('${key}')">${svg('pulse')}检测</button></div>`
   }).join('')
 }
 function renderOverview(){
   const t=totals(), totalTokens=t.input+t.output, models=allProviders().reduce((n,p)=>n+Object.keys(p.models||{}).length,0)
+  const configuredChannels=((cfg.chatgptAccounts||[]).length>0?1:0)+(cfg.openaiApiKey?1:0)+(cfg.deepseekApiKey?1:0)+(cfg.relays||[]).length
   const recent=allProviders().flatMap(p=>Object.entries(p.models||{})).sort((a,b)=>(b[1].requests||0)-(a[1].requests||0)).slice(0,4)
   const activity=recent.length?recent.map(([name,v])=>`<div class="activity"><span class="activity-icon">${svg('arrow')}</span><div><p><b>${esc(name)}</b> 完成 ${fmt(v.requests)} 次路由请求</p><small>输入 ${fmt(v.input_tokens)} · 输出 ${fmt(v.output_tokens)} Tokens</small></div></div>`).join(''):empty('pulse','暂无调用记录','请求将在这里实时汇总')
   return pageHead('控制台概览','统一查看模型网关、账号池和节点状态',button('检测全部通道','pulse','pingAll()','btn-primary'))+
-    `<div class="metrics">${metric('累计请求',fmt(t.requests),'pulse','<b>实时统计</b> · 全部模型通道')}${metric('Token 用量',fmt(totalTokens),'analytics',`输入 ${fmt(t.input)} · 输出 ${fmt(t.output)}`)}${metric('可用服务',String(3+(cfg.relays||[]).length),'server',`${(cfg.relays||[]).length} 个自定义中转节点`)}${metric('账号池',String((cfg.chatgptAccounts||[]).length),'users','支持配额自动轮换')}</div>`+
+    `<div class="metrics">${metric('累计请求',fmt(t.requests),'pulse','<b>实时统计</b> · 全部模型通道')}${metric('Token 用量',fmt(totalTokens),'analytics',`输入 ${fmt(t.input)} · 输出 ${fmt(t.output)}`)}${metric('已配置通道',String(configuredChannels),'server','实际可用性以连通性检测结果为准')}${metric('账号池',String((cfg.chatgptAccounts||[]).length),'users','支持配额自动轮换')}</div>`+
     `<div class="grid"><div>${card('服务状态','上游通道与实时连通性',`<div class="card-body">${providerRows()}</div>`,button('管理服务','',"switchPage('providers')",'btn-sm'))}</div><div>${card('最近调用','按模型请求量排序',`<div class="card-body">${activity}</div>`)}${card('运行信息','当前网关环境',`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">默认模型</span><b>${esc(cfg.defaultModel||'-')}</b></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">统计更新时间</span><b>${statsData.updated?new Date(statsData.updated).toLocaleTimeString('zh-CN'):'-'}</b></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">部署模式</span><span class="badge">Local</span></div></div>`)}</div></div>`
 }
 function field(name,label,type='text',hint='',full=false){
@@ -220,7 +223,10 @@ function renderSettings(){
   const snapshotOptions=snapshots.map(item=>`<option value="${esc(item.name)}">${new Date(item.created_at).toLocaleString('zh-CN')} · ${esc(item.name.split('-').slice(6).join('-').replace('.json','')||'配置')}</option>`).join('')
   const rollback=`<div class="card-body"><div class="field"><label>配置快照 <span class="hint">最多保留最近 10 份</span></label><select id="config_snapshot">${snapshotOptions||'<option value="">暂无快照</option>'}</select></div></div><div class="form-footer">${button('回滚所选快照','refresh','rollbackConfigSnapshot()','btn-danger')}</div>`
   const operations=`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>脱敏诊断报告</b><div class="cell-sub">包含队列、并发、额度和运行状态，不包含 Token</div></div>${button('下载报告','download','downloadDiagnostics()')}</div><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>异常状态修复</b><div class="cell-sub">清理过期租约和异常冷却，不修改账号凭据</div></div>${button('立即检查','shield','repairRuntime()')}</div><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>优雅重启代理</b><div class="cell-sub">停止接收新请求，等待当前请求完成后由看门狗恢复</div></div>${button('优雅重启','refresh','gracefulRestartProxy()','btn-danger')}</div></div>`
-  return pageHead('系统设置','配置全局路由行为与管理控制台偏好')+`<div class="grid"><div>${card('路由偏好','应用于未指定模型或上游的请求',body)}${card('配置快照与回滚','重要变更前自动保存',rollback)}${card('外观','保存在当前浏览器',`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>深色显示模式</b><div class="cell-sub">切换控制台配色，不影响网关服务</div></div>${button('切换主题','moon','toggleTheme()')}</div></div>`)}</div><div>${card('系统信息','当前运行环境',info)}${card('运维与安全','普通使用无需操作',operations)}</div></div>`
+  const circuits=diagnosticsData.circuits||[]
+  const openCircuits=circuits.filter(item=>item.state!=='closed')
+  const circuitBody=`<div class="card-body">${circuits.length?circuits.map(item=>{const remaining=item.state==='open'?Math.max(0,30-Math.floor((Date.now()-Number(item.openedAt||0))/1000)):0;return `<div class="provider-row" style="grid-template-columns:1fr auto"><div><b>${esc(item.name)}</b><div class="cell-sub">${item.lastFailure?.message?esc(item.lastFailure.message):'暂无最近错误'}</div></div><span class="status ${item.state==='closed'?'':item.state==='half-open'?'warn':'off'}"><i></i>${item.state==='closed'?'正常':item.state==='half-open'?'正在探测':`熔断中 · 约 ${remaining} 秒后探测`}</span></div>`}).join(''):'<span class="cell-sub">尚无 Provider 熔断记录</span>'}</div><div class="form-footer">${button('重置熔断状态','refresh','resetCircuits()',openCircuits.length?'btn-danger':'')}</div>`
+  return pageHead('系统设置','配置全局路由行为与管理控制台偏好')+`<div class="grid"><div>${card('路由偏好','应用于未指定模型或上游的请求',body)}${card('配置快照与回滚','只恢复设置，不回退账号 Token 和 API Key',rollback)}${card('外观','保存在当前浏览器',`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>深色显示模式</b><div class="cell-sub">切换控制台配色，不影响网关服务</div></div>${button('切换主题','moon','toggleTheme()')}</div></div>`)}</div><div>${card('系统信息','当前运行环境',info)}${card('Provider 熔断状态',openCircuits.length?`${openCircuits.length} 个通道暂不可用`:'所有已记录通道正常',circuitBody)}${card('运维与安全','普通使用无需操作',operations)}</div></div>`
 }
 function render(){ const fn={overview:renderOverview,providers:renderProviders,relays:renderRelays,accounts:renderAccounts,analytics:renderAnalytics,settings:renderSettings,help:renderHelp}[activePage]; document.getElementById('app').innerHTML=fn() }
 
@@ -377,7 +383,7 @@ async function checkOfficialLogin(){
 }
 async function cancelOfficialLogin(){await fetch(API+'/chatgpt-login/cancel',{method:'POST'});if(loginPoll)clearInterval(loginPoll);loginPoll=null;const status=document.getElementById('login_status');if(status)status.innerHTML='<span class="status off"><i></i>登录已取消</span>'}
 async function saveAccount(){ const auth_json=document.getElementById('account_json').value.trim(),label=document.getElementById('account_label').value.trim(),routingEnabled=document.getElementById('account_routing_enabled')?.checked===true;if(!auth_json)return toast('请粘贴 auth.json 内容','error');try{JSON.parse(auth_json)}catch{return toast('auth.json 格式无效','error')}try{const r=await fetch(API+'/chatgpt-accounts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({auth_json,label,routingEnabled})}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'导入失败');cfg=d.config;closeModal();render();toast(d.message||(routingEnabled?'账号已导入并启用路由':'账号已导入，仅保存到账号池'))}catch(e){toast(e.message,'error')} }
-async function removeAccount(id){if(!confirm('确定从账号池中移除此账号吗？'))return;try{const r=await fetch(API+'/chatgpt-accounts/'+encodeURIComponent(id),{method:'DELETE'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'移除失败');cfg=d.config;render();toast('账号已移除')}catch(e){toast(e.message,'error')}}
+async function removeAccount(id){const account=(cfg.chatgptAccounts||[]).find(item=>item.id===id);const name=account?.label||account?.email||'未命名账号',shortId=String(account?.account_id||id).slice(0,12);if(!confirm(`确定移除账号「${name}」吗？\n账号 ID：${shortId}…\n\n删除前会自动创建独立账号备份。`))return;try{const r=await fetch(API+'/chatgpt-accounts/'+encodeURIComponent(id),{method:'DELETE'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'移除失败');cfg=d.config;render();toast('账号已移除，删除前数据已备份')}catch(e){toast(e.message,'error')}}
 async function refreshAllUsage(){
   toast('正在刷新全部账号用量…')
   try{const r=await fetch(API+'/chatgpt-accounts/refresh-usage-all',{method:'POST'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'刷新失败');cfg=d.config;render();toast(d.message||'用量已刷新')}catch(e){toast(e.message,'error')}
@@ -448,7 +454,7 @@ async function repairRuntime(){
 async function rollbackConfigSnapshot(){
   const name=document.getElementById('config_snapshot')?.value
   if(!name)return toast('当前没有可回滚的配置快照','error')
-  if(!confirm('确定回滚到所选配置吗？当前配置会先自动备份，账号和路由设置可能发生变化。'))return
+  if(!confirm('确定回滚到所选设置吗？\n\n会恢复：模型、端点和路由偏好。\n不会回退：ChatGPT 账号、Token、当前活动账号和 API Key。\n当前设置会先自动备份。'))return
   try{
     const r=await fetch(API+'/config-rollback',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name})}),d=await r.json()
     if(!r.ok)throw new Error(d.error?.message||'回滚失败')
@@ -456,7 +462,8 @@ async function rollbackConfigSnapshot(){
   }catch(e){toast(e.message,'error')}
 }
 async function gracefulRestartProxy(){
-  if(!confirm('确定优雅重启代理吗？新请求会短暂等待，正在进行的请求会尽量完成。'))return
+  const active=(diagnosticsData.accounts||[]).reduce((sum,item)=>sum+Number(item.active_requests||0),0),queued=Number(diagnosticsData.queue?.depth||0)
+  if(!confirm(`确定优雅重启代理吗？\n\n当前活动请求：${active}\n排队请求：${queued}\n\n服务会停止接收新请求，等待进行中的请求尽量完成。`))return
   try{
     const r=await fetch(API+'/proxy/restart',{method:'POST'}),d=await r.json()
     if(!r.ok)throw new Error(d.error?.message||'无法发起重启')
@@ -467,6 +474,10 @@ async function gracefulRestartProxy(){
     }
     toast('代理仍在重启，请稍后刷新页面','error')
   }catch(e){toast(e.message,'error')}
+}
+async function resetCircuits(){
+  if(!confirm('确定重置全部 Provider 熔断状态吗？如果上游仍不可用，熔断会再次自动开启。'))return
+  try{const r=await fetch(API+'/resilience',{method:'DELETE'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'重置失败');diagnosticsData.circuits=d.circuits||[];render();toast('熔断状态已重置')}catch(e){toast(e.message,'error')}
 }
 async function resetStats(){if(!confirm('确定清空全部本地用量统计吗？'))return;try{const r=await fetch(API+'/stats',{method:'DELETE'});statsData=await r.json();render();toast('统计数据已清空')}catch(e){toast(e.message,'error')}}
 function toast(message,type='success'){document.querySelector('.toast')?.remove();const el=document.createElement('div');el.className='toast '+type;el.innerHTML=`${svg(type==='error'?'x':'check')}<span>${esc(message)}</span>`;document.body.appendChild(el);setTimeout(()=>el.remove(),2800)}

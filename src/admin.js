@@ -646,13 +646,18 @@ export async function handleChatgptAccountRefreshUsage(req, res, accountId) {
 export async function handleChatgptAccountsRefreshAll(req, res) {
   const accounts = proxyConfig.chatgptAccounts || []
   const errors = []
-  for (const account of accounts) {
-    try {
-      await refreshAccountUsage(account, chinaFetch(fetch))
-    } catch (error) {
-      errors.push(`${account.label || account.id}: ${error.message}`)
+  let cursor = 0
+  const worker = async () => {
+    while (cursor < accounts.length) {
+      const account = accounts[cursor++]
+      try {
+        await refreshAccountUsage(account, chinaFetch(fetch))
+      } catch (error) {
+        errors.push(`${account.label || account.id}: ${error.message}`)
+      }
     }
   }
+  await Promise.all(Array.from({ length: Math.min(2, accounts.length) }, worker))
   const masked = publicProxyConfig(proxyConfig)
   return sendJson(res, 200, {
     config: masked,

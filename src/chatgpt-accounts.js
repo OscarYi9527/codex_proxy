@@ -394,6 +394,7 @@ export async function ensureFreshToken(account, fetchImpl = fetch) {
       response = await fetchImpl(OAUTH_TOKEN_URL, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
+        signal: AbortSignal.timeout(15_000),
         body: JSON.stringify({
           client_id: OAUTH_CLIENT_ID,
           grant_type: 'refresh_token',
@@ -692,6 +693,7 @@ async function refreshAccountUsageOnce(account, fetchImpl = fetch) {
   const base = new URL(proxyConfig.chatgptResponsesUrl).origin
   const response = await fetchImpl(base + USAGE_PATH, withChinaDispatcher({
     method: 'GET',
+    signal: AbortSignal.timeout(15_000),
     headers: {
       authorization: `Bearer ${account.access_token}`,
       'chatgpt-account-id': account.account_id,

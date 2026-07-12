@@ -4,7 +4,7 @@
 import { proxyConfig, getRelay } from '../config.js'
 import { toOpenAIApiModel } from '../models.js'
 import { requestLog } from '../logger.js'
-import { sendJson, readJson, fetchWithRetry, pipeResponsesUpstream } from '../server-utils.js'
+import { sendJson, readJson, fetchWithRetry, pipeResponsesUpstream, setProxyMeta } from '../server-utils.js'
 import { recordUsage, saveStats } from '../stats.js'
 import { responsesToChatCompletions, chatCompletionToResponse } from '../convert/chat-completions.js'
 import { streamChatCompletionToResponses } from '../convert/stream.js'
@@ -47,6 +47,8 @@ function upstreamAuthError(upstream) {
 
 export async function handleOpenAIApi(req, res, body, resolved) {
   const upstream = resolveOpenAIUpstream()
+  const provider = upstream.mode === 'relay' ? `relay:${upstream.relayId}` : 'openai-api'
+  setProxyMeta(res, { provider, model: resolved.model })
   if (!upstream.apiKey) {
     return sendJson(res, 503, {
       error: { type: 'authentication_error', message: upstreamAuthError(upstream) }
@@ -64,7 +66,10 @@ export async function handleOpenAIApi(req, res, body, resolved) {
     body: JSON.stringify(chatBody),
     signal: AbortSignal.timeout(300000)
   }
-  const fetchOptions = upstream.mode === 'official' ? withChinaDispatcher(baseOptions) : baseOptions
+  const fetchOptions = {
+    ...(upstream.mode === 'official' ? withChinaDispatcher(baseOptions) : baseOptions),
+    circuitKey: provider
+  }
 
   const upstreamResp = await fetchWithRetry(fetchImpl, upstream.chatCompletionsUrl, fetchOptions)
 
@@ -89,6 +94,8 @@ export async function handleOpenAIApi(req, res, body, resolved) {
 
 export async function handleOpenAIApiChatCompletions(req, res, body, resolved) {
   const upstream = resolveOpenAIUpstream()
+  const provider = upstream.mode === 'relay' ? `relay:${upstream.relayId}` : 'openai-api'
+  setProxyMeta(res, { provider, model: resolved.model })
   if (!upstream.apiKey) {
     return sendJson(res, 503, {
       error: { type: 'authentication_error', message: upstreamAuthError(upstream) }
@@ -103,7 +110,10 @@ export async function handleOpenAIApiChatCompletions(req, res, body, resolved) {
     body: JSON.stringify({ ...body, model: upstreamModel }),
     signal: AbortSignal.timeout(300000)
   }
-  const fetchOptions = upstream.mode === 'official' ? withChinaDispatcher(baseOptions) : baseOptions
+  const fetchOptions = {
+    ...(upstream.mode === 'official' ? withChinaDispatcher(baseOptions) : baseOptions),
+    circuitKey: provider
+  }
 
   const upstreamResp = await fetchWithRetry(fetchImpl, upstream.chatCompletionsUrl, fetchOptions)
 

@@ -3,7 +3,7 @@
 
 import { parseRelayModel } from '../models.js'
 import { requestLog } from '../logger.js'
-import { sendJson, fetchWithRetry } from '../server-utils.js'
+import { sendJson, fetchWithRetry, setProxyMeta, proxyMetaHeaders } from '../server-utils.js'
 import { recordUsage, saveStats } from '../stats.js'
 import { responsesToChatCompletions, chatCompletionToResponse } from '../convert/chat-completions.js'
 import { streamChatCompletionToResponses } from '../convert/stream.js'
@@ -15,6 +15,7 @@ export async function handleRelay(req, res, body, resolved) {
   }
 
   const { relay, upstreamModel } = parsed
+  setProxyMeta(res, { provider: `relay:${relay.id}`, model: resolved.model })
 
   if (!relay.api_key) {
     return sendJson(res, 503, { error: { type: 'authentication_error', message: `中转站 "${relay.name}" 未配置 API Key` } })
@@ -35,7 +36,8 @@ export async function handleRelay(req, res, body, resolved) {
       authorization: `Bearer ${relay.api_key}`
     },
     body: JSON.stringify(chatBody),
-    signal: AbortSignal.timeout(300000)
+    signal: AbortSignal.timeout(300000),
+    circuitKey: `relay:${relay.id}`
   })
 
   requestLog(req, `relay=${relay.id} status=${upstream.status}`)
@@ -66,6 +68,7 @@ export async function handleRelayChatCompletions(req, res, body, resolved) {
   }
 
   const { relay, upstreamModel } = parsed
+  setProxyMeta(res, { provider: `relay:${relay.id}`, model: resolved.model })
 
   if (!relay.api_key) {
     return sendJson(res, 503, { error: { type: 'authentication_error', message: `中转站 "${relay.name}" 未配置 API Key` } })
@@ -84,7 +87,8 @@ export async function handleRelayChatCompletions(req, res, body, resolved) {
       authorization: `Bearer ${relay.api_key}`
     },
     body: JSON.stringify({ ...body, model: upstreamModel }),
-    signal: AbortSignal.timeout(300000)
+    signal: AbortSignal.timeout(300000),
+    circuitKey: `relay:${relay.id}`
   })
 
   requestLog(req, `relay=${relay.id} chat-completions status=${upstream.status}`)
@@ -95,6 +99,7 @@ export async function handleRelayChatCompletions(req, res, body, resolved) {
     const value = upstream.headers.get(name)
     if (value) headers[name] = value
   }
+  Object.assign(headers, proxyMetaHeaders(res))
   res.writeHead(upstream.status, headers)
   let bodyText = ''
   if (upstream.body) {

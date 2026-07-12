@@ -4,6 +4,11 @@ import { fileURLToPath } from 'url'
 
 const PROXY_DIR = path.dirname(fileURLToPath(import.meta.url))
 const CONFIG_FILE = path.join(PROXY_DIR, '..', 'codex-proxy-config.json')
+const CONFIG_BACKUP_DIR = path.join(PROXY_DIR, '..', '.config-backups')
+const ACCOUNT_STRATEGIES = new Set([
+  'priority', 'round-robin', 'headroom', 'least-used', 'latency',
+  'reliable', 'weighted', 'random', 'lkgp'
+])
 
 const CONFIG_DEFAULTS = {
   deepseekApiKey: '',
@@ -18,7 +23,33 @@ const CONFIG_DEFAULTS = {
   openaiApiUpstream: 'official',
   defaultModel: 'deepseek-v4-pro',
   relays: [],
-  chatgptAccounts: []
+  chatgptAccounts: [],
+  activeChatgptAccountId: null,
+  chatgptAccountStrategy: 'headroom',
+  chatgptLowQuotaThreshold: 10
+}
+
+export function atomicWriteJson(filePath, value) {
+  const dir = path.dirname(filePath)
+  fs.mkdirSync(dir, { recursive: true })
+  const tempPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`)
+  const text = JSON.stringify(value, null, 2)
+  try {
+    fs.writeFileSync(tempPath, text, { encoding: 'utf8', mode: 0o600 })
+    const handle = fs.openSync(tempPath, 'r+')
+    try {
+      try { fs.fsyncSync(handle) } catch (error) {
+        // Some Windows filesystems reject fsync even for a regular file.
+        if (error.code !== 'EPERM' && error.code !== 'EINVAL') throw error
+      }
+    } finally {
+      fs.closeSync(handle)
+    }
+    fs.renameSync(tempPath, filePath)
+  } catch (error) {
+    try { fs.rmSync(tempPath, { force: true }) } catch {}
+    throw error
+  }
 }
 
 function loadProxyConfig() {
@@ -52,11 +83,61 @@ function loadProxyConfig() {
     openaiApiUpstream: process.env.CODEX_OPENAI_API_UPSTREAM || fileCfg.openai_api_upstream || CONFIG_DEFAULTS.openaiApiUpstream,
     defaultModel: process.env.CODEX_PROXY_DEFAULT_MODEL || fileCfg.default_model || CONFIG_DEFAULTS.defaultModel,
     relays,
-    chatgptAccounts
+    chatgptAccounts,
+    activeChatgptAccountId: fileCfg.active_chatgpt_account_id || CONFIG_DEFAULTS.activeChatgptAccountId,
+    chatgptAccountStrategy: ACCOUNT_STRATEGIES.has(fileCfg.chatgpt_account_strategy)
+      ? fileCfg.chatgpt_account_strategy
+      : CONFIG_DEFAULTS.chatgptAccountStrategy,
+    chatgptLowQuotaThreshold: Number.isFinite(Number(fileCfg.chatgpt_low_quota_threshold))
+      ? Math.max(0, Math.min(100, Number(fileCfg.chatgpt_low_quota_threshold)))
+      : CONFIG_DEFAULTS.chatgptLowQuotaThreshold
   }
 }
 
-function saveProxyConfig(fields) {
+function createConfigSnapshot(reason = 'change') {
+  if (!fs.existsSync(CONFIG_FILE)) return null
+  fs.mkdirSync(CONFIG_BACKUP_DIR, { recursive: true })
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const safeReason = String(reason).replace(/[^a-z0-9_-]+/gi, '-').slice(0, 40) || 'change'
+  const file = path.join(CONFIG_BACKUP_DIR, `${stamp}-${safeReason}.json`)
+  fs.copyFileSync(CONFIG_FILE, file)
+  try { fs.chmodSync(file, 0o600) } catch {}
+  const snapshots = fs.readdirSync(CONFIG_BACKUP_DIR)
+    .filter(name => name.endsWith('.json'))
+    .sort()
+  for (const stale of snapshots.slice(0, Math.max(0, snapshots.length - 10))) {
+    try { fs.rmSync(path.join(CONFIG_BACKUP_DIR, stale), { force: true }) } catch {}
+  }
+  return file
+}
+
+export function listConfigSnapshots() {
+  try {
+    return fs.readdirSync(CONFIG_BACKUP_DIR)
+      .filter(name => name.endsWith('.json'))
+      .sort()
+      .reverse()
+      .map(name => {
+        const stat = fs.statSync(path.join(CONFIG_BACKUP_DIR, name))
+        return { name, created_at: stat.mtime.toISOString(), size: stat.size }
+      })
+  } catch {
+    return []
+  }
+}
+
+export function restoreConfigSnapshot(name) {
+  const safeName = path.basename(String(name || ''))
+  if (!safeName || safeName !== name || !safeName.endsWith('.json')) throw new Error('Invalid snapshot name')
+  const source = path.join(CONFIG_BACKUP_DIR, safeName)
+  const parsed = JSON.parse(fs.readFileSync(source, 'utf8'))
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Snapshot is invalid')
+  createConfigSnapshot('before-rollback')
+  atomicWriteJson(CONFIG_FILE, parsed)
+  return reloadProxyConfig()
+}
+
+function saveProxyConfig(fields, { snapshot = false, reason = 'change' } = {}) {
   let existing = {}
   try { existing = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) } catch {}
   if (!existing || typeof existing !== 'object' || Array.isArray(existing)) existing = {}
@@ -72,7 +153,9 @@ function saveProxyConfig(fields) {
     openai_api_responses_url: fields.openaiApiResponsesUrl,
     openai_api_chat_completions_url: fields.openaiApiChatCompletionsUrl,
     openai_api_upstream: fields.openaiApiUpstream,
-    default_model: fields.defaultModel
+    default_model: fields.defaultModel,
+    chatgpt_account_strategy: fields.chatgptAccountStrategy,
+    chatgpt_low_quota_threshold: fields.chatgptLowQuotaThreshold
   }
 
   for (const [k, v] of Object.entries(map)) {
@@ -89,8 +172,12 @@ function saveProxyConfig(fields) {
     existing.chatgpt_accounts = fields.chatgptAccounts
   }
 
-  fs.mkdirSync(path.join(PROXY_DIR, '..'), { recursive: true })
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(existing, null, 2))
+  if (fields.activeChatgptAccountId !== undefined) {
+    existing.active_chatgpt_account_id = fields.activeChatgptAccountId
+  }
+
+  if (snapshot) createConfigSnapshot(reason)
+  atomicWriteJson(CONFIG_FILE, existing)
   return loadProxyConfig()
 }
 
@@ -112,14 +199,14 @@ export function addRelay(relay) {
   const idx = relays.findIndex(r => r.id === relay.id)
   if (idx >= 0) relays[idx] = relay
   else relays.push(relay)
-  const newCfg = saveProxyConfig({ relays })
+  const newCfg = saveProxyConfig({ relays }, { snapshot: true, reason: 'relay-save' })
   reloadProxyConfig()
   return newCfg
 }
 
 export function deleteRelay(relayId) {
   const relays = (proxyConfig.relays || []).filter(r => r.id !== relayId)
-  const newCfg = saveProxyConfig({ relays })
+  const newCfg = saveProxyConfig({ relays }, { snapshot: true, reason: 'relay-delete' })
   reloadProxyConfig()
   return newCfg
 }
@@ -130,16 +217,65 @@ export function upsertChatgptAccount(account) {
   const idx = accounts.findIndex(a => a.id === account.id)
   if (idx >= 0) accounts[idx] = account
   else accounts.push(account)
-  const newCfg = saveProxyConfig({ chatgptAccounts: accounts })
+  const newCfg = saveProxyConfig(
+    { chatgptAccounts: accounts },
+    idx < 0 ? { snapshot: true, reason: 'account-add' } : undefined
+  )
   reloadProxyConfig()
   return newCfg
 }
 
 export function deleteChatgptAccount(accountId) {
   const accounts = (proxyConfig.chatgptAccounts || []).filter(a => a.id !== accountId)
-  const newCfg = saveProxyConfig({ chatgptAccounts: accounts })
+  const fields = { chatgptAccounts: accounts }
+  if (proxyConfig.activeChatgptAccountId === accountId) fields.activeChatgptAccountId = null
+  const newCfg = saveProxyConfig(fields, { snapshot: true, reason: 'account-delete' })
   reloadProxyConfig()
   return newCfg
+}
+
+export function setActiveChatgptAccount(accountId) {
+  const newCfg = saveProxyConfig({ activeChatgptAccountId: accountId }, { snapshot: true, reason: 'account-switch' })
+  reloadProxyConfig()
+  return newCfg
+}
+
+export function orderChatgptAccounts(accounts, accountIds) {
+  if (!Array.isArray(accountIds)) throw new Error('accountIds must be an array')
+  const byId = new Map(accounts.map(account => [account.id, account]))
+  const uniqueIds = [...new Set(accountIds)]
+  if (uniqueIds.length !== accounts.length || uniqueIds.some(accountId => !byId.has(accountId))) {
+    throw new Error('Account order must contain every account exactly once')
+  }
+  return uniqueIds.map(accountId => byId.get(accountId))
+}
+
+export function reorderChatgptAccounts(accountIds) {
+  const reordered = orderChatgptAccounts(proxyConfig.chatgptAccounts || [], accountIds)
+  const newCfg = saveProxyConfig({ chatgptAccounts: reordered }, { snapshot: true, reason: 'account-reorder' })
+  reloadProxyConfig()
+  return newCfg
+}
+
+export function setChatgptAccountRouting(accountId, { weight, enabled } = {}) {
+  const accounts = (proxyConfig.chatgptAccounts || []).map(account => {
+    if (account.id !== accountId) return account
+    return {
+      ...account,
+      ...(weight === undefined
+        ? {}
+        : { routing_weight: Math.max(1, Math.min(100, Number(weight) || 1)) }),
+      ...(enabled === undefined ? {} : { routing_enabled: Boolean(enabled) })
+    }
+  })
+  if (!accounts.some(account => account.id === accountId)) throw new Error('Account not found')
+  const newCfg = saveProxyConfig({ chatgptAccounts: accounts }, { snapshot: true, reason: 'account-routing' })
+  reloadProxyConfig()
+  return newCfg
+}
+
+export function setChatgptAccountRoutingWeight(accountId, weight) {
+  return setChatgptAccountRouting(accountId, { weight })
 }
 
 export { proxyConfig, reloadProxyConfig, saveProxyConfig, CONFIG_FILE, PROXY_DIR, loadProxyConfig }

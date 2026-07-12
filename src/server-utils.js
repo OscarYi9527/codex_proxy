@@ -1,15 +1,48 @@
 // Shared server utilities
 // Used by the main server and all route handlers
 
+import { assertCircuitAvailable, recordCircuitResult } from './circuit-breaker.js'
+
 const MAX_BODY_BYTES = 16 * 1024 * 1024
 
 export function id(prefix = 'resp') {
   return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
 }
 
-export function sendJson(res, status, data) {
+export function setProxyMeta(res, fields = {}) {
+  res.proxyMeta = { ...(res.proxyMeta || {}), ...fields }
+}
+
+export function proxyMetaHeaders(res, extra = {}) {
+  const meta = { ...(res.proxyMeta || {}), ...extra }
+  const startedAt = Number(meta.startedAt) || Date.now()
+  const headers = {
+    'x-codex-proxy-request-id': String(meta.requestId || ''),
+    'x-codex-proxy-latency-ms': String(Math.max(0, Date.now() - startedAt))
+  }
+  if (meta.provider) headers['x-codex-proxy-provider'] = String(meta.provider)
+  if (meta.accountId) headers['x-codex-proxy-account'] = String(meta.accountId)
+  if (meta.model) headers['x-codex-proxy-model'] = String(meta.model)
+  if (Number(meta.fallbackAttempts) > 0) {
+    headers['x-codex-proxy-fallback-attempts'] = String(Math.floor(Number(meta.fallbackAttempts)))
+  }
+  if (Number(meta.queueWaitMs) > 0) {
+    headers['x-codex-proxy-queue-wait-ms'] = String(Math.floor(Number(meta.queueWaitMs)))
+  }
+  if (Number(meta.queuePosition) > 1) {
+    headers['x-codex-proxy-queue-position'] = String(Math.floor(Number(meta.queuePosition)))
+  }
+  return Object.fromEntries(Object.entries(headers).filter(([, value]) => value))
+}
+
+export function sendJson(res, status, data, headers = {}) {
   const text = JSON.stringify(data)
-  res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text) })
+  res.writeHead(status, {
+    'content-type': 'application/json',
+    'content-length': Buffer.byteLength(text),
+    ...proxyMetaHeaders(res),
+    ...headers
+  })
   res.end(text)
 }
 
@@ -30,7 +63,11 @@ export function delay(ms) {
 
 export async function fetchWithRetry(fetchImpl, url, options, maxAttempts = 5) {
   let lastError
-  const RETRYABLE_STATUSES = [429, 502, 503, 504]
+  const {
+    circuitKey = null,
+    retryStatuses = [429, 502, 503, 504],
+    ...fetchOptions
+  } = options || {}
   const RETRYABLE_ERRORS = [
     'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND',
     'EAI_AGAIN', 'EPIPE', 'UND_ERR_SOCKET', 'fetch failed',
@@ -42,9 +79,11 @@ export async function fetchWithRetry(fetchImpl, url, options, maxAttempts = 5) {
     return RETRYABLE_ERRORS.some(pat => msg.includes(pat))
   }
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    assertCircuitAvailable(circuitKey)
     try {
-      const response = await fetchImpl(url, options)
-      if (RETRYABLE_STATUSES.includes(response.status) && attempt < maxAttempts - 1) {
+      const response = await fetchImpl(url, fetchOptions)
+      recordCircuitResult(circuitKey, { status: response.status })
+      if (retryStatuses.includes(response.status) && attempt < maxAttempts - 1) {
         const body = await response.text().catch(() => '')
         await response.body?.cancel().catch(() => {})
         lastError = new Error(`Upstream returned HTTP ${response.status} (attempt ${attempt + 1}/${maxAttempts}): ${body.slice(0, 200)}`)
@@ -54,6 +93,7 @@ export async function fetchWithRetry(fetchImpl, url, options, maxAttempts = 5) {
       }
     } catch (error) {
       lastError = error
+      if (error.code !== 'CIRCUIT_OPEN') recordCircuitResult(circuitKey, { error })
       if (attempt < maxAttempts - 1 && isRetryableError(error)) {
         console.error('[codex-proxy] fetch error (attempt %d/%d): %s', attempt + 1, maxAttempts, error.message)
       } else {
@@ -101,6 +141,7 @@ export async function pipeResponsesUpstream(upstream, res, { onBody = null } = {
     const value = upstream.headers.get(name)
     if (value) headers[name] = value
   }
+  Object.assign(headers, proxyMetaHeaders(res))
   res.writeHead(upstream.status, headers)
   let bodyText = ''
   if (upstream.body) {

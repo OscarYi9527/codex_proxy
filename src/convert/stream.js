@@ -3,6 +3,7 @@
 
 import { id, asText, anthropicToResponse } from './anthropic.js'
 import { recordUsage, saveStats } from '../stats.js'
+import { proxyMetaHeaders } from '../server-utils.js'
 
 export function writeEvent(res, state, type, payload = {}) {
   const event = { type, sequence_number: state.sequence++, ...payload }
@@ -183,7 +184,8 @@ export async function streamAnthropicToResponses(upstream, res, body, customTool
   res.writeHead(200, {
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache',
-    connection: 'keep-alive'
+    connection: 'keep-alive',
+    ...proxyMetaHeaders(res)
   })
   const state = createStreamState(body, customTools)
   const decoder = new TextDecoder()
@@ -332,7 +334,8 @@ export async function streamChatCompletionToResponses(upstream, res, body) {
   res.writeHead(200, {
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache',
-    connection: 'keep-alive'
+    connection: 'keep-alive',
+    ...proxyMetaHeaders(res)
   })
   const state = createChatStreamState(body)
   writeEvent(res, state, 'response.created', { response: structuredClone(state.response) })

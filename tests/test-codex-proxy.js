@@ -12,7 +12,7 @@ import { fetchWithRetry, proxyMetaHeaders } from '../src/server-utils.js'
 import { redactSecrets } from '../src/logger.js'
 import { createServer } from '../src/server.js'
 import { findDuplicateAccount, findPrivateBrowser, parseDeviceAuthOutput, privateBrowserArgs } from '../src/admin.js'
-import { acquireActiveAccountWithRetry } from '../src/routes/chatgpt-sub.js'
+import { acquireActiveAccountWithRetry, refreshBelowReserveAccounts } from '../src/routes/chatgpt-sub.js'
 
 describe('模型解析', () => {
   it('解析 body.model', () => {
@@ -164,6 +164,25 @@ describe('额度感知和会话粘性账号选择', () => {
     try {
       assert.strictEqual(accountRemainingPercent(proxyConfig.chatgptAccounts[0]), 5)
       assert.strictEqual(pickActiveAccount().id, 'high')
+    } finally {
+      proxyConfig.chatgptAccounts = original
+    }
+  })
+
+  it('primary 99% 且 secondary 86% 时不会被误判为低额度', () => {
+    const original = proxyConfig.chatgptAccounts
+    proxyConfig.chatgptAccounts = [{
+      id: 'healthy',
+      status: 'active',
+      routing_enabled: true,
+      usage: {
+        primary: { remaining_percent: 99 },
+        secondary: { remaining_percent: 86 }
+      }
+    }]
+    try {
+      assert.strictEqual(accountRemainingPercent(proxyConfig.chatgptAccounts[0]), 86)
+      assert.strictEqual(pickActiveAccount(null, { lowQuotaThreshold: 10 }).id, 'healthy')
     } finally {
       proxyConfig.chatgptAccounts = original
     }
@@ -364,6 +383,40 @@ describe('稳定重试策略', () => {
       releaseAccountRequest('queued-account')
     } finally {
       resetAccountRequestCounts()
+      proxyConfig.chatgptAccounts = original
+    }
+  })
+
+  it('低额度缓存超过两分钟时按需刷新并恢复账号选择', async () => {
+    const original = proxyConfig.chatgptAccounts
+    const account = {
+      id: 'quota-reset-account',
+      status: 'active',
+      routing_enabled: true,
+      usage: {
+        primary: { remaining_percent: 9 },
+        secondary: { remaining_percent: 86 }
+      },
+      usage_updated_at: new Date(Date.now() - 6 * 60_000).toISOString()
+    }
+    proxyConfig.chatgptAccounts = [account]
+    let refreshCalls = 0
+    try {
+      assert.strictEqual(pickActiveAccount(null, { lowQuotaThreshold: 10 }), null)
+      const refreshed = await refreshBelowReserveAccounts(
+        async () => {},
+        'gpt-test',
+        null,
+        async target => {
+          refreshCalls++
+          target.usage.primary.remaining_percent = 99
+          target.usage_updated_at = new Date().toISOString()
+        }
+      )
+      assert.strictEqual(refreshed, true)
+      assert.strictEqual(refreshCalls, 1)
+      assert.strictEqual(pickActiveAccount(null, { lowQuotaThreshold: 10 }).id, account.id)
+    } finally {
       proxyConfig.chatgptAccounts = original
     }
   })

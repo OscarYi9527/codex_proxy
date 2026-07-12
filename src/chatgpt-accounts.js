@@ -116,6 +116,8 @@ export function accountRemainingPercent(account) {
       return null
     })
     .filter(value => Number.isFinite(value))
+  // Both quota windows constrain availability, so the effective headroom is
+  // the least remaining percentage across all known windows.
   return windows.length ? Math.max(0, Math.min(100, Math.min(...windows))) : null
 }
 

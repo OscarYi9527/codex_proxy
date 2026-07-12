@@ -6,7 +6,7 @@ import { requestLog } from '../logger.js'
 import { sendJson, pipeResponsesUpstream, fetchWithRetry, setProxyMeta } from '../server-utils.js'
 import { recordUsage, recordAccountOutcome, saveStats } from '../stats.js'
 import { chinaFetch, withChinaDispatcher } from '../china-fetch.js'
-import { pickActiveAccount, ensureFreshToken, markAccountCooldown, markAccountAuthFailure, extractUsageFromHeaders, applyAccountUsage, accountSessionKey, noteAccountSuccess, reserveAccountRequest, renewAccountRequestLease, releaseAccountRequest, accountActiveRequestCount, accountConcurrencyLimit, accountRemainingPercent, noteAccountAdaptiveOutcome } from '../chatgpt-accounts.js'
+import { pickActiveAccount, ensureFreshToken, markAccountCooldown, markAccountAuthFailure, extractUsageFromHeaders, applyAccountUsage, accountSessionKey, noteAccountSuccess, reserveAccountRequest, renewAccountRequestLease, releaseAccountRequest, accountActiveRequestCount, accountConcurrencyLimit, accountRemainingPercent, noteAccountAdaptiveOutcome, refreshAccountUsage } from '../chatgpt-accounts.js'
 
 const RESPONSES_LITE_HEADER = 'x-openai-internal-codex-responses-lite'
 const responsesLiteUnsupportedModels = new Set()
@@ -15,6 +15,7 @@ const MAX_ACCOUNT_ATTEMPTS_PER_REQUEST = 2
 // fast. This avoids false 503s on short request overlap.
 const BUSY_ACCOUNT_RETRY_MS = 500
 const BUSY_ACCOUNT_RETRY_COUNT = 120
+const QUOTA_RECHECK_MIN_AGE_MS = 2 * 60 * 1000
 const accountWaitQueue = []
 
 function sleep(ms) {
@@ -46,11 +47,42 @@ function hasBusyEnabledAccount(model, excludeIds = null) {
   )
 }
 
+export async function refreshBelowReserveAccounts(
+  fetchImpl,
+  model,
+  excludeIds = null,
+  refreshImpl = refreshAccountUsage
+) {
+  const now = Date.now()
+  const threshold = Number(proxyConfig.chatgptLowQuotaThreshold ?? 10)
+  const candidates = (proxyConfig.chatgptAccounts || []).filter(account => {
+    if (excludeIds?.has(account.id)) return false
+    if (account.routing_enabled === false) return false
+    if (account.status && account.status !== 'active') return false
+    if (model && Number(account.model_cooldowns?.[model]) > now) return false
+    const remaining = accountRemainingPercent(account)
+    if (remaining === null || remaining > threshold) return false
+    const updatedAt = Date.parse(account.usage_updated_at || '')
+    return !Number.isFinite(updatedAt) || now - updatedAt >= QUOTA_RECHECK_MIN_AGE_MS
+  })
+  if (!candidates.length) return false
+
+  for (const account of candidates) {
+    try {
+      await refreshImpl(account, fetchImpl)
+    } catch (error) {
+      console.warn('[codex-proxy] on-demand quota refresh failed for %s: %s',
+        account.label || account.id, error.message)
+    }
+  }
+  return true
+}
+
 // Selection and reservation must be one operation. Previously every waiter
 // could select the same newly-free account, then all but one failed reserve;
 // because that account had already been added to `tried`, those requests
 // waited for a minute and eventually returned a false 503.
-export async function acquireActiveAccountWithRetry(req, model, tried = null, sessionKey = null) {
+export async function acquireActiveAccountWithRetry(req, model, tried = null, sessionKey = null, fetchImpl = fetch) {
   const effectiveSessionKey = sessionKey || accountSessionKey(req)
   const ticket = {
     id: req.requestId || `queue_${Date.now()}_${Math.random().toString(36).slice(2)}`,
@@ -59,6 +91,7 @@ export async function acquireActiveAccountWithRetry(req, model, tried = null, se
   }
   accountWaitQueue.push(ticket)
   let maxPosition = accountWaitQueue.length
+  let quotaRefreshAttempted = false
   try {
     for (let attempt = 0; attempt <= BUSY_ACCOUNT_RETRY_COUNT; attempt++) {
       const position = accountWaitQueue.indexOf(ticket)
@@ -74,7 +107,13 @@ export async function acquireActiveAccountWithRetry(req, model, tried = null, se
           }
           return account
         }
-        if (!hasBusyEnabledAccount(model, tried)) return null
+        if (!hasBusyEnabledAccount(model, tried)) {
+          if (!quotaRefreshAttempted) {
+            quotaRefreshAttempted = true
+            if (await refreshBelowReserveAccounts(fetchImpl, model, tried)) continue
+          }
+          return null
+        }
       }
       if (attempt === BUSY_ACCOUNT_RETRY_COUNT || req.aborted) return null
       await sleep(BUSY_ACCOUNT_RETRY_MS)
@@ -135,7 +174,7 @@ async function rateLimitScope(response) {
 async function sendWithAccountRotation(req, chatGptFetch, upstreamBody, { model, tryResponsesLite }) {
   const tried = new Set()
   const sessionKey = accountSessionKey(req)
-  let account = await acquireActiveAccountWithRetry(req, model, null, sessionKey)
+  let account = await acquireActiveAccountWithRetry(req, model, null, sessionKey, chatGptFetch)
   const poolSize = (proxyConfig.chatgptAccounts || []).length
   let includeResponsesLite = tryResponsesLite
   let attempts = 0
@@ -187,13 +226,13 @@ async function sendWithAccountRotation(req, chatGptFetch, upstreamBody, { model,
         requestLog(req, `chatgpt-account=${account.id} status=429 cooldown_scope=${scope} rotate`)
         await markAccountCooldown(account.id, upstream.clone(), { model, scope })
         releaseAccountRequest(account.id, req.accountLeaseId)
-        account = await acquireActiveAccountWithRetry(req, model, tried, sessionKey)
+        account = await acquireActiveAccountWithRetry(req, model, tried, sessionKey, chatGptFetch)
         continue
       }
       if (upstream.status === 401 || upstream.status === 403) {
         markAccountAuthFailure(account.id, upstream.status)
         releaseAccountRequest(account.id, req.accountLeaseId)
-        account = await acquireActiveAccountWithRetry(req, model, tried, sessionKey)
+        account = await acquireActiveAccountWithRetry(req, model, tried, sessionKey, chatGptFetch)
         continue
       }
 
@@ -224,7 +263,7 @@ async function sendWithAccountRotation(req, chatGptFetch, upstreamBody, { model,
         latencyMs: Date.now() - attemptStartedAt
       })
       requestLog(req, `chatgpt-account=${account.id} network_error=${error.message} rotate`)
-      account = await acquireActiveAccountWithRetry(req, model, tried, sessionKey)
+      account = await acquireActiveAccountWithRetry(req, model, tried, sessionKey, chatGptFetch)
     }
   }
 

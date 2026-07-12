@@ -7,6 +7,7 @@ import { sendJson, pipeResponsesUpstream, fetchWithRetry, setProxyMeta } from '.
 import { recordUsage, recordAccountOutcome, saveStats } from '../stats.js'
 import { chinaFetch, withChinaDispatcher } from '../china-fetch.js'
 import { pickActiveAccount, ensureFreshToken, markAccountCooldown, markAccountAuthFailure, extractUsageFromHeaders, applyAccountUsage, accountSessionKey, noteAccountSuccess, reserveAccountRequest, renewAccountRequestLease, releaseAccountRequest, accountActiveRequestCount, accountConcurrencyLimit, accountRemainingPercent, noteAccountAdaptiveOutcome, refreshAccountUsage } from '../chatgpt-accounts.js'
+import { recordRouteDecision } from '../route-decisions.js'
 
 const RESPONSES_LITE_HEADER = 'x-openai-internal-codex-responses-lite'
 const responsesLiteUnsupportedModels = new Set()
@@ -29,10 +30,12 @@ function upstreamSignalFor(req) {
   timer.unref()
   const abort = () => controller.abort(new Error('Client disconnected'))
   req.once('aborted', abort)
+  req.clientAbortSignal?.addEventListener('abort', abort, { once: true })
   req.proxyUpstreamSignal = controller.signal
   req.cleanupProxyUpstreamSignal = () => {
     clearTimeout(timer)
     req.off('aborted', abort)
+    req.clientAbortSignal?.removeEventListener('abort', abort)
   }
   return controller.signal
 }
@@ -45,6 +48,46 @@ function hasBusyEnabledAccount(model, excludeIds = null) {
     (!model || !account.model_cooldowns?.[model]) &&
     accountActiveRequestCount(account.id) >= accountConcurrencyLimit(account.id)
   )
+}
+
+function accountDecisionDetails(model, excludeIds, selectedId = null) {
+  const now = Date.now()
+  const threshold = Number(proxyConfig.chatgptLowQuotaThreshold ?? 10)
+  return (proxyConfig.chatgptAccounts || []).map(account => {
+    const remaining = accountRemainingPercent(account)
+    let result = 'skipped'
+    let reason = '未被当前策略选中'
+    if (account.id === selectedId) {
+      result = 'selected'
+      reason = '已选择'
+    } else if (excludeIds?.has(account.id)) {
+      reason = '本次请求已经尝试过'
+    } else if (account.routing_enabled === false) {
+      reason = '仅保存，未启用路由'
+    } else if (account.status === 'auth_error') {
+      reason = '登录凭据已失效'
+    } else if (account.status === 'cooldown' && Number(account.cooldown_until) > now) {
+      reason = '账号冷却中'
+    } else if (account.status && account.status !== 'active') {
+      reason = `账号状态：${account.status}`
+    } else if (model && Number(account.model_cooldowns?.[model]) > now) {
+      reason = '当前模型冷却中'
+    } else if (remaining !== null && remaining <= threshold) {
+      reason = `剩余额度 ${remaining}% 已到安全线 ${threshold}%`
+    } else if (accountActiveRequestCount(account.id) >= accountConcurrencyLimit(account.id)) {
+      reason = '并发已满，等待空闲'
+    } else {
+      result = 'eligible'
+      reason = '可用，但未被当前策略选中'
+    }
+    return {
+      id: account.id,
+      label: account.label || account.account_id || account.id,
+      result,
+      reason,
+      remainingPercent: remaining
+    }
+  })
 }
 
 export async function refreshBelowReserveAccounts(
@@ -105,6 +148,15 @@ export async function acquireActiveAccountWithRetry(req, model, tried = null, se
             waitedMs: Date.now() - ticket.enqueuedAt,
             maxPosition
           }
+          recordRouteDecision({
+            requestId: req.requestId,
+            model,
+            provider: 'chatgpt-sub',
+            selectedAccountId: account.id,
+            selectedAccountLabel: account.label || account.account_id,
+            queueWaitMs: req.accountQueueMeta.waitedMs,
+            accounts: accountDecisionDetails(model, tried, account.id)
+          })
           return account
         }
         if (!hasBusyEnabledAccount(model, tried)) {
@@ -112,10 +164,28 @@ export async function acquireActiveAccountWithRetry(req, model, tried = null, se
             quotaRefreshAttempted = true
             if (await refreshBelowReserveAccounts(fetchImpl, model, tried)) continue
           }
+          recordRouteDecision({
+            requestId: req.requestId,
+            model,
+            provider: 'chatgpt-sub',
+            outcome: 'unavailable',
+            queueWaitMs: Date.now() - ticket.enqueuedAt,
+            accounts: accountDecisionDetails(model, tried)
+          })
           return null
         }
       }
-      if (attempt === BUSY_ACCOUNT_RETRY_COUNT || req.aborted) return null
+      if (attempt === BUSY_ACCOUNT_RETRY_COUNT || req.aborted) {
+        recordRouteDecision({
+          requestId: req.requestId,
+          model,
+          provider: 'chatgpt-sub',
+          outcome: req.aborted ? 'client_disconnected' : 'queue_timeout',
+          queueWaitMs: Date.now() - ticket.enqueuedAt,
+          accounts: accountDecisionDetails(model, tried)
+        })
+        return null
+      }
       await sleep(BUSY_ACCOUNT_RETRY_MS)
     }
   } finally {

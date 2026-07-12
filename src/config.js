@@ -160,7 +160,7 @@ function createConfigSnapshot(reason = 'change') {
   return file
 }
 
-function createAccountBackup(reason = 'change') {
+export function createAccountBackup(reason = 'change') {
   if (!fs.existsSync(CONFIG_FILE)) return null
   const current = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'))
   fs.mkdirSync(ACCOUNT_BACKUP_DIR, { recursive: true })
@@ -176,6 +176,65 @@ function createAccountBackup(reason = 'change') {
   try { fs.chmodSync(file, 0o600) } catch {}
   pruneJsonBackups(ACCOUNT_BACKUP_DIR)
   return file
+}
+
+function accountBackupData(parsed) {
+  const accounts = parsed?.chatgpt_accounts
+  if (!Array.isArray(accounts)) throw new Error('账号备份中没有有效的账号列表')
+  return {
+    accounts,
+    activeAccountId: parsed.active_chatgpt_account_id || null,
+    createdAt: parsed.created_at || null
+  }
+}
+
+export function mergeAccountBackup(currentAccounts, backupAccounts) {
+  const currentByIdentity = new Map(
+    (currentAccounts || []).map(account => [account.account_id || account.id, account])
+  )
+  const restored = [...(currentAccounts || [])]
+  for (const backupAccount of (backupAccounts || [])) {
+    const identity = backupAccount.account_id || backupAccount.id
+    if (!identity || currentByIdentity.has(identity)) continue
+    restored.push(backupAccount)
+    currentByIdentity.set(identity, backupAccount)
+  }
+  return restored
+}
+
+export function listAccountBackups() {
+  try {
+    return fs.readdirSync(ACCOUNT_BACKUP_DIR)
+      .filter(name => name.endsWith('.json'))
+      .sort()
+      .reverse()
+      .map(name => {
+        const file = path.join(ACCOUNT_BACKUP_DIR, name)
+        const stat = fs.statSync(file)
+        let accountCount = null
+        try {
+          accountCount = accountBackupData(JSON.parse(fs.readFileSync(file, 'utf8'))).accounts.length
+        } catch {}
+        return { name, created_at: stat.mtime.toISOString(), size: stat.size, account_count: accountCount }
+      })
+  } catch {
+    return []
+  }
+}
+
+export function restoreAccountBackup(name) {
+  const safeName = path.basename(String(name || ''))
+  if (!safeName || safeName !== name || !safeName.endsWith('.json')) throw new Error('Invalid account backup name')
+  const parsed = JSON.parse(fs.readFileSync(path.join(ACCOUNT_BACKUP_DIR, safeName), 'utf8'))
+  const backup = accountBackupData(parsed)
+  const accounts = mergeAccountBackup(proxyConfig.chatgptAccounts || [], backup.accounts)
+  const restoredCount = accounts.length - (proxyConfig.chatgptAccounts || []).length
+  createAccountBackup('before-account-restore')
+  const activeChatgptAccountId = proxyConfig.activeChatgptAccountId ||
+    (accounts.some(account => account.id === backup.activeAccountId) ? backup.activeAccountId : null)
+  const config = saveProxyConfig({ chatgptAccounts: accounts, activeChatgptAccountId })
+  reloadProxyConfig()
+  return { config, restoredCount }
 }
 
 export function listConfigSnapshots() {

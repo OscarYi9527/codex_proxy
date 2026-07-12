@@ -36,6 +36,7 @@ export async function handleRelay(req, res, body, resolved) {
       authorization: `Bearer ${relay.api_key}`
     },
     body: JSON.stringify(chatBody),
+    signal: req.clientAbortSignal,
     attemptTimeoutMs: 300000,
     circuitKey: `relay:${relay.id}`
   })
@@ -87,6 +88,7 @@ export async function handleRelayChatCompletions(req, res, body, resolved) {
       authorization: `Bearer ${relay.api_key}`
     },
     body: JSON.stringify({ ...body, model: upstreamModel }),
+    signal: req.clientAbortSignal,
     attemptTimeoutMs: 300000,
     circuitKey: `relay:${relay.id}`
   })

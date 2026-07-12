@@ -17,7 +17,7 @@ import { handleDeepSeek, handleDeepSeekChatCompletions } from './routes/deepseek
 import { handleRelay, handleRelayChatCompletions } from './routes/relay.js'
 import { handlePing, handlePingAll } from './routes/ping.js'
 import { saveStats } from './stats.js'
-import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleConfigSnapshotsGet, handleConfigRollback, handleRuntimeRepair, handleProxyRestart } from './admin.js'
+import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleAccountBackupsGet, handleConfigSnapshotsGet, handleAccountBackupRestore, handleConfigRollback, handleRuntimeRepair, handleProxyRestart } from './admin.js'
 
 const PORT = Number(process.env.CODEX_PROXY_PORT || 47892)
 const HOST = process.env.CODEX_PROXY_HOST || '127.0.0.1'
@@ -95,6 +95,14 @@ export function createServer({ fetchImpl = fetch } = {}) {
   return http.createServer(async (req, res) => {
     req.fetchImpl = fetchImpl
     req.requestId = id('req')
+    const clientAbortController = new AbortController()
+    req.clientAbortSignal = clientAbortController.signal
+    req.once('aborted', () => clientAbortController.abort(new Error('Client disconnected')))
+    res.once('close', () => {
+      if (!res.writableEnded && !clientAbortController.signal.aborted) {
+        clientAbortController.abort(new Error('Client disconnected'))
+      }
+    })
     setProxyMeta(res, { requestId: req.requestId, startedAt: Date.now() })
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`)
 
@@ -177,6 +185,7 @@ export function createServer({ fetchImpl = fetch } = {}) {
         if (isChatGptSubModel(resolved.model)) return await handleChatGptSub(req, res, body, resolved)
         return await handleDeepSeek(req, res, body, resolved)
       } catch (error) {
+        if (req.clientAbortSignal.aborted || res.destroyed) return
         console.error('[codex-proxy] request failed:', error.message)
         if (!res.headersSent) return sendJson(res, 502, { error: { type: 'proxy_error', message: error.message } })
         if (!res.writableEnded) res.end()
@@ -203,6 +212,7 @@ export function createServer({ fetchImpl = fetch } = {}) {
         if (isChatGptSubModel(resolved.model)) return await handleChatGptSubChatCompletions(req, res, body, resolved)
         return await handleDeepSeekChatCompletions(req, res, body, resolved)
       } catch (error) {
+        if (req.clientAbortSignal.aborted || res.destroyed) return
         console.error('[codex-proxy] chat/completions failed:', error.message)
         if (!res.headersSent) return sendJson(res, 502, { error: { type: 'proxy_error', message: error.message } })
         if (!res.writableEnded) res.end()
@@ -302,6 +312,10 @@ export function createServer({ fetchImpl = fetch } = {}) {
     if (req.method === 'DELETE' && url.pathname === '/admin/api/stats') return handleStatsDelete(req, res)
     if (req.method === 'GET' && url.pathname === '/admin/api/diagnostics') return handleDiagnosticsGet(req, res)
     if (req.method === 'GET' && url.pathname === '/admin/api/config-snapshots') return handleConfigSnapshotsGet(req, res)
+    if (req.method === 'GET' && url.pathname === '/admin/api/account-backups') return handleAccountBackupsGet(req, res)
+    if (req.method === 'POST' && url.pathname === '/admin/api/account-backups/restore') {
+      return handleAccountBackupRestore(req, res)
+    }
     if (req.method === 'POST' && url.pathname === '/admin/api/config-rollback') return handleConfigRollback(req, res)
     if (req.method === 'POST' && url.pathname === '/admin/api/runtime-repair') return handleRuntimeRepair(req, res)
     if (req.method === 'POST' && url.pathname === '/admin/api/proxy/restart') return handleProxyRestart(req, res)

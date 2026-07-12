@@ -3,13 +3,14 @@ import os from 'os'
 import path from 'path'
 import { spawn, spawnSync } from 'child_process'
 import { fileURLToPath } from 'url'
-import { proxyConfig, reloadProxyConfig, saveProxyConfig, CONFIG_FILE, addRelay, deleteRelay, setActiveChatgptAccount, reorderChatgptAccounts, renameChatgptAccount, setChatgptAccountRouting, listConfigSnapshots, restoreConfigSnapshot } from './config.js'
+import { proxyConfig, reloadProxyConfig, saveProxyConfig, CONFIG_FILE, addRelay, deleteRelay, setActiveChatgptAccount, reorderChatgptAccounts, renameChatgptAccount, setChatgptAccountRouting, listAccountBackups, listConfigSnapshots, restoreAccountBackup, restoreConfigSnapshot } from './config.js'
 import { getStats, resetStats } from './stats.js'
 import { sendJson, readJson } from './server-utils.js'
 import { syncRelayModels } from './sync-models.js'
 import { addChatgptAccount, deleteChatgptAccount, refreshAccountUsage, ensureFreshToken, parseAuthJson, getAccountRuntimeDiagnostics, repairAccountRuntimeState } from './chatgpt-accounts.js'
 import { getAccountQueueDiagnostics } from './routes/chatgpt-sub.js'
 import { chinaFetch } from './china-fetch.js'
+import { getRouteDecisions } from './route-decisions.js'
 
 function maskChatgptAccounts(accounts) {
   if (!accounts) return accounts
@@ -733,12 +734,36 @@ export function handleDiagnosticsGet(req, res) {
     },
     queue: getAccountQueueDiagnostics(),
     accounts: getAccountRuntimeDiagnostics(),
-    config_snapshots: listConfigSnapshots()
+    recent_route_decisions: getRouteDecisions(30),
+    config_snapshots: listConfigSnapshots(),
+    account_backups: listAccountBackups()
   })
 }
 
 export function handleConfigSnapshotsGet(req, res) {
   return sendJson(res, 200, { snapshots: listConfigSnapshots() })
+}
+
+export function handleAccountBackupsGet(req, res) {
+  return sendJson(res, 200, { backups: listAccountBackups() })
+}
+
+export async function handleAccountBackupRestore(req, res) {
+  try {
+    const body = await readJson(req)
+    const restored = restoreAccountBackup(body?.name)
+    return sendJson(res, 200, {
+      config: publicProxyConfig(restored.config),
+      restored: restored.restoredCount,
+      message: restored.restoredCount
+        ? `已恢复 ${restored.restoredCount} 个缺失账号；现有账号和 Token 未被覆盖`
+        : '备份中没有需要恢复的缺失账号，现有账号未发生变化'
+    })
+  } catch (error) {
+    return sendJson(res, 400, {
+      error: { type: 'invalid_request_error', message: error.message }
+    })
+  }
 }
 
 export async function handleConfigRollback(req, res) {

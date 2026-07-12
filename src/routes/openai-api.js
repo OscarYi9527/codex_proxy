@@ -64,6 +64,7 @@ export async function handleOpenAIApi(req, res, body, resolved) {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'text/event-stream', ...upstream.authHeaders },
     body: JSON.stringify(chatBody),
+    signal: req.clientAbortSignal,
     attemptTimeoutMs: 300000
   }
   const fetchOptions = {
@@ -108,6 +109,7 @@ export async function handleOpenAIApiChatCompletions(req, res, body, resolved) {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'text/event-stream', ...upstream.authHeaders },
     body: JSON.stringify({ ...body, model: upstreamModel }),
+    signal: req.clientAbortSignal,
     attemptTimeoutMs: 300000
   }
   const fetchOptions = {

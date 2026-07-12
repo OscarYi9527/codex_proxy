@@ -1,5 +1,5 @@
 const API = '/admin/api'
-let cfg = {}, statsData = { providers: {} }, diagnosticsData = { accounts: [], queue: {}, config_snapshots: [], circuits: [] }, modelCatalog = [], activePage = location.hash.slice(1) || 'overview'
+let cfg = {}, statsData = { providers: {} }, diagnosticsData = { accounts: [], queue: {}, config_snapshots: [], account_backups: [], recent_route_decisions: [], circuits: [] }, modelCatalog = [], activePage = location.hash.slice(1) || 'overview'
 let pingResults = {}, modal = null, loginPoll = null, accountsPoll = null, draggedAccountId = null
 
 const icons = {
@@ -172,7 +172,9 @@ function renderAccounts(){
   const actions=button('官方安全登录','shield','openOfficialLogin()','btn-primary')+button('导入 auth.json','plus','openAccount()')+button('刷新全部用量','refresh','refreshAllUsage()')+button('重启 Codex','refresh','restartCodex()')
   const strategyOptions=Object.entries(accountStrategyLabels).map(([value,label])=>`<option value="${value}" ${cfg.chatgptAccountStrategy===value?'selected':''}>${label}</option>`).join('')
   const strategyBody=`<div class="card-body"><div class="form-grid"><div class="field"><label>账号选择模式</label><select id="f_chatgptAccountStrategy">${strategyOptions}</select></div><div class="field"><label>低额度避让阈值 <span class="hint">0-100%</span></label><input class="input" id="f_chatgptLowQuotaThreshold" type="number" min="0" max="100" value="${Number(cfg.chatgptLowQuotaThreshold??10)}"></div></div></div><div class="form-footer">${button('保存路由策略','check','saveConfig()','btn-primary')}</div>`
-  return pageHead('ChatGPT 账号池','多账号统一托管，并在配额不足时自动切换',actions)+`<div class="metrics">${metric('账号总数',accounts.length,'users','全部订阅账号')}${metric('有效账号',available,'check',`${accounts.length-available} 个账号停用、冷却或到安全线`)}${metric('自适应并发','1–3','refresh',`当前队列 ${Number(diagnosticsData.queue?.depth)||0} · 超限自动排队`)}${metric('当前账号',activeLabel?esc(activeLabel.label||activeLabel.account_id||'已选择'):'未选择','shield','切换后本机 Codex 生效')}</div>`+card('路由策略','优先级模式使用下方拖拽顺序；权重模式使用每行权重',strategyBody)+card('账号健康矩阵','显示自适应并发、额度趋势、双层冷却和近期健康状态',body)
+  const decisions=diagnosticsData.recent_route_decisions||[]
+  const decisionBody=decisions.length?`<div class="table-wrap"><table class="table"><thead><tr><th>时间 / Request ID</th><th>模型</th><th>结果</th><th>选择与跳过原因</th></tr></thead><tbody>${decisions.slice(0,15).map(item=>{const skipped=(item.accounts||[]).filter(account=>account.result==='skipped').slice(0,4);const result=item.selected_account_label?`选择 ${esc(item.selected_account_label)}`:item.outcome==='queue_timeout'?'排队超时':item.outcome==='client_disconnected'?'客户端已断开':'没有可用账号';return `<tr><td><div class="cell-main">${new Date(item.at).toLocaleTimeString('zh-CN')}</div><div class="cell-sub">${esc(item.request_id||'-')}</div></td><td>${esc(item.model||'-')}</td><td><div class="cell-main">${result}</div><div class="cell-sub">${item.queue_wait_ms?`等待 ${fmt(item.queue_wait_ms)} ms`:'无需等待'}</div></td><td>${skipped.length?skipped.map(account=>`<div class="cell-sub"><b>${esc(account.label||account.id)}</b>：${esc(account.reason)}</div>`).join(''):'<span class="cell-sub">没有账号被跳过</span>'}</td></tr>`}).join('')}</tbody></table></div>`:empty('pulse','暂无路由决策','发起一次 ChatGPT 订阅模型请求后，将显示账号选择和跳过原因')
+  return pageHead('ChatGPT 账号池','多账号统一托管，并在配额不足时自动切换',actions)+`<div class="metrics">${metric('账号总数',accounts.length,'users','全部订阅账号')}${metric('有效账号',available,'check',`${accounts.length-available} 个账号停用、冷却或到安全线`)}${metric('自适应并发','1–3','refresh',`当前队列 ${Number(diagnosticsData.queue?.depth)||0} · 超限自动排队`)}${metric('当前账号',activeLabel?esc(activeLabel.label||activeLabel.account_id||'已选择'):'未选择','shield','切换后本机 Codex 生效')}</div>`+card('路由策略','优先级模式使用下方拖拽顺序；权重模式使用每行权重',strategyBody)+card('账号健康矩阵','显示自适应并发、额度趋势、双层冷却和近期健康状态',body)+card('最近路由决策','解释每次请求为什么选择或跳过某个账号',decisionBody)
 }
 function renderAnalytics(){
   const t=totals(), items=allProviders().flatMap(p=>Object.entries(p.models||{}).map(([name,v])=>({name,...v}))).sort((a,b)=>b.requests-a.requests)
@@ -222,11 +224,14 @@ function renderSettings(){
   const snapshots=diagnosticsData.config_snapshots||[]
   const snapshotOptions=snapshots.map(item=>`<option value="${esc(item.name)}">${new Date(item.created_at).toLocaleString('zh-CN')} · ${esc(item.name.split('-').slice(6).join('-').replace('.json','')||'配置')}</option>`).join('')
   const rollback=`<div class="card-body"><div class="field"><label>配置快照 <span class="hint">最多保留最近 10 份</span></label><select id="config_snapshot">${snapshotOptions||'<option value="">暂无快照</option>'}</select></div></div><div class="form-footer">${button('回滚所选快照','refresh','rollbackConfigSnapshot()','btn-danger')}</div>`
+  const accountBackups=diagnosticsData.account_backups||[]
+  const accountBackupOptions=accountBackups.map(item=>`<option value="${esc(item.name)}">${new Date(item.created_at).toLocaleString('zh-CN')} · ${item.account_count==null?'格式待验证':item.account_count+' 个账号'}</option>`).join('')
+  const accountRestore=`<div class="card-body"><div class="field"><label>账号备份 <span class="hint">删除和恢复前自动创建</span></label><select id="account_backup">${accountBackupOptions||'<option value="">暂无账号备份</option>'}</select><span class="hint">恢复仅补回当前缺失的账号，不覆盖现有账号、Token、名称或活动账号。</span></div></div><div class="form-footer">${button('恢复缺失账号','refresh','restoreAccountBackup()','btn-danger')}</div>`
   const operations=`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>脱敏诊断报告</b><div class="cell-sub">包含队列、并发、额度和运行状态，不包含 Token</div></div>${button('下载报告','download','downloadDiagnostics()')}</div><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>异常状态修复</b><div class="cell-sub">清理过期租约和异常冷却，不修改账号凭据</div></div>${button('立即检查','shield','repairRuntime()')}</div><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>优雅重启代理</b><div class="cell-sub">停止接收新请求，等待当前请求完成后由看门狗恢复</div></div>${button('优雅重启','refresh','gracefulRestartProxy()','btn-danger')}</div></div>`
   const circuits=diagnosticsData.circuits||[]
   const openCircuits=circuits.filter(item=>item.state!=='closed')
   const circuitBody=`<div class="card-body">${circuits.length?circuits.map(item=>{const remaining=item.state==='open'?Math.max(0,30-Math.floor((Date.now()-Number(item.openedAt||0))/1000)):0;return `<div class="provider-row" style="grid-template-columns:1fr auto"><div><b>${esc(item.name)}</b><div class="cell-sub">${item.lastFailure?.message?esc(item.lastFailure.message):'暂无最近错误'}</div></div><span class="status ${item.state==='closed'?'':item.state==='half-open'?'warn':'off'}"><i></i>${item.state==='closed'?'正常':item.state==='half-open'?'正在探测':`熔断中 · 约 ${remaining} 秒后探测`}</span></div>`}).join(''):'<span class="cell-sub">尚无 Provider 熔断记录</span>'}</div><div class="form-footer">${button('重置熔断状态','refresh','resetCircuits()',openCircuits.length?'btn-danger':'')}</div>`
-  return pageHead('系统设置','配置全局路由行为与管理控制台偏好')+`<div class="grid"><div>${card('路由偏好','应用于未指定模型或上游的请求',body)}${card('配置快照与回滚','只恢复设置，不回退账号 Token 和 API Key',rollback)}${card('外观','保存在当前浏览器',`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>深色显示模式</b><div class="cell-sub">切换控制台配色，不影响网关服务</div></div>${button('切换主题','moon','toggleTheme()')}</div></div>`)}</div><div>${card('系统信息','当前运行环境',info)}${card('Provider 熔断状态',openCircuits.length?`${openCircuits.length} 个通道暂不可用`:'所有已记录通道正常',circuitBody)}${card('运维与安全','普通使用无需操作',operations)}</div></div>`
+  return pageHead('系统设置','配置全局路由行为与管理控制台偏好')+`<div class="grid"><div>${card('路由偏好','应用于未指定模型或上游的请求',body)}${card('配置快照与回滚','只恢复设置，不回退账号 Token 和 API Key',rollback)}${card('账号备份与恢复','安全合并，不覆盖当前有效凭据',accountRestore)}${card('外观','保存在当前浏览器',`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>深色显示模式</b><div class="cell-sub">切换控制台配色，不影响网关服务</div></div>${button('切换主题','moon','toggleTheme()')}</div></div>`)}</div><div>${card('系统信息','当前运行环境',info)}${card('Provider 熔断状态',openCircuits.length?`${openCircuits.length} 个通道暂不可用`:'所有已记录通道正常',circuitBody)}${card('运维与安全','普通使用无需操作',operations)}</div></div>`
 }
 function render(){ const fn={overview:renderOverview,providers:renderProviders,relays:renderRelays,accounts:renderAccounts,analytics:renderAnalytics,settings:renderSettings,help:renderHelp}[activePage]; document.getElementById('app').innerHTML=fn() }
 
@@ -458,6 +463,16 @@ async function rollbackConfigSnapshot(){
   try{
     const r=await fetch(API+'/config-rollback',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name})}),d=await r.json()
     if(!r.ok)throw new Error(d.error?.message||'回滚失败')
+    cfg=d.config;toast(d.message);await load(false,false)
+  }catch(e){toast(e.message,'error')}
+}
+async function restoreAccountBackup(){
+  const name=document.getElementById('account_backup')?.value
+  if(!name)return toast('当前没有可恢复的账号备份','error')
+  if(!confirm('确定从所选备份补回缺失账号吗？\n\n现有账号、Token、名称和当前活动账号不会被覆盖。恢复前还会自动备份当前账号池。'))return
+  try{
+    const r=await fetch(API+'/account-backups/restore',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name})}),d=await r.json()
+    if(!r.ok)throw new Error(d.error?.message||'账号恢复失败')
     cfg=d.config;toast(d.message);await load(false,false)
   }catch(e){toast(e.message,'error')}
 }

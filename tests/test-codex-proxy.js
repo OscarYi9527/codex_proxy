@@ -6,13 +6,14 @@ import path from 'node:path'
 import { resolveCodexModel, isChatGptSubModel, isOpenAIApiModel, isRelayModel, parseRelayModel, buildModelsResponse, getThreadId } from '../src/models.js'
 import { recordUsage, recordAccountOutcome, getStats, resetStats, saveStats } from '../src/stats.js'
 import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurrencyLimit, accountRemainingPercent, accountUsageIsFresh, calculateUsageForecast, cooldownMsFromResponseText, ensureFreshToken, extractUsageFromBody, extractUsageFromHeaders, normalizeAccountRoutingStrategy, noteAccountAdaptiveOutcome, noteAccountSuccess, pickActiveAccount, refreshAccountUsage, releaseAccountRequest, renewAccountRequestLease, reserveAccountRequest, resetAccountRequestCounts, resetAccountStickiness } from '../src/chatgpt-accounts.js'
-import { proxyConfig, atomicWriteJson, configForSettingsSnapshot, mergeSettingsSnapshot, orderChatgptAccounts, renameChatgptAccountInList } from '../src/config.js'
+import { proxyConfig, atomicWriteJson, configForSettingsSnapshot, mergeAccountBackup, mergeSettingsSnapshot, orderChatgptAccounts, renameChatgptAccountInList } from '../src/config.js'
 import { assertCircuitAvailable, getCircuitStates, recordCircuitResult, resetCircuits } from '../src/circuit-breaker.js'
 import { fetchWithRetry, proxyMetaHeaders, retryAfterMs } from '../src/server-utils.js'
 import { redactSecrets } from '../src/logger.js'
 import { createServer } from '../src/server.js'
 import { findDuplicateAccount, findPrivateBrowser, parseDeviceAuthOutput, privateBrowserArgs } from '../src/admin.js'
 import { acquireActiveAccountWithRetry, refreshBelowReserveAccounts } from '../src/routes/chatgpt-sub.js'
+import { getRouteDecisions, recordRouteDecision, resetRouteDecisions } from '../src/route-decisions.js'
 
 describe('模型解析', () => {
   it('解析 body.model', () => {
@@ -75,6 +76,41 @@ describe('安全配置快照', () => {
     assert.deepStrictEqual(restored.chatgpt_accounts, current.chatgpt_accounts)
     assert.strictEqual(restored.relays[0].name, '旧节点')
     assert.strictEqual(restored.relays[0].api_key, 'relay-current')
+  })
+})
+
+describe('账号备份安全恢复', () => {
+  it('仅补回缺失账号，不覆盖当前账号的新 Token 和名称', () => {
+    const current = [{ id: 'current', account_id: 'identity-a', label: '新名称', refresh_token: 'new-token' }]
+    const backup = [
+      { id: 'old', account_id: 'identity-a', label: '旧名称', refresh_token: 'old-token' },
+      { id: 'restored', account_id: 'identity-b', label: '待恢复', refresh_token: 'backup-token' }
+    ]
+    const merged = mergeAccountBackup(current, backup)
+    assert.strictEqual(merged.length, 2)
+    assert.strictEqual(merged[0], current[0])
+    assert.strictEqual(merged[0].refresh_token, 'new-token')
+    assert.strictEqual(merged[1].account_id, 'identity-b')
+  })
+})
+
+describe('路由决策记录', () => {
+  it('记录选择和跳过原因且不保留敏感字段', () => {
+    resetRouteDecisions()
+    recordRouteDecision({
+      requestId: 'req-1',
+      model: 'gpt-5.6-sol',
+      provider: 'chatgpt-sub',
+      selectedAccountId: 'a',
+      accounts: [
+        { id: 'a', label: '工作账号', result: 'selected', reason: '已选择', remainingPercent: 66 },
+        { id: 'b', label: '备用账号', result: 'skipped', reason: '仅保存，未启用路由', access_token: 'secret' }
+      ]
+    })
+    const [decision] = getRouteDecisions()
+    assert.strictEqual(decision.request_id, 'req-1')
+    assert.strictEqual(decision.accounts[1].reason, '仅保存，未启用路由')
+    assert.strictEqual(decision.accounts[1].access_token, undefined)
   })
 })
 
@@ -408,6 +444,20 @@ describe('稳定重试策略', () => {
       retryAfterMs(new Response('', { headers: { 'retry-after': 'Wed, 01 Jan 2031 00:00:10 GMT' } }), Date.parse('2031-01-01T00:00:00Z')),
       10_000
     )
+  })
+
+  it('调用方取消后不会继续发起上游请求', async () => {
+    const controller = new AbortController()
+    controller.abort(new Error('Client disconnected'))
+    let calls = 0
+    await assert.rejects(
+      fetchWithRetry(async () => {
+        calls++
+        return new Response('{}')
+      }, 'https://example.invalid', { signal: controller.signal, attemptTimeoutMs: 100 }, 2),
+      /Client disconnected/
+    )
+    assert.strictEqual(calls, 0)
   })
 
   it('账号池可以让 429 立即交给账号轮换而不原账号重试', async () => {

@@ -25,6 +25,7 @@ export async function handleDeepSeek(req, res, body, resolved) {
       'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify(request),
+    signal: req.clientAbortSignal,
     attemptTimeoutMs: 300000,
     circuitKey: 'deepseek'
   })
@@ -96,6 +97,7 @@ export async function handleDeepSeekChatCompletions(req, res, body, resolved) {
       'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify(request),
+    signal: req.clientAbortSignal,
     attemptTimeoutMs: 300000,
     circuitKey: 'deepseek'
   })

@@ -1,11 +1,26 @@
 # Codex Local Multi-Upstream Proxy
 
-Windows 上的 Codex CLI 多上游路由代理。它让一个 Codex 窗口在保留原生
-Responses API、工具调用和流式输出的同时，在 ChatGPT 订阅模型与 DeepSeek
-之间切换。
+Windows 上的 Codex CLI / VS Code 多上游路由代理。它在保留原生 Responses API、
+工具调用和流式输出的同时，统一接入 ChatGPT 订阅账号池、OpenAI API、DeepSeek
+和 OpenAI 兼容中转节点，并提供本地管理后台、稳定性保护与可观测性。
 
 ## 主要能力
 
+- ChatGPT 账号池按 5 小时/每周剩余额度选择账号，低额度账号自动避让。
+- 同一 `session-id` / `thread-id` 默认粘住最后成功账号，兼顾上下文缓存和稳定性。
+- 账号池支持优先级、轮询、额度、最少使用、延迟、可靠性、权重、随机和最后成功路径 9 种可选策略。
+- 管理后台支持拖拽调整账号优先级，并可设置每账号路由权重和低额度阈值。
+- 新登录或手动导入的账号可设为“仅保存”，不会切换本机 Codex，也不会参与代理路由；需要时可单独启用。
+- 合规稳定模式限制单账号并发为 3、忙碌请求进入本地等待队列、单请求最多尝试 2 个账号，并优先使用 30 分钟内的新鲜额度数据。
+- 并发会根据成功、429、网络错误和高延迟在 1～3 之间自适应；请求槽位使用可续期租约，断连或异常退出后可自动回收。
+- Token 刷新和额度刷新均使用单飞合并，区分临时网络错误与必须重新登录的永久凭据错误。
+- 额度历史会生成到达安全余量的趋势预测，并支持模型级、账号级双层冷却。
+- 提供优雅重启、全局单实例锁、配置快照回滚、脱敏诊断报告和异常状态自动修复。
+- 额度优先从真实模型响应头更新；后台仅刷新参与路由的账号，全池约 30 分钟、当前账号最低约 5 分钟，并带随机抖动与失败退避。
+- 408、5xx 和网络错误由轻量 Provider Circuit Breaker 隔离，并支持半开自动恢复。
+- 响应附带 `X-Codex-Proxy-Request-Id`、Provider、Account、Model、Latency 和 Fallback 元数据。
+- 管理后台健康矩阵展示每账号剩余额度、成功率、请求数、429、最近状态以及 P50/P95/平均延迟。
+- 日志自动脱敏常见 Token/API Key/JWT，配置使用同目录原子写入。
 - 在 Codex 模型菜单中提供 `gpt-5.5`、`gpt-5.4`、`gpt-5.4-mini`、
   `GPT-5.5-API`、`GPT-5.4-API`、`GPT-5.4-API Mini` 和 `deepseek-v4-pro`。
 - GPT 订阅请求使用 Codex 已有的 ChatGPT 登录态转发到 ChatGPT Responses 后端。
@@ -166,7 +181,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
 ### 4. 验证
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:47892/health
+Invoke-RestMethod http://127.0.0.1:47892/live
+Invoke-RestMethod http://127.0.0.1:47892/ready
 Invoke-RestMethod http://127.0.0.1:47892/v1/models
 ```
 
@@ -253,7 +269,9 @@ powershell -ExecutionPolicy Bypass -File `
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
-| `GET` | `/health` | DeepSeek Key 与代理健康检查 |
+| `GET` | `/live` | 进程存活检查 |
+| `GET` | `/ready` | 至少一个上游可用的就绪检查 |
+| `GET` | `/health` | 向后兼容的就绪检查 |
 | `HEAD` | `/v1` | provider 连通性检查 |
 | `GET` | `/v1/models` | Codex/OpenAI 兼容模型目录 |
 | `POST` | `/v1/responses` | 主 Responses API |
@@ -263,6 +281,12 @@ powershell -ExecutionPolicy Bypass -File `
 | `GET` | `/admin` | 管理后台 Web 界面 |
 | `GET` | `/admin/api/config` | 获取当前配置（密钥掩码） |
 | `PUT` | `/admin/api/config` | 保存配置并热重载 |
+| `GET` | `/admin/api/stats` | 获取 Provider、模型和账号健康统计 |
+| `GET` | `/admin/api/diagnostics` | 获取不含 Token/邮箱的本地诊断报告 |
+| `GET` | `/admin/api/config-snapshots` | 列出最近配置快照 |
+| `POST` | `/admin/api/config-rollback` | 回滚所选配置快照 |
+| `POST` | `/admin/api/runtime-repair` | 清理异常冷却与过期租约 |
+| `POST` | `/admin/api/proxy/restart` | 优雅重启代理 |
 
 控制接口只应通过 localhost 使用，不要把代理监听地址暴露到公网。
 
@@ -300,9 +324,11 @@ powershell -ExecutionPolicy Bypass -File `
 代理启动后访问 http://127.0.0.1:47892/admin 打开管理后台。
 
 功能：
-- 可视化编辑所有 API 地址和密钥
-- 修改后一键保存并热重载，无需重启代理
-- 后续将扩展用量统计和消耗分析（已实现，见 Usage Stats 标签页）
+- 可视化编辑 API 地址、密钥、默认模型和中转节点
+- ChatGPT 官方隔离登录、账号仅保存/启用、拖拽优先级和 9 种路由策略
+- 5 小时/每周额度、趋势预测、1h/24h 成功率、P50/P95 延迟和双层冷却
+- 自适应并发、等待队列、请求租约、配置快照回滚和优雅重启
+- 零基础使用教程，以及一键生成不含凭据和邮箱的诊断报告
 
 用量统计 API：
 | 方法 | 路径 | 说明 |
@@ -338,13 +364,13 @@ API 端点：
 | default_model | 默认模型 |
 
 
-`json
+```json
 {
   "chatgpt_responses_url": "https://your-custom-chatgpt.com/backend-api/codex/responses",
   "upstream_url": "https://your-custom-deepseek.com/anthropic/v1/messages",
   "openai_api_base_url": "https://your-custom-openai.com/v1"
 }
-`
+```
 
 
 模型能力位于 `codex-models.json`。Codex provider 配置示例：
@@ -371,14 +397,14 @@ requires_openai_auth = true
 |---|---|
 | `codex-proxy.log` | 服务标准输出 |
 | `codex-proxy.error.log` | 服务错误输出 |
-| `codex-proxy-requests.log` | 请求方法、模型、线程和推理强度 |
+| `%USERPROFILE%\.claude\proxy\codex-proxy-requests.log` | 已脱敏请求日志（自动轮转） |
 | `.codex-proxy.pid` | 当前代理 PID |
 | `codex-proxy-watchdog.log` | watchdog 恢复记录 |
 
 常用诊断命令：
 
 ```powershell
-Get-Content "$HOME\.codex-local-multi-proxy\codex-proxy-requests.log" -Tail 50
+Get-Content "$HOME\.claude\proxy\codex-proxy-requests.log" -Tail 50
 Get-Content "$HOME\.codex-local-multi-proxy\codex-proxy.error.log" -Tail 50
 Get-Process -Id (Get-Content "$HOME\.codex-local-multi-proxy\.codex-proxy.pid")
 ```
@@ -386,17 +412,12 @@ Get-Process -Id (Get-Content "$HOME\.codex-local-multi-proxy\.codex-proxy.pid")
 ## 测试
 
 ```powershell
-$env:DEEPSEEK_API_KEY = "test-only"
-node --test .\test-codex-proxy.js
-Remove-Item Env:DEEPSEEK_API_KEY
-
-powershell -NoProfile -ExecutionPolicy Bypass -File `
-  .\test-codex-routing.ps1
-
-node --check .\codex-proxy.js
+npm test
+npm run check
+git diff --check
 ```
 
-测试使用假的 DeepSeek Key，不会发出真实 DeepSeek 请求。
+自动化测试使用本地 mock，不会消耗真实模型额度。
 
 ## 常见问题
 
@@ -410,17 +431,16 @@ Lite；仅在上游明确拒绝时改用标准 Responses：
 .\start-codex-proxy.ps1
 ```
 
-### `/health` 返回 503
+### `/ready` 或 `/health` 返回 503
 
-确认 `DEEPSEEK_API_KEY` 已持久化，然后重新打开终端或重新启动代理：
+这表示进程仍可能存活，但尚未配置可用上游。先检查 `/live`；再在管理后台确认至少
+一个 ChatGPT 账号已启用且高于安全余量，或者 OpenAI/DeepSeek/中转节点已配置。
 
-```powershell
-[Environment]::SetEnvironmentVariable(
-  "DEEPSEEK_API_KEY",
-  "你的 DeepSeek API Key",
-  "User"
-)
-```
+### ChatGPT 账号池返回 503
+
+管理后台会区分账号忙碌、冷却、模型冷却、登录失效和达到安全余量。短时并发会进入
+公平等待队列；若所有账号都不可用，请启用一个有额度且属于你的账号，或等待冷却/
+额度窗口恢复。不要通过频繁登录、刷新或重试制造请求风暴。
 
 ### GPT 提示缺少订阅鉴权头
 
@@ -462,7 +482,10 @@ VS Code 兼容层会把 `chatgpt.cliExecutable` 指向 `codex-vscode-launcher.ex
 
 ## 仓库结构
 
-- `codex-proxy.js`：当前 Codex Responses 多上游代理。
+- `src/server.js`：HTTP 服务、模型路由和管理 API 入口。
+- `src/chatgpt-accounts.js`：账号池、额度、Token、并发租约和冷却。
+- `src/routes/`：ChatGPT、OpenAI API、DeepSeek 和中转节点处理器。
+- `src/admin.html` / `src/admin_app.js`：本地管理后台和新手教程。
 - `codex-models.json`：Codex 模型目录。
 - `codex-safe.ps1`：安全启动、模式隔离、监控和故障转移。
 - `codex-mode.ps1`：三种路由模式的简化入口。
@@ -472,8 +495,12 @@ VS Code 兼容层会把 `chatgpt.cliExecutable` 指向 `codex-vscode-launcher.ex
 - `start/stop-codex-proxy.ps1`：服务管理。
 - `codex-proxy-watchdog.ps1`：登录自启动后的守护进程。
 - `ARCHITECTURE.md`：详细组件、数据流和流程图。
-- `server.js`、`FLOW.md`：早期 Claude Code 47891 代理实现与旧文档，不属于当前
-  47892 Codex 主链路。
+
+## 相关文档
+
+- [架构说明](ARCHITECTURE.md)
+- [安全说明](SECURITY.md)
+- [后续计划](TODO.md)
 
 ## 安全说明
 
@@ -481,3 +508,7 @@ VS Code 兼容层会把 `chatgpt.cliExecutable` 指向 `codex-vscode-launcher.ex
 - 日志不记录完整 Authorization 或 API Key。
 - 不要提交任何真实 API Key、Codex 登录文件或运行日志。
 - 不要把 `/control` 接口暴露到不可信网络。
+- 只使用自己拥有且获准使用的账号；本项目不提供设备指纹伪造、验证码代收或平台
+  风控规避能力。
+- 启动器强制开启 TLS 证书校验；如本地代理使用自定义 CA，应配置受信任 CA，而不是
+  全局关闭证书校验。

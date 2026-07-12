@@ -4,7 +4,7 @@ $proxyDir = $PSScriptRoot
 $startScript = Join-Path $proxyDir 'start-codex-proxy.ps1'
 $pidFile = Join-Path $proxyDir '.codex-proxy-watchdog.pid'
 $logFile = Join-Path $proxyDir 'codex-proxy-watchdog.log'
-$healthUrl = 'http://127.0.0.1:47892/health'
+$healthUrl = 'http://127.0.0.1:47892/live'
 $mutex = $null
 
 function Write-WatchdogLog {

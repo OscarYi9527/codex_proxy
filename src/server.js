@@ -1,11 +1,14 @@
 // Main HTTP server - request routing hub
 import http from 'http'
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
+import { fileURLToPath } from 'url'
 
 import { PROXY_DIR, proxyConfig } from './config.js'
 import { requestLog } from './logger.js'
-import { sendJson, readJson } from './server-utils.js'
+import { sendJson, readJson, id, setProxyMeta } from './server-utils.js'
+import { getCircuitStates, resetCircuits } from './circuit-breaker.js'
 import { resolveCodexModel, buildModelsResponse, isChatGptSubModel, isOpenAIApiModel, isRelayModel, shouldRouteViaOpenAIApi } from './models.js'
 import { handleThreadRouteReq } from './routes/thread-route.js'
 import { handleChatGptSub, handleChatGptSubChatCompletions } from './routes/chatgpt-sub.js'
@@ -13,12 +16,56 @@ import { handleOpenAIApi, handleOpenAIApiChatCompletions } from './routes/openai
 import { handleDeepSeek, handleDeepSeekChatCompletions } from './routes/deepseek.js'
 import { handleRelay, handleRelayChatCompletions } from './routes/relay.js'
 import { handlePing, handlePingAll } from './routes/ping.js'
-import { getAdminHtml, getAdminAppJs, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountDelete } from './admin.js'
+import { saveStats } from './stats.js'
+import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleConfigSnapshotsGet, handleConfigRollback, handleRuntimeRepair, handleProxyRestart } from './admin.js'
 
 const PORT = Number(process.env.CODEX_PROXY_PORT || 47892)
 const HOST = process.env.CODEX_PROXY_HOST || '127.0.0.1'
+const INSTANCE_FILE = path.join(os.homedir(), '.codex-proxy-instance.json')
 
 const BASE_INSTRUCTIONS = 'You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user\u0027s workspace. Preserve unrelated changes and report completed work concisely.'
+
+function processIsAlive(pid) {
+  try {
+    process.kill(Number(pid), 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function acquireInstanceLock() {
+  const payload = JSON.stringify({
+    pid: process.pid,
+    script: fileURLToPath(import.meta.url),
+    started_at: new Date().toISOString()
+  }, null, 2)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      fs.writeFileSync(INSTANCE_FILE, payload, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+      return
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error
+      try {
+        const existing = JSON.parse(fs.readFileSync(INSTANCE_FILE, 'utf8'))
+        if (processIsAlive(existing.pid)) {
+          throw new Error(`Another Codex proxy instance is already running (PID ${existing.pid}, ${existing.script || 'unknown path'})`)
+        }
+      } catch (readError) {
+        if (/already running/.test(readError.message)) throw readError
+      }
+      fs.rmSync(INSTANCE_FILE, { force: true })
+    }
+  }
+  throw new Error('Could not acquire Codex proxy instance lock')
+}
+
+function releaseInstanceLock() {
+  try {
+    const existing = JSON.parse(fs.readFileSync(INSTANCE_FILE, 'utf8'))
+    if (Number(existing.pid) === process.pid) fs.rmSync(INSTANCE_FILE, { force: true })
+  } catch {}
+}
 
 function makeRelayModel(slug, display, desc) {
   return {
@@ -47,25 +94,42 @@ function makeRelayModel(slug, display, desc) {
 export function createServer({ fetchImpl = fetch } = {}) {
   return http.createServer(async (req, res) => {
     req.fetchImpl = fetchImpl
+    req.requestId = id('req')
+    setProxyMeta(res, { requestId: req.requestId, startedAt: Date.now() })
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`)
 
-    if (!(req.method === 'GET' && url.pathname === '/health')) {
+    if (!(req.method === 'GET' && ['/health', '/live', '/ready'].includes(url.pathname))) {
       requestLog(req)
     }
 
-    // Health check
-    if (req.method === 'GET' && url.pathname === '/health') {
+    // Liveness only means the local process can serve requests. Readiness
+    // means at least one usable upstream has been configured.
+    if (req.method === 'GET' && url.pathname === '/live') {
+      return sendJson(res, 200, { status: 'ok', port: PORT })
+    }
+
+    if (req.method === 'GET' && (url.pathname === '/health' || url.pathname === '/ready')) {
       const relays = proxyConfig.relays || []
-      const ready = Boolean(proxyConfig.deepseekApiKey || proxyConfig.openaiApiKey || relays.some(r => r.api_key))
+      const chatgptReady = (proxyConfig.chatgptAccounts || []).some(account =>
+        account.routing_enabled !== false &&
+        Boolean(account.access_token || account.refresh_token)
+      )
+      const ready = Boolean(
+        proxyConfig.deepseekApiKey ||
+        proxyConfig.openaiApiKey ||
+        relays.some(r => r.api_key) ||
+        chatgptReady
+      )
       return sendJson(res, ready ? 200 : 503, {
         status: ready ? 'ok' : 'unavailable',
         provider: 'deepseek',
         providers: {
           deepseek: Boolean(proxyConfig.deepseekApiKey),
           'openai-api': Boolean(proxyConfig.openaiApiKey),
-          'chatgpt-sub': true,
+          'chatgpt-sub': chatgptReady,
           relays: relays.map(r => r.id)
         },
+        circuits: getCircuitStates(),
         port: PORT
       })
     }
@@ -105,6 +169,7 @@ export function createServer({ fetchImpl = fetch } = {}) {
       try {
         const body = await readJson(req)
         const resolved = resolveCodexModel(body)
+        setProxyMeta(res, { model: resolved.model })
         requestLog(req, 'model=' + resolved.model + ' effort=' + (resolved.reasoningEffort || 'default') + ' stream=' + body.stream)
 
         if (isRelayModel(resolved.model)) return await handleRelay(req, res, body, resolved)
@@ -130,6 +195,7 @@ export function createServer({ fetchImpl = fetch } = {}) {
       try {
         const body = await readJson(req)
         const resolved = resolveCodexModel(body)
+        setProxyMeta(res, { model: resolved.model })
         requestLog(req, 'chat-completions model=' + resolved.model + ' stream=' + body.stream)
 
         if (isRelayModel(resolved.model)) return await handleRelayChatCompletions(req, res, body, resolved)
@@ -142,6 +208,17 @@ export function createServer({ fetchImpl = fetch } = {}) {
         if (!res.writableEnded) res.end()
       }
       return
+    }
+
+    // Every admin mutation is local-only and validates Host/Origin centrally.
+    if (
+      url.pathname.startsWith('/admin/api/') &&
+      !['GET', 'HEAD', 'OPTIONS'].includes(req.method) &&
+      !isLocalAdminRequest(req)
+    ) {
+      return sendJson(res, 403, {
+        error: { type: 'permission_error', message: 'Admin changes are only allowed from the local console' }
+      })
     }
 
     // ?? Connectivity ping ????????????????????????????????????
@@ -182,12 +259,59 @@ export function createServer({ fetchImpl = fetch } = {}) {
       const body = await readJson(req)
       return handleChatgptAccountAdd(req, res, body)
     }
+    if (req.method === 'POST' && url.pathname === '/admin/api/chatgpt-accounts/import-current') {
+      return handleChatgptAccountImportCurrent(req, res)
+    }
+    if (req.method === 'POST' && url.pathname === '/admin/api/chatgpt-login/start') {
+      return handleChatgptLoginStart(req, res)
+    }
+    if (req.method === 'GET' && url.pathname === '/admin/api/chatgpt-login/status') {
+      return handleChatgptLoginStatus(req, res)
+    }
+    if (req.method === 'POST' && url.pathname === '/admin/api/chatgpt-login/cancel') {
+      return handleChatgptLoginCancel(req, res)
+    }
+    if (req.method === 'POST' && url.pathname === '/admin/api/chatgpt-accounts/refresh-usage-all') {
+      return handleChatgptAccountsRefreshAll(req, res)
+    }
+    if (req.method === 'POST' && url.pathname === '/admin/api/chatgpt-accounts/reorder') {
+      const body = await readJson(req)
+      return handleChatgptAccountsReorder(req, res, body)
+    }
+    const refreshUsageMatch = url.pathname.match(/^\/admin\/api\/chatgpt-accounts\/([^/]+)\/refresh-usage$/)
+    if (req.method === 'POST' && refreshUsageMatch) {
+      return handleChatgptAccountRefreshUsage(req, res, decodeURIComponent(refreshUsageMatch[1]))
+    }
+    const switchMatch = url.pathname.match(/^\/admin\/api\/chatgpt-accounts\/([^/]+)\/switch$/)
+    if (req.method === 'POST' && switchMatch) {
+      return handleChatgptAccountSwitch(req, res, decodeURIComponent(switchMatch[1]))
+    }
+    if (req.method === 'POST' && url.pathname === '/admin/api/codex/restart') {
+      return handleCodexRestart(req, res)
+    }
     if (req.method === 'DELETE' && url.pathname.startsWith('/admin/api/chatgpt-accounts/')) {
       return handleChatgptAccountDelete(req, res, decodeURIComponent(url.pathname.split('/').pop()))
     }
 
     if (req.method === 'GET' && url.pathname === '/admin/api/stats') return handleStatsGet(req, res)
     if (req.method === 'DELETE' && url.pathname === '/admin/api/stats') return handleStatsDelete(req, res)
+    if (req.method === 'GET' && url.pathname === '/admin/api/diagnostics') return handleDiagnosticsGet(req, res)
+    if (req.method === 'GET' && url.pathname === '/admin/api/config-snapshots') return handleConfigSnapshotsGet(req, res)
+    if (req.method === 'POST' && url.pathname === '/admin/api/config-rollback') return handleConfigRollback(req, res)
+    if (req.method === 'POST' && url.pathname === '/admin/api/runtime-repair') return handleRuntimeRepair(req, res)
+    if (req.method === 'POST' && url.pathname === '/admin/api/proxy/restart') return handleProxyRestart(req, res)
+    if (req.method === 'GET' && url.pathname === '/admin/api/resilience') {
+      return sendJson(res, 200, { circuits: getCircuitStates() })
+    }
+    const accountRoutingMatch = url.pathname.match(/^\/admin\/api\/chatgpt-accounts\/([^/]+)\/routing$/)
+    if (req.method === 'POST' && accountRoutingMatch) {
+      const body = await readJson(req)
+      return handleChatgptAccountRouting(req, res, decodeURIComponent(accountRoutingMatch[1]), body)
+    }
+    if (req.method === 'DELETE' && url.pathname === '/admin/api/resilience') {
+      resetCircuits()
+      return sendJson(res, 200, { circuits: [] })
+    }
 
     // 404
     requestLog(req, 'REJECTED-404')
@@ -195,9 +319,32 @@ export function createServer({ fetchImpl = fetch } = {}) {
   })
 }
 
-const isMain = import.meta.url.endsWith(process.argv[1]?.replace(/\\/g, '/') || '')
-if (isMain || process.argv[1]?.includes('codex-proxy')) {
+const isMain = process.argv[1]
+  ? path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))
+  : false
+if (isMain) {
+  acquireInstanceLock()
   const server = createServer()
+  let shuttingDown = false
+  const gracefulShutdown = signal => {
+    if (shuttingDown) return
+    shuttingDown = true
+    console.log(`[codex-proxy] ${signal} received; draining active requests`)
+    releaseInstanceLock()
+    saveStats()
+    server.close(error => {
+      if (error) console.error('[codex-proxy] graceful shutdown error:', error.message)
+      process.exit(error ? 1 : 0)
+    })
+    setTimeout(() => {
+      console.error('[codex-proxy] graceful shutdown timeout; forcing remaining connections closed')
+      server.closeAllConnections?.()
+      process.exit(1)
+    }, 310_000).unref()
+  }
+  process.once('SIGTERM', () => gracefulShutdown('SIGTERM'))
+  process.once('SIGINT', () => gracefulShutdown('SIGINT'))
+  process.once('exit', releaseInstanceLock)
   server.listen(PORT, HOST, () => {
     console.log('[codex-proxy] listening on http://' + HOST + ':' + PORT)
     console.log('[codex-proxy] channels: gpt-* | openai-api-* | relay-* | * -> DeepSeek')

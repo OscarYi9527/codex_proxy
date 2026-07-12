@@ -3,12 +3,13 @@
 
 import { proxyConfig } from '../config.js'
 import { requestLog } from '../logger.js'
-import { sendJson, readJson, fetchWithRetry, id } from '../server-utils.js'
+import { sendJson, readJson, fetchWithRetry, id, setProxyMeta, proxyMetaHeaders } from '../server-utils.js'
 import { recordUsage, saveStats } from '../stats.js'
 import { responsesToAnthropic, anthropicToResponse } from '../convert/anthropic.js'
 import { streamAnthropicToResponses } from '../convert/stream.js'
 
 export async function handleDeepSeek(req, res, body, resolved) {
+  setProxyMeta(res, { provider: 'deepseek', model: resolved.model })
   if (!proxyConfig.deepseekApiKey) {
     return sendJson(res, 503, {
       error: { type: 'authentication_error', message: 'DEEPSEEK_API_KEY is not set' }
@@ -24,7 +25,8 @@ export async function handleDeepSeek(req, res, body, resolved) {
       'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify(request),
-    signal: AbortSignal.timeout(300000)
+    signal: AbortSignal.timeout(300000),
+    circuitKey: 'deepseek'
   })
 
   requestLog(req, `model=${resolved.model} body_model=${resolved.bodyModel || '-'} thread=${resolved.threadId || '-'} deepseek=1 stream=${body.stream} status=${upstream.status}`)
@@ -47,6 +49,7 @@ export async function handleDeepSeek(req, res, body, resolved) {
 }
 
 export async function handleDeepSeekChatCompletions(req, res, body, resolved) {
+  setProxyMeta(res, { provider: 'deepseek', model: resolved.model })
   if (!proxyConfig.deepseekApiKey) {
     return sendJson(res, 503, {
       error: { type: 'authentication_error', message: 'DEEPSEEK_API_KEY is not set' }
@@ -93,7 +96,8 @@ export async function handleDeepSeekChatCompletions(req, res, body, resolved) {
       'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify(request),
-    signal: AbortSignal.timeout(300000)
+    signal: AbortSignal.timeout(300000),
+    circuitKey: 'deepseek'
   })
 
   if (!upstream.ok) {
@@ -105,7 +109,7 @@ export async function handleDeepSeekChatCompletions(req, res, body, resolved) {
 
   if (body.stream) {
     // Convert Anthropic SSE to OpenAI SSE chunks
-    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', ...proxyMetaHeaders(res) })
     const decoder = new TextDecoder()
     let buffer = ''
     for await (const chunk of upstream.body) {

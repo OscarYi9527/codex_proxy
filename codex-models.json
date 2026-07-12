@@ -648,6 +648,356 @@
         "image"
       ],
       "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
+    },
+    {
+      "slug": "relay-anzhiyu-gpt-5.5",
+      "display_name": "GPT-5.5 (anzhiyu)",
+      "description": "anzhiyu — https://sub.anzhiyu.com/v1",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Max reasoning"
+        }
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 10,
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "none",
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "freeform",
+      "web_search_tool_type": "text_and_image",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "supports_search_tool": true,
+      "use_responses_lite": false,
+      "experimental_supported_tools": [],
+      "context_window": 372000,
+      "effective_context_window_percent": 95,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
+    },
+    {
+      "slug": "relay-anzhiyu-gpt-5.4",
+      "display_name": "GPT-5.4 (anzhiyu)",
+      "description": "anzhiyu — https://sub.anzhiyu.com/v1",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Max reasoning"
+        }
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 10,
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "none",
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "freeform",
+      "web_search_tool_type": "text_and_image",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "supports_search_tool": true,
+      "use_responses_lite": false,
+      "experimental_supported_tools": [],
+      "context_window": 372000,
+      "effective_context_window_percent": 95,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
+    },
+    {
+      "slug": "relay-anzhiyu-gpt-5.4-mini",
+      "display_name": "GPT-5.4-MINI (anzhiyu)",
+      "description": "anzhiyu — https://sub.anzhiyu.com/v1",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Max reasoning"
+        }
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 10,
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "none",
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "freeform",
+      "web_search_tool_type": "text_and_image",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "supports_search_tool": true,
+      "use_responses_lite": false,
+      "experimental_supported_tools": [],
+      "context_window": 372000,
+      "effective_context_window_percent": 95,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
+    },
+    {
+      "slug": "relay-cctq-gpt-5.5",
+      "display_name": "GPT-5.5 (cctq-gpt)",
+      "description": "cctq-gpt — https://www.cctq.ai/v1",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Max reasoning"
+        }
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 10,
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "none",
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "freeform",
+      "web_search_tool_type": "text_and_image",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "supports_search_tool": true,
+      "use_responses_lite": false,
+      "experimental_supported_tools": [],
+      "context_window": 372000,
+      "effective_context_window_percent": 95,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
+    },
+    {
+      "slug": "relay-cctq-gpt-5.5-openai-compact",
+      "display_name": "GPT-5.5-OPENAI-COMPACT (cctq-gpt)",
+      "description": "cctq-gpt — https://www.cctq.ai/v1",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Max reasoning"
+        }
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 10,
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "none",
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "freeform",
+      "web_search_tool_type": "text_and_image",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "supports_search_tool": true,
+      "use_responses_lite": false,
+      "experimental_supported_tools": [],
+      "context_window": 372000,
+      "effective_context_window_percent": 95,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
+    },
+    {
+      "slug": "relay-cctq-gpt-5.4",
+      "display_name": "GPT-5.4 (cctq-gpt)",
+      "description": "cctq-gpt — https://www.cctq.ai/v1",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Max reasoning"
+        }
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 10,
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "none",
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "freeform",
+      "web_search_tool_type": "text_and_image",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "supports_search_tool": true,
+      "use_responses_lite": false,
+      "experimental_supported_tools": [],
+      "context_window": 372000,
+      "effective_context_window_percent": 95,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
+    },
+    {
+      "slug": "relay-cctq-gpt-5.4-openai-compact",
+      "display_name": "GPT-5.4-OPENAI-COMPACT (cctq-gpt)",
+      "description": "cctq-gpt — https://www.cctq.ai/v1",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Max reasoning"
+        }
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 10,
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "none",
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "freeform",
+      "web_search_tool_type": "text_and_image",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "supports_search_tool": true,
+      "use_responses_lite": false,
+      "experimental_supported_tools": [],
+      "context_window": 372000,
+      "effective_context_window_percent": 95,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "base_instructions": "You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user's workspace. Preserve unrelated changes and report completed work concisely."
     }
   ]
 }

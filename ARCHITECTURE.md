@@ -1,287 +1,135 @@
-# Codex 多上游代理：架构与流程
+# Codex Proxy 架构说明
 
-本文档描述 `codex-proxy.js` 所实现的当前 Codex 代理。默认监听端口为 `47892`。
-仓库中的 `server.js` 和 `FLOW.md` 属于早期 Claude Code `47891` 实现，不在本文
-主链路中。
+本文描述默认监听 `127.0.0.1:47892` 的当前实现。主入口是 `src/server.js`。
 
-## 1. 组件关系
-
-```mermaid
-flowchart TB
-    U[用户] --> T[Codex CLI / TUI]
-    T -->|POST /v1/responses| P[codex-proxy.js<br/>localhost:47892]
-    T -->|GET /v1/models| P
-
-    P --> C[codex-models.json]
-    P --> L[codex-proxy-requests.log]
-
-    P --> R{模型分类}
-    R -->|gpt-*| H[ChatGPT header filter]
-    H --> G[ChatGPT Codex<br/>Responses backend]
-
-    R -->|deepseek-v4-pro| A[Responses → Anthropic adapter]
-    A --> D[DeepSeek Anthropic API]
-    D --> S[Anthropic SSE → Responses SSE]
-
-    G --> T
-    S --> T
-
-    M[codex-mode.ps1] --> W[codex-safe.ps1]
-    W --> T
-    W --> P
-    WD[codex-proxy-watchdog.ps1] -->|health/restart| P
-```
-
-## 2. 启动模式
-
-```mermaid
-flowchart TD
-    A[codex-mode.ps1] --> B{route}
-
-    B -->|deepseek| C[检查 47892 /health]
-    C -->|离线| D[尝试启动代理]
-    D --> E{代理可用?}
-    C -->|在线| F[注入 local_multi_proxy]
-    E -->|是| F
-    E -->|否且 auto-failover| G[切换 GPT subscription]
-    E -->|否且未启用回退| H[退出 66]
-    F --> I[加载混合模型目录]
-    I --> J[启动 Codex]
-
-    B -->|gpt-subscription| G
-    G --> K[复用默认 .codex 登录态]
-    K --> L[强制 model_provider=openai]
-    L --> J
-
-    B -->|gpt-api| M[使用 .codex-modes/gpt-api]
-    M --> N[API 登录配置]
-    N --> J
-```
-
-### DeepSeek 模式并不限制只能使用 DeepSeek
-
-`deepseek` 是安全包装器中的路由名称。该模式实际把 Codex 接到
-`local_multi_proxy`，并加载混合模型目录，所以用户可以从 Codex 原生模型菜单选择
-GPT 或 DeepSeek。
-
-## 3. 单次请求路由
-
-```mermaid
-flowchart TD
-    A[POST /v1/responses] --> B[读取 JSON body]
-    B --> C[解析 thread metadata]
-    C --> D[读取 body.model]
-    D --> E{model 以 gpt- 开头?}
-
-    E -->|是| F{有 Authorization<br/>和 chatgpt-account-id?}
-    F -->|否| G[401 authentication_error]
-    F -->|是| H[构造 GPT 上游 headers]
-    H --> I[保留 Responses-Lite 内部头]
-    I --> J[转发 ChatGPT Responses]
-    J --> K{上游明确拒绝 Lite?}
-    K -->|是| K2[删除 Lite 并重试一次]
-    K -->|否| L[流式或普通响应透传]
-    K2 --> L
-
-    E -->|否| M{有 DEEPSEEK_API_KEY?}
-    M -->|否| N[503 authentication_error]
-    M -->|是| O[Responses → Anthropic]
-    O --> P[清理工具调用历史]
-    P --> Q[调用 DeepSeek，临时错误重试]
-    Q --> R{上游是否 SSE?}
-    R -->|是| S[逐事件转换为 Responses SSE]
-    R -->|否| T[整体转换为 Responses JSON]
-    S --> U[返回 Codex]
-    T --> U
-    L --> U
-```
-
-## 4. 模型选择规则
+## 组件
 
 ```mermaid
 flowchart LR
-    A[Codex /model 菜单] --> B[请求 body.model]
-    B --> C[resolveCodexModel]
-    C --> D{值是否为空?}
-    D -->|否| E[使用 body.model]
-    D -->|是| F[使用 CODEX_PROXY_DEFAULT_MODEL]
-    E --> G[选择 GPT 或 DeepSeek 上游]
-    F --> G
-
-    H[旧 thread route 文件] -.仅诊断.-> C
+    C[Codex CLI / VS Code] -->|Responses API| S[src/server.js]
+    A[本地管理后台] -->|localhost admin API| S
+    S --> R{模型路由}
+    R --> G[ChatGPT 订阅账号池]
+    R --> O[OpenAI API]
+    R --> D[DeepSeek 协议适配]
+    R --> X[OpenAI 兼容中转节点]
+    G --> Q[账号调度器]
+    Q --> L[公平队列 / 自适应并发 / 租约]
+    Q --> U[额度 / Token / 双层冷却]
+    S --> ST[原子统计与健康矩阵]
+    W[Windows Watchdog] -->|/live 与恢复| S
 ```
 
-当前策略刻意让 Codex 原生 `body.model` 成为唯一模型事实来源。这样可以避免：
+| 文件 | 职责 |
+|---|---|
+| `src/server.js` | HTTP 服务、路由分发、管理 API、单实例和优雅关闭 |
+| `src/routes/chatgpt-sub.js` | ChatGPT 请求、账号轮换、公平队列和取消联动 |
+| `src/chatgpt-accounts.js` | OAuth Token、额度、预测、租约、自适应并发和冷却 |
+| `src/routes/openai-api.js` | OpenAI Responses / Chat Completions |
+| `src/routes/deepseek.js` | Responses 与 Anthropic Messages 双向转换 |
+| `src/routes/relay.js` | OpenAI 兼容中转节点 |
+| `src/config.js` | 配置加载、原子写入、快照和回滚 |
+| `src/stats.js` | Provider/模型/账号健康统计与近期窗口 |
+| `src/circuit-breaker.js` | Provider 级熔断和半开恢复 |
+| `src/admin.js` | 本机管理 API、隔离登录、诊断和运维操作 |
+| `src/admin_app.js` | 管理后台交互与零基础教程 |
 
-- 旧线程状态覆盖用户刚刚选择的新模型。
-- 多个窗口共享全局状态造成串线。
-- 控制接口与 Codex 原生模型菜单互相竞争。
-
-## 5. GPT 请求头处理
-
-代理只转发必要的 GPT 订阅上下文：
-
-- `authorization`
-- `chatgpt-account-id`
-- `originator`
-- `session-id`
-- `thread-id`
-- `user-agent`
-- `x-client-request-id`
-- `x-codex-beta-features`
-- `x-codex-turn-metadata`
-- `x-codex-window-id`
-
-`x-openai-internal-codex-responses-lite` 默认原样转发。如果 ChatGPT 上游以
-`unsupported_value` 明确指出当前模型不支持 Responses Lite，代理会取消该头重试
-一次，并在当前进程内缓存该模型的结果。其他错误不会触发此降级，因此支持 Lite 的
-模型始终保留原生行为。
-
-## 6. DeepSeek 协议转换
-
-### 请求转换
-
-```mermaid
-flowchart LR
-    R[Responses request] --> I[instructions → system]
-    R --> M[input messages]
-    M --> A[Anthropic content blocks]
-    R --> FT[function tools]
-    FT --> AT[Anthropic tools]
-    R --> TC[tool_choice]
-    TC --> AC[Anthropic tool_choice]
-    A --> X[DeepSeek request]
-    AT --> X
-    AC --> X
-    I --> X
-```
-
-### 工具历史清理
-
-Anthropic 协议要求 assistant 的 `tool_use` 后面紧跟 user 的匹配
-`tool_result`。Codex 可能因上下文裁剪留下孤立调用，或者把 assistant 状态文本放在
-工具调用之后。代理会：
-
-1. 将没有匹配结果的 `tool_use` 降级成可读文本。
-2. 把普通 assistant 文本移到有效 `tool_use` 前面。
-3. 保留匹配的多个 `tool_result` 顺序。
-4. 包装 custom tools，并在响应阶段恢复原始调用类型。
-
-### 流式响应转换
-
-```mermaid
-sequenceDiagram
-    participant C as Codex
-    participant P as Proxy
-    participant D as DeepSeek
-
-    C->>P: POST /v1/responses stream=true
-    P->>D: POST /anthropic/v1/messages stream=true
-    D-->>P: message_start
-    P-->>C: response.created
-    D-->>P: content_block_start
-    P-->>C: response.output_item.added
-    D-->>P: content_block_delta
-    P-->>C: response.output_text.delta / function args delta
-    D-->>P: message_delta + message_stop
-    P-->>C: response.completed
-```
-
-## 7. 可用性与故障处理
-
-### 启动前
-
-`codex-safe.ps1` 在 DeepSeek 模式下检查 `/health`。代理不可用时：
-
-- 默认停止启动并返回明确错误。
-- 使用 `--auto-failover` 时切换到 GPT 订阅。
-
-### 运行中
-
-DeepSeek 模式会创建后台监控任务，每两秒检查一次健康状态。连续失败达到阈值后：
-
-1. 停止当前 Codex 子进程，防止它继续向故障代理发送请求。
-2. 未启用自动回退时提示用户修复并手动恢复。
-3. 已启用自动回退时，以 GPT-5.5 和 ChatGPT provider 恢复最近会话。
-
-### 代理进程
-
-Windows 登录启动项运行 `codex-proxy-watchdog.ps1`。watchdog 连续检测到代理离线后，
-调用启动脚本恢复服务。`start-codex-proxy.vbs` 用隐藏窗口运行 Node 进程。
-
-```mermaid
-stateDiagram-v2
-    [*] --> Healthy
-    Healthy --> Healthy: health ok
-    Healthy --> Suspect: health failed
-    Suspect --> Healthy: next check ok
-    Suspect --> Restarting: consecutive failures
-    Restarting --> Healthy: start succeeds
-    Restarting --> Suspect: start fails
-```
-
-## 8. 安装过程
+## 请求路由
 
 ```mermaid
 flowchart TD
-    A[运行安装器] --> B[解析安装目录和 Codex Home]
-    B --> C{提供 DeepSeek Key?}
-    C -->|是| D[写入用户环境变量]
-    C -->|否| E[保留现有环境]
-    D --> F[复制运行文件]
-    E --> F
-    F --> G[备份冲突文件]
-    G --> H[备份 config.toml]
-    H --> I[注册 local_multi_proxy]
-    I --> J[写入模型目录路径]
-    J --> K[检查 node 与 codex.cmd]
-    K --> L{NoAutostart?}
-    L -->|否| M[安装 Windows 登录启动项]
-    L -->|是| N[跳过自启动]
-    M --> O{StartProxy?}
-    N --> O
-    O -->|是| P[启动代理并等待健康]
-    O -->|否| Q[安装完成]
-    P --> Q
+    I[POST /v1/responses] --> M{body.model}
+    M -->|relay-*| R[Relay]
+    M -->|openai-api-*| O[OpenAI API]
+    M -->|gpt-*| G[ChatGPT 账号池]
+    M -->|其他| D[DeepSeek]
 ```
 
-## 9. 接口
+默认不会在不同 Provider 之间静默切换。ChatGPT 账号池内部可以按策略切换账号；
+跨 Provider 回退必须由用户明确配置或启动参数显式启用。
 
-| 方法 | 路径 | 行为 |
+## ChatGPT 账号生命周期
+
+1. 管理后台通过隔离的 `CODEX_HOME` 启动官方 `codex app-server` OAuth。
+2. 登录结果写入账号池，不覆盖当前 `%USERPROFILE%\.codex\auth.json`。
+3. 新账号默认“仅保存”；用户启用后才参与路由。
+4. Token 刷新采用单飞锁；网络错误可重试，永久凭据错误标记为需要重新登录。
+5. 当前本机账号优先从真实 Codex `auth.json` 同步，避免 Refresh Token 双重轮换。
+6. 额度从普通模型响应头或低频 usage 请求更新；并发额度刷新会自动合并。
+
+## 调度与请求连续性
+
+- 路由策略：`priority`、`round-robin`、`headroom`、`least-used`、`latency`、
+  `reliable`、`weighted`、`random`、`lkgp`。
+- `lkgp` 按 `session-id` / `thread-id` 粘住最后成功账号。
+- 单账号并发上限为 3，并根据成功、429、网络错误和高延迟自适应到 1～3。
+- 超限请求进入 FIFO 公平队列，最多等待约 60 秒。
+- 账号占用使用可续期租约；过期租约每分钟回收。
+- 客户端断开会取消上游请求并释放租约。
+- 每个请求最多尝试 2 个账号；429 不会在同一账号上重复重试。
+
+响应会附带：
+
+- `X-Codex-Proxy-Request-Id`
+- `X-Codex-Proxy-Provider`
+- `X-Codex-Proxy-Account`
+- `X-Codex-Proxy-Model`
+- `X-Codex-Proxy-Latency-Ms`
+- `X-Codex-Proxy-Fallback-Attempts`
+- `X-Codex-Proxy-Queue-Wait-Ms`
+- `X-Codex-Proxy-Queue-Position`
+
+## 额度与冷却
+
+- 默认在剩余 10% 时停止使用账号，安全余量是硬限制。
+- 用量历史最多保留 7 天/200 个样本，并预测到达安全余量的时间。
+- 普通模型限流只冷却“账号 + 模型”；账户/套餐级限流冷却整个账号。
+- 冷却最长 7 天，明显异常或过期状态会自动修复。
+- 429 不计入 Provider 熔断；网络错误、408 和 5xx 由 Provider 熔断器处理。
+
+## 持久化与安全
+
+- `codex-proxy-config.json` 和统计文件使用临时文件、`fsync`、`rename` 原子写入。
+- 管理配置、账号路由、节点和切换操作前自动创建配置快照，最多保留 10 份。
+- 安装目录 ACL 仅允许当前用户、SYSTEM 和 Administrators。
+- 管理写接口要求回环地址，并校验 localhost Host/Origin。
+- 请求日志脱敏 Authorization、API Key、Refresh Token 和 JWT，并按 10 MiB 轮转。
+- 启动器强制启用 TLS 证书校验。
+- 诊断报告不包含 Token、API Key、账号标签或邮箱。
+
+## 存活、就绪与恢复
+
+| 接口 | 含义 |
+|---|---|
+| `/live` | Node 进程能够响应 |
+| `/ready` | 至少有一个已配置上游 |
+| `/health` | 向后兼容的 `/ready` |
+
+全局实例锁位于 `%USERPROFILE%\.codex-proxy-instance.json`，防止工作区和安装目录
+同时监听端口。收到 `SIGTERM` 后服务停止接收新请求，最长等待约 5 分钟完成现有
+连接；Watchdog 使用 `/live` 检测并启动新实例。
+
+## 管理与诊断接口
+
+| 方法 | 路径 | 说明 |
 |---|---|---|
-| `GET` | `/health` | 检查代理与 DeepSeek Key |
-| `HEAD` | `/v1` | 基础连通性 |
-| `GET` | `/v1/models` | 返回 Codex 和 OpenAI 两种目录形状 |
-| `POST` | `/v1/responses` | 主路由入口 |
-| `GET` | `/v1/responses/:id` | 查询兼容入口 |
-| `POST` | `/v1/chat/completions` | Chat Completions 适配 |
-| `PUT/GET/DELETE` | `/control/threads/:id/route` | 旧路由状态诊断 |
+| `GET` | `/admin/api/diagnostics` | 脱敏运行诊断 |
+| `GET` | `/admin/api/config-snapshots` | 配置快照列表 |
+| `POST` | `/admin/api/config-rollback` | 回滚快照 |
+| `POST` | `/admin/api/runtime-repair` | 修复异常冷却/租约 |
+| `POST` | `/admin/api/proxy/restart` | 优雅重启 |
+| `GET/DELETE` | `/admin/api/stats` | 查询/清空统计 |
 
-## 10. 边界与已知限制
-
-1. `/health` 当前以 DeepSeek Key 为整体 ready 条件；GPT 转发可能可用但健康检查仍会
-   返回 503。
-2. `/control` 没有认证，安全性依赖默认监听 `127.0.0.1`。
-3. 自定义端口没有贯穿所有管理脚本，推荐使用默认 `47892`。
-4. GPT 订阅依赖 Codex 提供有效的 Authorization 与 account ID。
-5. DeepSeek 模型目录声明文本输入；图片能力只声明在 GPT 模型中。
-6. `FLOW.md` 是旧版架构文档，不应与本文混用。
-
-## 11. 验证清单
+## 验证
 
 ```powershell
-# 服务
-Invoke-RestMethod http://127.0.0.1:47892/health
-Invoke-RestMethod http://127.0.0.1:47892/v1/models
+npm test
+npm run check
+git diff --check
 
-# 核心协议与路由测试
-$env:DEEPSEEK_API_KEY = "test-only"
-node --test .\test-codex-proxy.js
-Remove-Item Env:DEEPSEEK_API_KEY
-
-# 启动参数隔离测试
-powershell -NoProfile -ExecutionPolicy Bypass -File .\test-codex-routing.ps1
-
-# 语法
-node --check .\codex-proxy.js
+Invoke-RestMethod http://127.0.0.1:47892/live
+Invoke-RestMethod http://127.0.0.1:47892/ready
+Invoke-RestMethod http://127.0.0.1:47892/admin/api/diagnostics
 ```
+
+自动化测试使用本地 mock，不消耗真实模型额度。

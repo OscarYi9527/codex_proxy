@@ -14,6 +14,7 @@ import { createServer } from '../src/server.js'
 import { findDuplicateAccount, findPrivateBrowser, parseDeviceAuthOutput, privateBrowserArgs } from '../src/admin.js'
 import { acquireActiveAccountWithRetry, refreshBelowReserveAccounts } from '../src/routes/chatgpt-sub.js'
 import { getRouteDecisions, recordRouteDecision, resetRouteDecisions } from '../src/route-decisions.js'
+import { decryptConfigSecrets, encryptConfigSecrets, isEncryptedSecret } from '../src/credential-store.js'
 
 describe('模型解析', () => {
   it('解析 body.model', () => {
@@ -91,6 +92,35 @@ describe('账号备份安全恢复', () => {
     assert.strictEqual(merged[0], current[0])
     assert.strictEqual(merged[0].refresh_token, 'new-token')
     assert.strictEqual(merged[1].account_id, 'identity-b')
+  })
+})
+
+describe('本机凭据加密', () => {
+  it('加密并完整恢复配置中的全部敏感字段', () => {
+    const key = Buffer.alloc(32, 7)
+    const plain = {
+      deepseek_api_key: 'deep-secret',
+      openai_api_key: 'openai-secret',
+      relays: [{ id: 'r', api_key: 'relay-secret' }],
+      chatgpt_accounts: [{
+        id: 'a',
+        access_token: 'access-secret',
+        refresh_token: 'refresh-secret',
+        id_token: 'id-secret',
+        label: '工作账号'
+      }]
+    }
+    const encrypted = encryptConfigSecrets(plain, key)
+    assert.ok(isEncryptedSecret(encrypted.deepseek_api_key))
+    assert.ok(isEncryptedSecret(encrypted.relays[0].api_key))
+    assert.ok(isEncryptedSecret(encrypted.chatgpt_accounts[0].refresh_token))
+    assert.strictEqual(encrypted.chatgpt_accounts[0].label, '工作账号')
+    assert.deepStrictEqual(decryptConfigSecrets(encrypted, key), plain)
+  })
+
+  it('错误密钥无法解密，避免静默返回损坏凭据', () => {
+    const encrypted = encryptConfigSecrets({ openai_api_key: 'secret' }, Buffer.alloc(32, 1))
+    assert.throws(() => decryptConfigSecrets(encrypted, Buffer.alloc(32, 2)))
   })
 })
 

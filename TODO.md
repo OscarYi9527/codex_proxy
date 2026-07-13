@@ -27,7 +27,7 @@
 - [x] 对日志中的 Authorization、API Key、Refresh Token 和 JWT 统一脱敏。
 - [x] 配置文件改为同目录临时文件 + rename 原子写入。
 - [x] 在 Windows 上收紧安装目录和凭据文件 ACL。
-- [ ] 提供可选的 Windows DPAPI 本机凭据加密。
+- [x] 使用 Windows DPAPI 保护本机 AES-256-GCM 密钥，并加密配置与账号备份中的凭据。
 - [x] 为管理配置、统计、脱敏和韧性模块补充自动化测试。
 
 ## P2：智能路由

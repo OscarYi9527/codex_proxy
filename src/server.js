@@ -5,7 +5,7 @@ import os from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
-import { PROXY_DIR, proxyConfig } from './config.js'
+import { PROXY_DIR, initializeCredentialProtection, proxyConfig } from './config.js'
 import { requestLog } from './logger.js'
 import { sendJson, readJson, id, setProxyMeta } from './server-utils.js'
 import { getCircuitStates, resetCircuits } from './circuit-breaker.js'
@@ -342,6 +342,8 @@ const isMain = process.argv[1]
   ? path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))
   : false
 if (isMain) {
+  const credentialProtection = initializeCredentialProtection()
+  console.log('[codex-proxy] credential protection:', credentialProtection.enabled ? 'Windows DPAPI + AES-256-GCM' : 'disabled')
   acquireInstanceLock()
   const server = createServer()
   let shuttingDown = false

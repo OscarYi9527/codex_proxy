@@ -1,11 +1,18 @@
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { credentialStoreEnabled, decryptConfigSecrets, encryptConfigSecrets, initializeCredentialStore } from './credential-store.js'
 
 const PROXY_DIR = path.dirname(fileURLToPath(import.meta.url))
 const CONFIG_FILE = path.join(PROXY_DIR, '..', 'codex-proxy-config.json')
 const CONFIG_BACKUP_DIR = path.join(PROXY_DIR, '..', '.config-backups')
 const ACCOUNT_BACKUP_DIR = path.join(PROXY_DIR, '..', '.account-backups')
+let credentialProtection = { enabled: false, reason: 'not initialized' }
+
+// A previously initialized install must decrypt before the first config load.
+if (process.platform === 'win32' && fs.existsSync(path.join(PROXY_DIR, '..', '.credential-key.dpapi.json'))) {
+  credentialProtection = initializeCredentialStore(path.join(PROXY_DIR, '..'))
+}
 const ACCOUNT_STRATEGIES = new Set([
   'priority', 'round-robin', 'headroom', 'least-used', 'latency',
   'reliable', 'weighted', 'random', 'lkgp'
@@ -53,13 +60,22 @@ export function atomicWriteJson(filePath, value) {
   }
 }
 
+function readStoredJson(filePath) {
+  return decryptConfigSecrets(JSON.parse(fs.readFileSync(filePath, 'utf8')))
+}
+
+function writeCredentialJson(filePath, value) {
+  atomicWriteJson(filePath, credentialStoreEnabled() ? encryptConfigSecrets(value) : value)
+}
+
 function loadProxyConfig() {
   let fileCfg = {}
   try {
-    const raw = fs.readFileSync(CONFIG_FILE, 'utf8')
-    const parsed = JSON.parse(raw)
+    const parsed = readStoredJson(CONFIG_FILE)
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) fileCfg = parsed
-  } catch {}
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.error('[codex-proxy] failed to load config:', error.message)
+  }
 
   const base = (process.env.CODEX_OPENAI_API_BASE_URL || process.env.OPENAI_BASE_URL || fileCfg.openai_api_base_url || CONFIG_DEFAULTS.openaiApiBaseUrl).replace(/\/+$/, '')
 
@@ -153,7 +169,7 @@ function createConfigSnapshot(reason = 'change') {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
   const safeReason = String(reason).replace(/[^a-z0-9_-]+/gi, '-').slice(0, 40) || 'change'
   const file = path.join(CONFIG_BACKUP_DIR, `${stamp}-${safeReason}.json`)
-  const current = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'))
+  const current = readStoredJson(CONFIG_FILE)
   atomicWriteJson(file, configForSettingsSnapshot(current))
   try { fs.chmodSync(file, 0o600) } catch {}
   pruneJsonBackups(CONFIG_BACKUP_DIR)
@@ -162,12 +178,12 @@ function createConfigSnapshot(reason = 'change') {
 
 export function createAccountBackup(reason = 'change') {
   if (!fs.existsSync(CONFIG_FILE)) return null
-  const current = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'))
+  const current = readStoredJson(CONFIG_FILE)
   fs.mkdirSync(ACCOUNT_BACKUP_DIR, { recursive: true })
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
   const safeReason = String(reason).replace(/[^a-z0-9_-]+/gi, '-').slice(0, 40) || 'change'
   const file = path.join(ACCOUNT_BACKUP_DIR, `${stamp}-${safeReason}.json`)
-  atomicWriteJson(file, {
+  writeCredentialJson(file, {
     version: 1,
     created_at: new Date().toISOString(),
     chatgpt_accounts: current.chatgpt_accounts || [],
@@ -213,7 +229,7 @@ export function listAccountBackups() {
         const stat = fs.statSync(file)
         let accountCount = null
         try {
-          accountCount = accountBackupData(JSON.parse(fs.readFileSync(file, 'utf8'))).accounts.length
+          accountCount = accountBackupData(readStoredJson(file)).accounts.length
         } catch {}
         return { name, created_at: stat.mtime.toISOString(), size: stat.size, account_count: accountCount }
       })
@@ -225,7 +241,7 @@ export function listAccountBackups() {
 export function restoreAccountBackup(name) {
   const safeName = path.basename(String(name || ''))
   if (!safeName || safeName !== name || !safeName.endsWith('.json')) throw new Error('Invalid account backup name')
-  const parsed = JSON.parse(fs.readFileSync(path.join(ACCOUNT_BACKUP_DIR, safeName), 'utf8'))
+  const parsed = readStoredJson(path.join(ACCOUNT_BACKUP_DIR, safeName))
   const backup = accountBackupData(parsed)
   const accounts = mergeAccountBackup(proxyConfig.chatgptAccounts || [], backup.accounts)
   const restoredCount = accounts.length - (proxyConfig.chatgptAccounts || []).length
@@ -257,7 +273,7 @@ function sanitizeExistingConfigSnapshots() {
     for (const name of fs.readdirSync(CONFIG_BACKUP_DIR).filter(item => item.endsWith('.json'))) {
       try {
         const file = path.join(CONFIG_BACKUP_DIR, name)
-        const parsed = JSON.parse(fs.readFileSync(file, 'utf8'))
+        const parsed = readStoredJson(file)
         if (parsed?._snapshot?.scope === 'settings-only') continue
         atomicWriteJson(file, configForSettingsSnapshot(parsed))
         try { fs.chmodSync(file, 0o600) } catch {}
@@ -276,18 +292,22 @@ export function restoreConfigSnapshot(name) {
   const safeName = path.basename(String(name || ''))
   if (!safeName || safeName !== name || !safeName.endsWith('.json')) throw new Error('Invalid snapshot name')
   const source = path.join(CONFIG_BACKUP_DIR, safeName)
-  const parsed = JSON.parse(fs.readFileSync(source, 'utf8'))
+  const parsed = readStoredJson(source)
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Snapshot is invalid')
-  const current = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'))
+  const current = readStoredJson(CONFIG_FILE)
   createConfigSnapshot('before-rollback')
   createAccountBackup('before-settings-rollback')
-  atomicWriteJson(CONFIG_FILE, mergeSettingsSnapshot(parsed, current))
+  writeCredentialJson(CONFIG_FILE, mergeSettingsSnapshot(parsed, current))
   return reloadProxyConfig()
 }
 
 function saveProxyConfig(fields, { snapshot = false, reason = 'change' } = {}) {
   let existing = {}
-  try { existing = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) } catch {}
+  try {
+    existing = readStoredJson(CONFIG_FILE)
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error
+  }
   if (!existing || typeof existing !== 'object' || Array.isArray(existing)) existing = {}
 
   const map = {
@@ -325,7 +345,7 @@ function saveProxyConfig(fields, { snapshot = false, reason = 'change' } = {}) {
   }
 
   if (snapshot) createConfigSnapshot(reason)
-  atomicWriteJson(CONFIG_FILE, existing)
+  writeCredentialJson(CONFIG_FILE, existing)
   return loadProxyConfig()
 }
 
@@ -336,6 +356,38 @@ function reloadProxyConfig() {
   proxyConfig = loadProxyConfig()
   console.log('[codex-proxy] 配置已热重载')
   return proxyConfig
+}
+
+export function initializeCredentialProtection() {
+  credentialProtection = initializeCredentialStore(path.join(PROXY_DIR, '..'))
+  if (!credentialProtection.enabled) return credentialProtection
+  let migratedFiles = 0
+  const migrate = file => {
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
+    const encrypted = encryptConfigSecrets(decryptConfigSecrets(raw))
+    if (JSON.stringify(raw) === JSON.stringify(encrypted)) return
+    atomicWriteJson(file, encrypted)
+    try { fs.chmodSync(file, 0o600) } catch {}
+    migratedFiles++
+  }
+  if (fs.existsSync(CONFIG_FILE)) migrate(CONFIG_FILE)
+  try {
+    for (const name of fs.readdirSync(ACCOUNT_BACKUP_DIR).filter(item => item.endsWith('.json'))) {
+      migrate(path.join(ACCOUNT_BACKUP_DIR, name))
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error
+  }
+  reloadProxyConfig()
+  return { ...credentialProtection, migratedFiles }
+}
+
+export function getCredentialProtectionStatus() {
+  return {
+    enabled: credentialStoreEnabled(),
+    protection: credentialStoreEnabled() ? 'Windows DPAPI + AES-256-GCM' : null,
+    reason: credentialStoreEnabled() ? null : credentialProtection.reason
+  }
 }
 
 // Relay helpers

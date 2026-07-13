@@ -3,7 +3,7 @@ import os from 'os'
 import path from 'path'
 import { spawn, spawnSync } from 'child_process'
 import { fileURLToPath } from 'url'
-import { proxyConfig, reloadProxyConfig, saveProxyConfig, CONFIG_FILE, addRelay, deleteRelay, setActiveChatgptAccount, reorderChatgptAccounts, renameChatgptAccount, setChatgptAccountRouting, listAccountBackups, listConfigSnapshots, restoreAccountBackup, restoreConfigSnapshot } from './config.js'
+import { proxyConfig, reloadProxyConfig, saveProxyConfig, CONFIG_FILE, addRelay, deleteRelay, getCredentialProtectionStatus, setActiveChatgptAccount, reorderChatgptAccounts, renameChatgptAccount, setChatgptAccountRouting, listAccountBackups, listConfigSnapshots, restoreAccountBackup, restoreConfigSnapshot } from './config.js'
 import { getStats, resetStats } from './stats.js'
 import { sendJson, readJson } from './server-utils.js'
 import { syncRelayModels } from './sync-models.js'
@@ -732,6 +732,7 @@ export function handleDiagnosticsGet(req, res) {
       memory_mb: Math.round(process.memoryUsage().rss / 1024 / 1024),
       tls_verification: process.env.NODE_TLS_REJECT_UNAUTHORIZED !== '0'
     },
+    credential_protection: getCredentialProtectionStatus(),
     queue: getAccountQueueDiagnostics(),
     accounts: getAccountRuntimeDiagnostics(),
     recent_route_decisions: getRouteDecisions(30),

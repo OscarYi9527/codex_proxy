@@ -25,6 +25,7 @@ $FilesToInstall = @(
     'index.js',
     'codex-models.json',
     'src\config.js',
+    'src\credential-store.js',
     'src\logger.js',
     'src\models.js',
     'src\server-utils.js',

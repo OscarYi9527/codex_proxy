@@ -37,6 +37,9 @@ patch-official-codex-app-model-filter.js
 codex-proxy-config.json
 codex-proxy-stats.json
 models-test.json
+.credential-key.dpapi.json
+.config-backups/
+.account-backups/
 
 # dependencies / local-only backups
 node_modules/

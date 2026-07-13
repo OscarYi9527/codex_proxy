@@ -506,6 +506,7 @@ VS Code 兼容层会把 `chatgpt.cliExecutable` 指向 `codex-vscode-launcher.ex
 
 - 默认只监听 `127.0.0.1`。
 - 日志不记录完整 Authorization 或 API Key。
+- Windows 安装会使用 DPAPI 保护本机 AES-256-GCM 密钥，并加密配置文件及账号备份中的 Token/API Key。
 - 不要提交任何真实 API Key、Codex 登录文件或运行日志。
 - 不要把 `/control` 接口暴露到不可信网络。
 - 只使用自己拥有且获准使用的账号；本项目不提供设备指纹伪造、验证码代收或平台

@@ -10,19 +10,23 @@ Windows 上的 Codex CLI / VS Code 多上游路由代理。它在保留原生 Re
 - 同一 `session-id` / `thread-id` 默认粘住最后成功账号，兼顾上下文缓存和稳定性。
 - 账号池支持优先级、轮询、额度、最少使用、延迟、可靠性、权重、随机和最后成功路径 9 种可选策略。
 - 管理后台支持拖拽调整账号优先级，并可设置每账号路由权重和低额度阈值。
+- 账号支持本地改名；新登录/导入账号会立即尝试同步额度，并明确显示同步中、失败或待重试状态。
 - 新登录或手动导入的账号可设为“仅保存”，不会切换本机 Codex，也不会参与代理路由；需要时可单独启用。
 - 合规稳定模式限制单账号并发为 3、忙碌请求进入本地等待队列、单请求最多尝试 2 个账号，并优先使用 30 分钟内的新鲜额度数据。
 - 并发会根据成功、429、网络错误和高延迟在 1～3 之间自适应；请求槽位使用可续期租约，断连或异常退出后可自动回收。
 - Token 刷新和额度刷新均使用单飞合并，区分临时网络错误与必须重新登录的永久凭据错误。
 - 额度历史会生成到达安全余量的趋势预测，并支持模型级、账号级双层冷却。
-- 提供优雅重启、全局单实例锁、配置快照回滚、脱敏诊断报告和异常状态自动修复。
+- 提供优雅重启、全局单实例锁、安全配置回滚、账号独立备份/合并恢复、脱敏诊断报告和异常状态自动修复。
 - 额度优先从真实模型响应头更新；后台仅刷新参与路由的账号，全池约 30 分钟、当前账号最低约 5 分钟，并带随机抖动与失败退避。
 - 408、5xx 和网络错误由轻量 Provider Circuit Breaker 隔离，并支持半开自动恢复。
+- 管理后台展示 Provider 熔断、恢复倒计时和最近账号路由决策，解释账号被选择或跳过的原因。
+- 上游重试遵循 `Retry-After` 并加入抖动；客户端断开会取消 ChatGPT、OpenAI、Relay 和 DeepSeek 请求。
 - 响应附带 `X-Codex-Proxy-Request-Id`、Provider、Account、Model、Latency 和 Fallback 元数据。
 - 管理后台健康矩阵展示每账号剩余额度、成功率、请求数、429、最近状态以及 P50/P95/平均延迟。
 - 日志自动脱敏常见 Token/API Key/JWT，配置使用同目录原子写入。
-- 在 Codex 模型菜单中提供 `gpt-5.5`、`gpt-5.4`、`gpt-5.4-mini`、
-  `GPT-5.5-API`、`GPT-5.4-API`、`GPT-5.4-API Mini` 和 `deepseek-v4-pro`。
+- Windows 使用 DPAPI 保护本机 AES-256-GCM 密钥；配置和账号备份中的 Token/API Key 均以密文保存。
+- 在 Codex 模型菜单中提供 `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、
+  对应 `openai-api-*` API 版本，以及 `deepseek-v4-pro`。
 - GPT 订阅请求使用 Codex 已有的 ChatGPT 登录态转发到 ChatGPT Responses 后端。
 - GPT `*-API` 请求使用 `OPENAI_API_KEY` 转发到 OpenAI API。
 - DeepSeek 请求在 OpenAI Responses 与 Anthropic Messages 协议之间双向转换。
@@ -39,8 +43,8 @@ Windows 上的 Codex CLI / VS Code 多上游路由代理。它在保留原生 Re
 flowchart LR
     C[Codex CLI/TUI] -->|Responses API| P[Local proxy<br/>127.0.0.1:47892]
     P --> M{body.model}
-    M -->|gpt-5.5 / gpt-5.4 / gpt-5.4-mini| G[ChatGPT Codex<br/>Responses backend]
-    M -->|gpt-*-api| O[OpenAI API<br/>Responses endpoint]
+    M -->|gpt-5.6-sol / terra / luna| G[ChatGPT Codex<br/>Responses backend]
+    M -->|openai-api-gpt-*| O[OpenAI API<br/>Responses endpoint]
     M -->|deepseek-v4-pro| T[Responses → Anthropic<br/>protocol adapter]
     T --> D[DeepSeek<br/>Anthropic-compatible API]
     D --> T2[Anthropic SSE → Responses SSE]
@@ -54,7 +58,7 @@ Codex 发往代理的 `body.model` 是实际路由依据。旧的线程路由文
 
 ### GPT 订阅路由
 
-普通 GPT 模型（`gpt-5.5`、`gpt-5.4`、`gpt-5.4-mini`）保持 Responses API 格式。代理转发 Codex 提供的订阅鉴权、账户、线程和
+普通 GPT 模型（`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`）保持 Responses API 格式。代理转发 Codex 提供的订阅鉴权、账户、线程和
 客户端元数据，然后把上游流直接返回给 Codex。
 
 代理首次会向 ChatGPT 上游保留
@@ -68,9 +72,9 @@ Codex 发往代理的 `body.model` 是实际路由依据。旧的线程路由文
 
 | 菜单显示 | 模型 slug | 上游 API model |
 |---|---|---|
-| `GPT-5.5-API` | `openai-api-gpt-5.5` | `gpt-5.5` |
-| `GPT-5.4-API` | `openai-api-gpt-5.4` | `gpt-5.4` |
-| `GPT-5.4-API Mini` | `openai-api-gpt-5.4-mini` | `gpt-5.4-mini` |
+| `GPT-5.6 Sol (API Key)` | `openai-api-gpt-5.6-sol` | `gpt-5.6-sol` |
+| `GPT-5.6 Terra (API Key)` | `openai-api-gpt-5.6-terra` | `gpt-5.6-terra` |
+| `GPT-5.6 Luna (API Key)` | `openai-api-gpt-5.6-luna` | `gpt-5.6-luna` |
 
 使用这些模型前需要设置 `OPENAI_API_KEY`。可选设置
 `CODEX_OPENAI_API_BASE_URL`、`CODEX_OPENAI_API_RESPONSES_URL` 或
@@ -326,8 +330,11 @@ powershell -ExecutionPolicy Bypass -File `
 功能：
 - 可视化编辑 API 地址、密钥、默认模型和中转节点
 - ChatGPT 官方隔离登录、账号仅保存/启用、拖拽优先级和 9 种路由策略
+- 账号改名、首次额度自动同步、独立账号备份以及只补回缺失账号的安全恢复
 - 5 小时/每周额度、趋势预测、1h/24h 成功率、P50/P95 延迟和双层冷却
-- 自适应并发、等待队列、请求租约、配置快照回滚和优雅重启
+- 自适应并发、等待队列、请求租约、设置级安全回滚和优雅重启
+- 最近路由决策、Provider 熔断状态、恢复倒计时和手动重置
+- DPAPI + AES-256-GCM 凭据保护状态
 - 零基础使用教程，以及一键生成不含凭据和邮箱的诊断报告
 
 用量统计 API：
@@ -348,6 +355,13 @@ API 端点：
 | GET | /admin | 管理后台 HTML 页面 |
 | GET | /admin/api/config | 获取当前配置（密钥已掩码） |
 | PUT | /admin/api/config | 保存配置到文件并热重载 |
+| GET | /admin/api/diagnostics | 获取队列、账号、熔断和凭据保护状态 |
+| GET | /admin/api/config-snapshots | 获取设置快照列表 |
+| POST | /admin/api/config-rollback | 仅回滚设置，不回退账号 Token/API Key |
+| GET | /admin/api/account-backups | 获取账号备份列表 |
+| POST | /admin/api/account-backups/restore | 合并恢复缺失账号，不覆盖现有凭据 |
+| GET | /admin/api/resilience | 获取 Provider 熔断状态 |
+| DELETE | /admin/api/resilience | 重置 Provider 熔断状态 |
 
 配置文件支持以下字段（均可通过管理后台修改）：
 | 字段 | 说明 |
@@ -376,7 +390,7 @@ API 端点：
 模型能力位于 `codex-models.json`。Codex provider 配置示例：
 
 ```toml
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 model_provider = "local_multi_proxy"
 model_catalog_json = "C:\\Users\\you\\.codex-local-multi-proxy\\codex-models.json"
 
@@ -400,6 +414,8 @@ requires_openai_auth = true
 | `%USERPROFILE%\.claude\proxy\codex-proxy-requests.log` | 已脱敏请求日志（自动轮转） |
 | `.codex-proxy.pid` | 当前代理 PID |
 | `codex-proxy-watchdog.log` | watchdog 恢复记录 |
+| `.credential-key.dpapi.json` | 由当前 Windows 用户 DPAPI 保护的本机数据密钥 |
+| `.account-backups\` | 已加密的账号池备份，删除/恢复前自动创建 |
 
 常用诊断命令：
 

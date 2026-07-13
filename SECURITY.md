@@ -7,6 +7,8 @@
 - 启动脚本强制开启 TLS 证书校验。
 - 配置和统计采用原子写入；安装目录 ACL 应仅允许当前用户、SYSTEM 和
   Administrators。
+- Windows 使用 DPAPI（CurrentUser）保护随机 AES-256-GCM 数据密钥；配置和账号
+  备份中的 Token/API Key 均以认证密文保存。
 - 日志会脱敏常见 Token、API Key 和 JWT，但仍不应公开上传运行日志。
 
 ## 敏感文件
@@ -15,11 +17,18 @@
 
 - `%USERPROFILE%\.codex\auth.json`
 - `codex-proxy-config.json`
+- `.credential-key.dpapi.json`（只能由创建它的 Windows 用户解封）
+- `.account-backups\` 中的加密账号备份
 - API Key、Access Token、Refresh Token、邮箱验证码
 - 带 Token 的验证码网站或管理链接
 
 仓库 `.gitignore` 已忽略本地配置、统计、日志和运行 PID。提交前仍应执行敏感信息
 扫描并检查 `git diff --cached`。
+
+加密文件不能脱离 `.credential-key.dpapi.json` 和原 Windows 用户单独恢复。迁移
+电脑前应先在原用户环境中使用管理后台确认账号可用；不要把密钥文件或备份上传到
+公共仓库。DPAPI 保护降低静态文件泄露风险，但不能防御已经控制当前 Windows 用户
+会话的恶意程序。
 
 ## 合规使用
 

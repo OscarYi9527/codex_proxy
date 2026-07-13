@@ -29,6 +29,8 @@ flowchart LR
 | `src/routes/deepseek.js` | Responses 与 Anthropic Messages 双向转换 |
 | `src/routes/relay.js` | OpenAI 兼容中转节点 |
 | `src/config.js` | 配置加载、原子写入、快照和回滚 |
+| `src/credential-store.js` | Windows DPAPI 密钥封装与 AES-256-GCM 凭据加密 |
+| `src/route-decisions.js` | 最近路由决策的内存环形记录 |
 | `src/stats.js` | Provider/模型/账号健康统计与近期窗口 |
 | `src/circuit-breaker.js` | Provider 级熔断和半开恢复 |
 | `src/admin.js` | 本机管理 API、隔离登录、诊断和运维操作 |
@@ -56,6 +58,7 @@ flowchart TD
 4. Token 刷新采用单飞锁；网络错误可重试，永久凭据错误标记为需要重新登录。
 5. 当前本机账号优先从真实 Codex `auth.json` 同步，避免 Refresh Token 双重轮换。
 6. 额度从普通模型响应头或低频 usage 请求更新；并发额度刷新会自动合并。
+7. 新账号加入后立即尝试首次额度同步；账号名称只作为本地备注，可随时修改。
 
 ## 调度与请求连续性
 
@@ -66,6 +69,7 @@ flowchart TD
 - 超限请求进入 FIFO 公平队列，最多等待约 60 秒。
 - 账号占用使用可续期租约；过期租约每分钟回收。
 - 客户端断开会取消上游请求并释放租约。
+- OpenAI、Relay 与 DeepSeek 同样继承客户端取消信号，避免断开后继续消耗。
 - 每个请求最多尝试 2 个账号；429 不会在同一账号上重复重试。
 
 响应会附带：
@@ -90,7 +94,9 @@ flowchart TD
 ## 持久化与安全
 
 - `codex-proxy-config.json` 和统计文件使用临时文件、`fsync`、`rename` 原子写入。
-- 管理配置、账号路由、节点和切换操作前自动创建配置快照，最多保留 10 份。
+- Windows 首次启动生成随机 AES-256-GCM 数据密钥，再由当前用户 DPAPI 保护；配置和账号备份中的 Token/API Key 只落盘密文。
+- 设置快照不包含账号、Token 或 API Key；回滚只恢复模型、端点和路由设置。
+- 账号删除和恢复前创建独立加密备份；恢复只补回缺失账号，不覆盖当前有效 Token。
 - 安装目录 ACL 仅允许当前用户、SYSTEM 和 Administrators。
 - 管理写接口要求回环地址，并校验 localhost Host/Origin。
 - 请求日志脱敏 Authorization、API Key、Refresh Token 和 JWT，并按 10 MiB 轮转。
@@ -116,6 +122,10 @@ flowchart TD
 | `GET` | `/admin/api/diagnostics` | 脱敏运行诊断 |
 | `GET` | `/admin/api/config-snapshots` | 配置快照列表 |
 | `POST` | `/admin/api/config-rollback` | 回滚快照 |
+| `GET` | `/admin/api/account-backups` | 加密账号备份列表 |
+| `POST` | `/admin/api/account-backups/restore` | 合并恢复缺失账号 |
+| `GET` | `/admin/api/resilience` | Provider 熔断状态 |
+| `DELETE` | `/admin/api/resilience` | 重置 Provider 熔断状态 |
 | `POST` | `/admin/api/runtime-repair` | 修复异常冷却/租约 |
 | `POST` | `/admin/api/proxy/restart` | 优雅重启 |
 | `GET/DELETE` | `/admin/api/stats` | 查询/清空统计 |

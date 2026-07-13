@@ -3,6 +3,7 @@ let cfg = {}, statsData = { providers: {} }, diagnosticsData = { accounts: [], q
 let pingResults = {}, modal = null, loginPoll = null, accountsPoll = null, draggedAccountId = null
 let accountViewMode = localStorage.getItem('codex-account-view') === 'compact' ? 'compact' : 'cards'
 let usageCalendarMonth = statsDateKey().slice(0,7)
+let animateNextRender = true
 
 const icons = {
   overview:'<path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/>',
@@ -192,7 +193,7 @@ function renderNav(){
 function switchPage(page){
   activePage=pages[page]?page:'overview'; location.hash=activePage
   const [title,sub]=pages[activePage]; document.getElementById('top-title').textContent=title; document.getElementById('top-subtitle').textContent=sub
-  document.getElementById('sidebar').classList.remove('open'); renderNav(); render()
+  document.getElementById('sidebar').classList.remove('open'); animateNextRender=true; renderNav(); render()
   if(accountsPoll){clearInterval(accountsPoll);accountsPoll=null}
   if(activePage==='accounts')accountsPoll=setInterval(()=>{if(!document.hidden)load(false,false)},60000)
 }
@@ -601,7 +602,14 @@ function renderSettings(){
   const circuitBody=`<div class="card-body">${circuits.length?circuits.map(item=>{const remaining=item.state==='open'?Math.max(0,30-Math.floor((Date.now()-Number(item.openedAt||0))/1000)):0;return `<div class="provider-row" style="grid-template-columns:1fr auto"><div><b>${esc(item.name)}</b><div class="cell-sub">${item.lastFailure?.message?esc(item.lastFailure.message):'暂无最近错误'}</div></div><span class="status ${item.state==='closed'?'':item.state==='half-open'?'warn':'off'}"><i></i>${item.state==='closed'?'正常':item.state==='half-open'?'正在探测':`熔断中 · 约 ${remaining} 秒后探测`}</span></div>`}).join(''):'<span class="cell-sub">尚无 Provider 熔断记录</span>'}</div><div class="form-footer">${button('重置熔断状态','refresh','resetCircuits()',openCircuits.length?'btn-danger':'')}</div>`
   return pageHead('系统设置','配置全局路由行为与管理控制台偏好')+`<div class="grid"><div>${card('路由偏好','应用于未指定模型或上游的请求',body)}${card('配置快照与回滚','只恢复设置，不回退账号 Token 和 API Key',rollback)}${card('账号备份与恢复','安全合并，不覆盖当前有效凭据',accountRestore)}${card('外观','保存在当前浏览器',`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>深色显示模式</b><div class="cell-sub">切换控制台配色，不影响网关服务</div></div>${button('切换主题','moon','toggleTheme()')}</div></div>`)}</div><div>${card('系统信息','当前运行环境',info)}${card('Provider 熔断状态',openCircuits.length?`${openCircuits.length} 个通道暂不可用`:'所有已记录通道正常',circuitBody)}${card('运维与安全','普通使用无需操作',operations)}</div></div>`
 }
-function render(){ const fn={overview:renderOverview,providers:renderProviders,relays:renderRelays,accounts:renderAccounts,analytics:renderAnalytics,settings:renderSettings,help:renderHelp}[activePage]; document.getElementById('app').innerHTML=fn() }
+function render(){
+  const fn={overview:renderOverview,providers:renderProviders,relays:renderRelays,accounts:renderAccounts,analytics:renderAnalytics,settings:renderSettings,help:renderHelp}[activePage]
+  const app=document.getElementById('app'), shouldAnimate=animateNextRender
+  app.classList.toggle('is-entering',shouldAnimate)
+  app.innerHTML=fn()
+  animateNextRender=false
+  if(shouldAnimate)setTimeout(()=>app.classList.remove('is-entering'),520)
+}
 
 function collectConfig(){
   const keys=['deepseekApiKey','openaiApiKey','openaiOrgId','openaiProjectId','upstreamUrl','chatgptResponsesUrl','openaiApiBaseUrl','openaiApiResponsesUrl','openaiApiChatCompletionsUrl','openaiApiUpstream','defaultModel','chatgptAccountStrategy','chatgptLowQuotaThreshold']

@@ -4,8 +4,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { resolveCodexModel, isChatGptSubModel, isOpenAIApiModel, isRelayModel, parseRelayModel, buildModelsResponse, getThreadId } from '../src/models.js'
-import { recordUsage, recordAccountOutcome, getStats, resetStats, saveStats } from '../src/stats.js'
-import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurrencyLimit, accountRemainingPercent, accountUsageIsFresh, calculateUsageForecast, consumeAccountResetCredit, cooldownMsFromResponseText, ensureFreshToken, extractResetCredits, extractUsageFromBody, extractUsageFromHeaders, normalizeAccountRoutingStrategy, noteAccountAdaptiveOutcome, noteAccountSuccess, pickActiveAccount, refreshAccountResetCredits, refreshAccountUsage, releaseAccountRequest, renewAccountRequestLease, reserveAccountRequest, resetAccountRequestCounts, resetAccountStickiness } from '../src/chatgpt-accounts.js'
+import { recordUsage, recordAccountOutcome, getStats, resetStats, saveStats, statsDayKey } from '../src/stats.js'
+import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurrencyLimit, accountRemainingPercent, accountUsageIsFresh, calculateUsageForecast, consumeAccountResetCredit, cooldownMsFromResponseText, ensureFreshToken, extractResetCredits, extractUsageFromBody, extractUsageFromHeaders, mergeAccountUsageWindows, normalizeAccountRoutingStrategy, noteAccountAdaptiveOutcome, noteAccountSuccess, pickActiveAccount, refreshAccountResetCredits, refreshAccountUsage, releaseAccountRequest, renewAccountRequestLease, reserveAccountRequest, resetAccountRequestCounts, resetAccountStickiness } from '../src/chatgpt-accounts.js'
 import { proxyConfig, atomicWriteJson, configForSettingsSnapshot, mergeAccountBackup, mergeSettingsSnapshot, orderChatgptAccounts, renameChatgptAccountInList } from '../src/config.js'
 import { assertCircuitAvailable, getCircuitStates, recordCircuitResult, resetCircuits } from '../src/circuit-breaker.js'
 import { fetchWithRetry, proxyMetaHeaders, retryAfterMs } from '../src/server-utils.js'
@@ -215,15 +215,42 @@ describe('buildModelsResponse', () => {
 })
 
 describe('用量统计', () => {
-  it('记录和重置', () => {
+  it('按天记录总量、Provider 和账号用量并可重置', () => {
     resetStats()
-    recordUsage('gpt-5.5', 'chatgpt-sub', 100, 50)
+    recordUsage('gpt-5.5', 'chatgpt-sub', 100, 50, 'account-a')
     recordUsage('relay-x-gpt-5.5', 'relay:x', 200, 100)
+    recordAccountOutcome('account-a', { status: 200, latencyMs: 120 })
+    recordAccountOutcome('account-a', { status: 429, latencyMs: 80, errorType: 'rate_limit' })
     const s = getStats()
+    const today = s.daily[statsDayKey()]
     assert.ok(s.providers['chatgpt-sub'])
     assert.ok(s.providers['relay:x'])
+    assert.strictEqual(today.requests, 2)
+    assert.strictEqual(today.account_attempts, 2)
+    assert.strictEqual(today.input_tokens, 300)
+    assert.strictEqual(today.output_tokens, 150)
+    assert.deepStrictEqual(today.providers['chatgpt-sub'], {
+      requests: 1,
+      input_tokens: 100,
+      output_tokens: 50
+    })
+    assert.deepStrictEqual(today.providers['relay:x'], {
+      requests: 1,
+      input_tokens: 200,
+      output_tokens: 100
+    })
+    assert.deepStrictEqual(today.accounts['account-a'], {
+      requests: 2,
+      successes: 1,
+      failures: 1,
+      rate_limited: 1,
+      completed_requests: 1,
+      input_tokens: 100,
+      output_tokens: 50
+    })
     const after = resetStats()
     assert.strictEqual(Object.keys(after.providers).length, 0)
+    assert.strictEqual(Object.keys(after.daily).length, 0)
   })
 })
 
@@ -297,6 +324,51 @@ describe('ChatGPT 账号额度解析', () => {
     assert.strictEqual(usage.primary.used_percent, 42)
     assert.strictEqual(usage.primary.remaining_percent, 58)
     assert.strictEqual(usage.secondary, null)
+  })
+
+  it('官方仅返回一周窗口时按时长放入周额度而不是 5 小时额度', () => {
+    const usage = extractUsageFromBody({
+      plan_type: 'plus',
+      rate_limit: {
+        primary_window: {
+          used_percent: 25,
+          limit_window_seconds: 604800,
+          reset_after_seconds: 557596
+        },
+        secondary_window: {
+          used_percent: 0,
+          limit_window_seconds: 0,
+          reset_after_seconds: 0
+        }
+      }
+    })
+
+    assert.strictEqual(usage.primary, null)
+    assert.strictEqual(usage.secondary.window_minutes, 10080)
+    assert.strictEqual(usage.secondary.remaining_percent, 75)
+    assert.strictEqual(usage.complete_windows, true)
+  })
+
+  it('完整用量响应会清除已取消窗口，响应头增量更新仍保留其他窗口', () => {
+    const previous = {
+      primary: { window_minutes: 300, remaining_percent: 80 },
+      secondary: { window_minutes: 10080, remaining_percent: 70 }
+    }
+    const weeklyOnly = mergeAccountUsageWindows(previous, {
+      primary: null,
+      secondary: { window_minutes: 10080, remaining_percent: 60 },
+      complete_windows: true
+    })
+    assert.strictEqual(weeklyOnly.primary, null)
+    assert.strictEqual(weeklyOnly.secondary.remaining_percent, 60)
+
+    const partialHeaders = mergeAccountUsageWindows(previous, {
+      primary: { window_minutes: 300, remaining_percent: 75 },
+      secondary: null,
+      complete_windows: false
+    })
+    assert.strictEqual(partialHeaders.primary.remaining_percent, 75)
+    assert.strictEqual(partialHeaders.secondary.remaining_percent, 70)
   })
 })
 

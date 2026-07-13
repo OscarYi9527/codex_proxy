@@ -544,6 +544,9 @@ function normalizeWindow(w) {
     numOrNull(w.limit_window_seconds) === null ? null : Number(w.limit_window_seconds) / 60,
     numOrNull(w.window_seconds) === null ? null : Number(w.window_seconds) / 60
   ))
+  // The usage endpoint may emit a zero-length secondary window as a
+  // placeholder when that window is not currently part of the policy.
+  if (windowMinutes !== null && windowMinutes <= 0) return null
   return {
     used_percent: normalizedUsed,
     remaining_percent: Math.max(0, 100 - normalizedUsed),
@@ -558,16 +561,56 @@ function normalizeWindow(w) {
   }
 }
 
+function classifyUsageWindows(namedPrimary, namedSecondary) {
+  const entries = [
+    { name: 'primary', window: namedPrimary },
+    { name: 'secondary', window: namedSecondary }
+  ].filter(item => item.window)
+  let primary = null
+  let secondary = null
+  const assigned = new Set()
+
+  // `primary_window` means the provider's first active limit, not
+  // necessarily the historical 5-hour window. Classify known durations
+  // before falling back to the provider's field names.
+  for (const item of entries) {
+    const minutes = Number(item.window.window_minutes)
+    if (Number.isFinite(minutes) && minutes > 0 && minutes <= 24 * 60 && !primary) {
+      primary = item.window
+      assigned.add(item)
+    } else if (Number.isFinite(minutes) && minutes >= 6 * 24 * 60 && !secondary) {
+      secondary = item.window
+      assigned.add(item)
+    }
+  }
+  for (const item of entries) {
+    if (assigned.has(item)) continue
+    if (item.name === 'primary' && !primary) primary = item.window
+    else if (item.name === 'secondary' && !secondary) secondary = item.window
+    else if (!primary) primary = item.window
+    else if (!secondary) secondary = item.window
+  }
+  return { primary, secondary }
+}
+
 // The ChatGPT usage endpoint's response shape is undocumented and has been
 // observed to vary (`rate_limits.primary` vs top-level `primary`), so this
 // parses defensively and returns null rather than throwing on an unrecognized shape.
 export function extractUsageFromBody(data) {
   const rl = data?.rate_limits || data?.rate_limit || data
   if (!rl) return null
-  const primary = normalizeWindow(rl.primary || rl.primary_window || data?.primary || data?.primary_window)
-  const secondary = normalizeWindow(rl.secondary || rl.secondary_window || data?.secondary || data?.secondary_window)
+  const windows = classifyUsageWindows(
+    normalizeWindow(rl.primary || rl.primary_window || data?.primary || data?.primary_window),
+    normalizeWindow(rl.secondary || rl.secondary_window || data?.secondary || data?.secondary_window)
+  )
+  const { primary, secondary } = windows
   if (!primary && !secondary) return null
-  return { plan_type: data?.plan_type || rl.plan_type || null, primary, secondary }
+  return {
+    plan_type: data?.plan_type || rl.plan_type || null,
+    primary,
+    secondary,
+    complete_windows: true
+  }
 }
 
 // Same data, as opportunistically exposed via response headers on ordinary
@@ -578,20 +621,24 @@ export function extractUsageFromHeaders(headers) {
   const primaryPct = numOrNull(get('x-codex-primary-used-percent'))
   const secondaryPct = numOrNull(get('x-codex-secondary-used-percent'))
   if (primaryPct === null && secondaryPct === null) return null
-  return {
-    plan_type: get('x-codex-plan-type') || null,
-    primary: normalizeWindow(primaryPct === null ? null : {
+  const windows = classifyUsageWindows(
+    normalizeWindow(primaryPct === null ? null : {
       used_percent: primaryPct,
       window_minutes: numOrNull(get('x-codex-primary-window-minutes')),
       resets_at: null,
       reset_after_seconds: numOrNull(get('x-codex-primary-reset-after-seconds'))
     }),
-    secondary: normalizeWindow(secondaryPct === null ? null : {
+    normalizeWindow(secondaryPct === null ? null : {
       used_percent: secondaryPct,
       window_minutes: numOrNull(get('x-codex-secondary-window-minutes')),
       resets_at: null,
       reset_after_seconds: numOrNull(get('x-codex-secondary-reset-after-seconds'))
     })
+  )
+  return {
+    plan_type: get('x-codex-plan-type') || null,
+    ...windows,
+    complete_windows: false
   }
 }
 
@@ -792,15 +839,20 @@ export async function consumeAccountResetCredit(account, {
   }
 }
 
+export function mergeAccountUsageWindows(previous = {}, usage = {}) {
+  const complete = usage.complete_windows === true
+  return {
+    primary: usage.primary ?? (complete ? null : previous.primary ?? null),
+    secondary: usage.secondary ?? (complete ? null : previous.secondary ?? null)
+  }
+}
+
 export function applyAccountUsage(accountId, usage) {
   if (!usage) return
   const account = (proxyConfig.chatgptAccounts || []).find(a => a.id === accountId)
   if (!account) return
   account.plan_type = usage.plan_type || account.plan_type || null
-  account.usage = {
-    primary: usage.primary || account.usage?.primary || null,
-    secondary: usage.secondary || account.usage?.secondary || null
-  }
+  account.usage = mergeAccountUsageWindows(account.usage, usage)
   const now = Date.now()
   account.usage_updated_at = new Date(now).toISOString()
   account.usage_history ||= []

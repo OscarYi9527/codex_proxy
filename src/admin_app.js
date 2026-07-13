@@ -2,6 +2,7 @@ const API = '/admin/api'
 let cfg = {}, statsData = { providers: {} }, diagnosticsData = { accounts: [], queue: {}, config_snapshots: [], account_backups: [], recent_route_decisions: [], provider_health: {providers:{}}, credential_protection: {}, circuits: [] }, modelCatalog = [], activePage = location.hash.slice(1) || 'overview'
 let pingResults = {}, modal = null, loginPoll = null, accountsPoll = null, draggedAccountId = null
 let accountViewMode = localStorage.getItem('codex-account-view') === 'compact' ? 'compact' : 'cards'
+let usageCalendarMonth = statsDateKey().slice(0,7)
 
 const icons = {
   overview:'<path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/>',
@@ -20,6 +21,155 @@ function esc(v=''){ return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&l
 function fmt(n=0){ n=Number(n)||0; return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':n.toLocaleString('zh-CN') }
 function allProviders(){ return Object.values(statsData.providers||{}) }
 function totals(){ return allProviders().reduce((a,p)=>({requests:a.requests+(p.requests||0),input:a.input+(p.input_tokens||0),output:a.output+(p.output_tokens||0)}),{requests:0,input:0,output:0}) }
+const analyticsColors=['#1769e0','#10a37f','#f59e0b','#8b5cf6','#ec4899','#06b6d4','#ef4444','#64748b']
+function statsDateKey(value=new Date()){
+  const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(value)
+  const part=type=>parts.find(item=>item.type===type)?.value
+  return `${part('year')}-${part('month')}-${part('day')}`
+}
+function dayNumber(key){
+  const [year,month,day]=String(key).split('-').map(Number)
+  return Math.floor(Date.UTC(year,month-1,day)/86400000)
+}
+function dayKeyFromNumber(value){
+  const date=new Date(value*86400000)
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth()+1).padStart(2,'0')}-${String(date.getUTCDate()).padStart(2,'0')}`
+}
+function normalizedDaily(days=30){
+  const end=dayNumber(statsDateKey())
+  return Array.from({length:days},(_,index)=>{
+    const key=dayKeyFromNumber(end-days+1+index)
+    const value=(statsData.daily||{})[key]||{}
+    return {
+      key,
+      requests:Number(value.requests)||0,
+      account_attempts:Number(value.account_attempts)||0,
+      input_tokens:Number(value.input_tokens)||0,
+      output_tokens:Number(value.output_tokens)||0,
+      providers:value.providers||{},
+      accounts:value.accounts||{}
+    }
+  })
+}
+function dailyTokens(day){ return (Number(day?.input_tokens)||0)+(Number(day?.output_tokens)||0) }
+function dayLabel(key,withYear=false){
+  const [year,month,day]=key.split('-').map(Number)
+  return new Date(Date.UTC(year,month-1,day)).toLocaleDateString('zh-CN',{timeZone:'UTC',...(withYear?{year:'numeric'}:{}),month:'short',day:'numeric'})
+}
+function activeStreak(){
+  const daily=statsData.daily||{}, today=dayNumber(statsDateKey())
+  const active=key=>{ const day=daily[key]||{}; return dailyTokens(day)>0||(Number(day.requests)||0)>0 }
+  let offset=active(dayKeyFromNumber(today))?0:-1
+  if(offset<0&&!active(dayKeyFromNumber(today-1)))return 0
+  let streak=0
+  while(streak<370&&active(dayKeyFromNumber(today+offset-streak)))streak++
+  return streak
+}
+function accountSeriesMeta(){
+  const configured=cfg.chatgptAccounts||[], labels=new Map(configured.map(account=>[account.id,account.label||account.account_id||account.id]))
+  const ids=[...configured.map(account=>account.id)]
+  for(const day of Object.values(statsData.daily||{})){
+    for(const id of Object.keys(day.accounts||{}))if(!ids.includes(id))ids.push(id)
+  }
+  return ids.filter(Boolean).map((id,index)=>({id,label:labels.get(id)||id,color:analyticsColors[index%analyticsColors.length]}))
+}
+function shiftUsageCalendarMonth(offset){
+  const [year,month]=usageCalendarMonth.split('-').map(Number)
+  const next=new Date(Date.UTC(year,month-1+offset,1))
+  const key=`${next.getUTCFullYear()}-${String(next.getUTCMonth()+1).padStart(2,'0')}`
+  if(key>statsDateKey().slice(0,7))return
+  usageCalendarMonth=key
+  render()
+}
+function resetUsageCalendarMonth(){
+  usageCalendarMonth=statsDateKey().slice(0,7)
+  render()
+}
+function usageHeatmap(){
+  const [year,month]=usageCalendarMonth.split('-').map(Number)
+  const dayCount=new Date(Date.UTC(year,month,0)).getUTCDate()
+  const days=Array.from({length:dayCount},(_,index)=>{
+    const key=`${usageCalendarMonth}-${String(index+1).padStart(2,'0')}`, value=(statsData.daily||{})[key]||{}
+    return {
+      key,
+      requests:Number(value.requests)||0,
+      account_attempts:Number(value.account_attempts)||0,
+      input_tokens:Number(value.input_tokens)||0,
+      output_tokens:Number(value.output_tokens)||0
+    }
+  })
+  const firstWeekday=(new Date(Date.UTC(year,month-1,1)).getUTCDay()+6)%7
+  const cells=[...Array(firstWeekday).fill(null),...days]
+  while(cells.length%7)cells.push(null)
+  const activityValues=days.map(day=>dailyTokens(day)||day.requests)
+  const max=Math.max(0,...activityValues)
+  const level=day=>{
+    const value=dailyTokens(day)||day.requests
+    return value&&max?Math.max(1,Math.min(4,Math.ceil(Math.log1p(value)/Math.log1p(max)*4))):0
+  }
+  const activeDays=days.filter(day=>(dailyTokens(day)||day.requests)>0).length
+  const requests=days.reduce((sum,day)=>sum+day.requests,0)
+  const attempts=days.reduce((sum,day)=>sum+day.account_attempts,0)
+  const tokens=days.reduce((sum,day)=>sum+dailyTokens(day),0)
+  const cellHtml=cells.map(day=>day
+    ? `<div class="usage-month-day level-${level(day)} ${day.key===statsDateKey()?'is-today':''}" title="${esc(`${dayLabel(day.key,true)} · ${fmt(day.requests)} 次请求 · 输入 ${fmt(day.input_tokens)} / 输出 ${fmt(day.output_tokens)} Token`)}"><span>${Number(day.key.slice(-2))}</span><b>${dailyTokens(day)?fmt(dailyTokens(day)):day.requests?`${fmt(day.requests)} 次`:''}</b></div>`
+    : '<div class="usage-month-day is-blank"></div>').join('')
+  const currentMonth=statsDateKey().slice(0,7), isCurrent=usageCalendarMonth===currentMonth
+  return `<div class="usage-calendar">
+    <div class="usage-calendar-top">
+      <div class="usage-calendar-toolbar"><div><strong>${year} 年 ${month} 月</strong><span>${isCurrent?'当前月份':'历史月份'}</span></div><div class="usage-calendar-nav"><button onclick="shiftUsageCalendarMonth(-1)" title="上一个月">‹</button>${isCurrent?'':`<button class="calendar-today" onclick="resetUsageCalendarMonth()">本月</button>`}<button onclick="shiftUsageCalendarMonth(1)" title="下一个月" ${isCurrent?'disabled':''}>›</button></div></div>
+      <div class="usage-calendar-summary"><div><span>本月 Token</span><strong>${fmt(tokens)}</strong></div><div><span>活跃天数</span><strong>${activeDays}</strong></div><div><span>完成请求</span><strong>${fmt(requests)}</strong></div><div><span>账号尝试</span><strong>${fmt(attempts)}</strong></div></div>
+    </div>
+    <div class="usage-month-calendar"><div class="usage-month-weekdays">${['周一','周二','周三','周四','周五','周六','周日'].map(label=>`<span>${label}</span>`).join('')}</div><div class="usage-month-grid">${cellHtml}</div></div>
+    <div class="usage-calendar-foot"><span>方格颜色按当月 Token 用量计算，无 Token 数据时按请求数计算</span><div class="usage-heatmap-legend"><span>少</span>${[0,1,2,3,4].map(value=>`<i class="usage-heatmap-cell level-${value}"></i>`).join('')}<span>多</span></div></div>
+  </div>`
+}
+function trendChart(days,lines,{id='trend',unit='Token'}={}){
+  const width=760,height=288,left=58,right=22,top=24,bottom=43,plotWidth=width-left-right,plotHeight=height-top-bottom
+  const values=days.flatMap(day=>lines.map(line=>Math.max(0,Number(line.value(day))||0)))
+  const max=Math.max(1,...values)
+  const x=index=>left+(days.length===1?plotWidth/2:index/(days.length-1)*plotWidth)
+  const y=value=>top+plotHeight-(value/max*plotHeight)
+  const grids=Array.from({length:5},(_,index)=>{
+    const value=max*(4-index)/4,py=top+plotHeight*index/4
+    return `<line x1="${left}" y1="${py}" x2="${width-right}" y2="${py}" class="trend-grid-line"/><text x="${left-10}" y="${py+4}" text-anchor="end" class="trend-axis-text">${fmt(value)}</text>`
+  }).join('')
+  const labelIndexes=[0,Math.floor((days.length-1)*.25),Math.floor((days.length-1)*.5),Math.floor((days.length-1)*.75),days.length-1].filter((value,index,array)=>array.indexOf(value)===index)
+  const xLabels=labelIndexes.map(index=>`<text x="${x(index)}" y="${height-13}" text-anchor="${index===0?'start':index===days.length-1?'end':'middle'}" class="trend-axis-text">${dayLabel(days[index].key)}</text>`).join('')
+  const paths=lines.map((line,lineIndex)=>{
+    const points=days.map((day,index)=>`${x(index)},${y(line.value(day))}`)
+    const area=line.fill?`<path d="M ${x(0)} ${top+plotHeight} L ${points.join(' L ')} L ${x(days.length-1)} ${top+plotHeight} Z" fill="url(#${id}-fill)" class="trend-area"/>`:''
+    const dots=days.map((day,index)=>`<circle cx="${x(index)}" cy="${y(line.value(day))}" r="2.2" fill="${line.color}" class="trend-dot"><title>${esc(`${dayLabel(day.key,true)} · ${line.label} ${fmt(line.value(day))} ${unit}`)}</title></circle>`).join('')
+    return `${lineIndex===0&&line.fill?`<defs><linearGradient id="${id}-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${line.color}" stop-opacity=".22"/><stop offset="1" stop-color="${line.color}" stop-opacity="0"/></linearGradient></defs>`:''}${area}<polyline points="${points.join(' ')}" fill="none" stroke="${line.color}" stroke-width="${line.width||2.5}" stroke-linecap="round" stroke-linejoin="round" class="trend-line"/>${dots}`
+  }).join('')
+  const legend=lines.map(line=>`<span><i style="background:${line.color}"></i>${esc(line.label)}</span>`).join('')
+  const hasData=values.some(value=>value>0)
+  return `<div class="trend-chart ${hasData?'':'is-empty'}"><div class="trend-legend">${legend}<small>最近 ${days.length} 天 · ${unit}</small></div><div class="trend-svg-scroll"><svg class="trend-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(unit)} 使用趋势">${grids}${xLabels}${paths}</svg></div>${hasData?'':`<div class="trend-empty-note">每日数据将从本版本启用后开始积累</div>`}</div>`
+}
+function dailyAccountTable(days,accounts){
+  const accountMaxTokens=new Map(accounts.map(account=>[
+    account.id,
+    Math.max(1,...days.map(day=>{
+      const value=day.accounts[account.id]||{}
+      return (Number(value.input_tokens)||0)+(Number(value.output_tokens)||0)
+    }))
+  ]))
+  const weekday=key=>{
+    const [year,month,day]=key.split('-').map(Number)
+    return new Date(Date.UTC(year,month-1,day)).toLocaleDateString('zh-CN',{timeZone:'UTC',weekday:'short'})
+  }
+  const rows=[...days].reverse().map(day=>`<tr class="${day.requests||day.account_attempts||dailyTokens(day)?'has-usage':'is-idle'}">
+    <td><div class="daily-date"><b>${dayLabel(day.key)}</b><small>${weekday(day.key)}${day.key===statsDateKey()?' · 今天':''}</small></div></td>
+    <td><div class="daily-total-cell"><div><strong>${fmt(dailyTokens(day))}</strong><span>Token</span></div><small><b>${fmt(day.requests)}</b> 完成请求 · <b>${fmt(day.account_attempts)}</b> 路由尝试</small><em>输入 ${fmt(day.input_tokens)} · 输出 ${fmt(day.output_tokens)}</em></div></td>
+    ${accounts.map(account=>{
+      const value=day.accounts[account.id]||{}, tokens=(Number(value.input_tokens)||0)+(Number(value.output_tokens)||0), requests=Number(value.requests)||0
+      if(!requests&&!tokens)return '<td><div class="daily-account-empty">—<small>无调用</small></div></td>'
+      const percent=Math.max(5,Math.min(100,tokens/accountMaxTokens.get(account.id)*100))
+      return `<td><div class="daily-account-usage"><div><strong>${fmt(requests)} 次</strong><span>${fmt(tokens)} Token</span></div><i><b style="width:${percent}%;background:${account.color}"></b></i><small><em class="success">成功 ${fmt(value.successes)}</em><em class="${Number(value.failures)?'failure':''}">失败 ${fmt(value.failures)}</em></small></div></td>`
+    }).join('')}
+  </tr>`).join('')
+  return `<div class="table-wrap daily-table-wrap"><table class="table daily-usage-table"><thead><tr><th>日期</th><th>当日总览</th>${accounts.map(account=>`<th><div class="daily-account-head"><span class="account-color" style="background:${account.color}"></span><div><b>${esc(account.label)}</b><small>请求与 Token</small></div></div></th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`
+}
 
 const pages = {
   overview:['控制台概览','查看网关运行状态与资源使用情况'],
@@ -99,13 +249,13 @@ function providerRows(){
   }).join('')
 }
 function renderOverview(){
-  const t=totals(), totalTokens=t.input+t.output, models=allProviders().reduce((n,p)=>n+Object.keys(p.models||{}).length,0)
-  const configuredChannels=((cfg.chatgptAccounts||[]).length>0?1:0)+(cfg.openaiApiKey?1:0)+(cfg.deepseekApiKey?1:0)+(cfg.relays||[]).length
+  const t=totals()
+  const today=normalizedDaily(1)[0]
   const recent=allProviders().flatMap(p=>Object.entries(p.models||{})).sort((a,b)=>(b[1].requests||0)-(a[1].requests||0)).slice(0,4)
   const activity=recent.length?recent.map(([name,v])=>`<div class="activity"><span class="activity-icon">${svg('arrow')}</span><div><p><b>${esc(name)}</b> 完成 ${fmt(v.requests)} 次路由请求</p><small>输入 ${fmt(v.input_tokens)} · 输出 ${fmt(v.output_tokens)} Tokens</small></div></div>`).join(''):empty('pulse','暂无调用记录','请求将在这里实时汇总')
   return pageHead('控制台概览','统一查看模型网关、账号池和节点状态',button('检测全部通道','pulse','pingAll()','btn-primary'))+
-    `<div class="metrics">${metric('累计请求',fmt(t.requests),'pulse','<b>实时统计</b> · 全部模型通道')}${metric('Token 用量',fmt(totalTokens),'analytics',`输入 ${fmt(t.input)} · 输出 ${fmt(t.output)}`)}${metric('已配置通道',String(configuredChannels),'server','实际可用性以连通性检测结果为准')}${metric('账号池',String((cfg.chatgptAccounts||[]).length),'users','支持配额自动轮换')}</div>`+
-    `<div class="grid"><div>${card('服务状态','上游通道与实时连通性',`<div class="card-body">${providerRows()}</div>`,button('管理服务','',"switchPage('providers')",'btn-sm'))}</div><div>${card('最近调用','按模型请求量排序',`<div class="card-body">${activity}</div>`)}${card('运行信息','当前网关环境',`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">默认模型</span><b>${esc(cfg.defaultModel||'-')}</b></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">统计更新时间</span><b>${statsData.updated?new Date(statsData.updated).toLocaleTimeString('zh-CN'):'-'}</b></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">部署模式</span><span class="badge">Local</span></div></div>`)}</div></div>`
+    `<div class="metrics">${metric('今日请求',fmt(today.requests),'pulse',`累计完成 ${fmt(t.requests)} 次`)}${metric('今日 Token',fmt(dailyTokens(today)),'analytics',`输入 ${fmt(today.input_tokens)} · 输出 ${fmt(today.output_tokens)}`)}${metric('连续活跃',`${activeStreak()} 天`,'server','以每天产生请求或 Token 记录计算')}${metric('账号池',String((cfg.chatgptAccounts||[]).length),'users',`今日 ${fmt(today.account_attempts)} 次账号路由尝试`)}</div>`+
+    `<div class="grid overview-grid">${card('AI 使用日历','按月查看 · 默认显示当前月份 · 数据仅保存在本机',`<div class="card-body usage-calendar-body">${usageHeatmap()}</div>`)}${card('最近调用','按模型请求量排序',`<div class="card-body">${activity}</div>`)}${card('服务状态','上游通道与实时连通性',`<div class="card-body">${providerRows()}</div>`,button('管理服务','',"switchPage('providers')",'btn-sm'))}${card('运行信息','当前网关环境',`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">默认模型</span><b>${esc(cfg.defaultModel||'-')}</b></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">统计更新时间</span><b>${statsData.updated?new Date(statsData.updated).toLocaleTimeString('zh-CN'):'-'}</b></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">部署模式</span><span class="badge">Local</span></div></div>`)}</div>`
 }
 function field(name,label,type='text',hint='',full=false){
   const value=cfg[name]||'', password=type==='password'
@@ -134,6 +284,7 @@ function usageWindowHtml(win,account){
   if(!win||win.used_percent==null){
     if(account?.usage_sync_status==='refreshing'||account?.usage_sync_status==='pending')return '<span class="status warn"><i></i>正在获取额度…</span>'
     if(account?.usage_sync_status==='error')return `<span class="cell-sub" title="${esc(account.usage_sync_error||'请稍后重试')}">首次同步失败 · 可点刷新重试</span>`
+    if(account?.usage_sync_status==='synced'&&(account?.usage?.primary||account?.usage?.secondary))return '<span class="cell-sub">官方当前未提供此额度窗口</span>'
     return '<span class="cell-sub">等待首次额度同步</span>'
   }
   const used=Math.max(0,Math.min(100,Number(win.used_percent)||0))
@@ -264,7 +415,7 @@ function renderAccounts(){
         <section class="account-card-section quota-section">
           <div class="account-section-head"><div><span>额度状态</span><small>${usageStale?'数据可能已过期':'最近数据有效'}</small></div><button class="account-link" onclick="refreshAccountUsageOne('${esc(a.id)}')">${svg('refresh')}刷新</button></div>
           <div class="account-quota-grid">
-            <div class="account-quota-tile"><div class="account-tile-label"><span>5 小时</span><small>短周期</small></div>${usageWindowHtml(a.usage&&a.usage.primary,a)}${usageForecastHtml(a.usage_forecast&&a.usage_forecast.primary)}</div>
+            <div class="account-quota-tile"><div class="account-tile-label"><span>5 小时</span><small>${!a.usage?.primary&&a.usage_sync_status==='synced'?'当前暂停':'短周期'}</small></div>${usageWindowHtml(a.usage&&a.usage.primary,a)}${usageForecastHtml(a.usage_forecast&&a.usage_forecast.primary)}</div>
             <div class="account-quota-tile"><div class="account-tile-label"><span>1 周</span><small>长周期</small></div>${usageWindowHtml(a.usage&&a.usage.secondary,a)}${usageForecastHtml(a.usage_forecast&&a.usage_forecast.secondary)}</div>
           </div>
         </section>
@@ -328,7 +479,10 @@ function renderAccounts(){
       return '重置时间待同步'
     }
     const quotaBar=(name,window)=>{
-      if(!window||window.used_percent==null)return `<div class="compact-quota is-empty"><span><b>${name}</b><em>待同步</em></span><i></i><small>${quotaResetText(window)}</small></div>`
+      if(!window||window.used_percent==null){
+        const unavailable=a.usage_sync_status==='synced'&&(a.usage?.primary||a.usage?.secondary)
+        return `<div class="compact-quota is-empty"><span><b>${name}</b><em>${unavailable?'未提供':'待同步'}</em></span><i></i><small>${unavailable?'官方当前未提供此窗口':quotaResetText(window)}</small></div>`
+      }
       const value=Math.max(0,Math.min(100,window.remaining_percent==null?100-Number(window.used_percent):Number(window.remaining_percent)))
       const tone=value<=10?'var(--red)':value<=30?'var(--amber)':'var(--green)'
       return `<div class="compact-quota" style="--quota-color:${tone}"><span><b>${name}</b><em>${value.toFixed(0)}%</em></span><i><b style="width:${value}%"></b></i><small>${quotaResetText(window)}</small></div>`
@@ -373,10 +527,28 @@ function renderAccounts(){
 }
 function renderAnalytics(){
   const t=totals(), items=allProviders().flatMap(p=>Object.entries(p.models||{}).map(([name,v])=>({name,...v}))).sort((a,b)=>b.requests-a.requests)
+  const days=normalizedDaily(30), today=days[days.length-1], accounts=accountSeriesMeta()
+  const firstRecordedDay=days.findIndex(day=>day.requests||day.account_attempts||dailyTokens(day))
+  const detailDays=firstRecordedDay>=0?days.slice(firstRecordedDay):days.slice(-1)
+  const periodTokens=days.reduce((sum,day)=>sum+dailyTokens(day),0)
+  const activeDays=days.filter(day=>dailyTokens(day)>0||day.requests>0).length
+  const peak=days.reduce((best,day)=>dailyTokens(day)>dailyTokens(best)?day:best,days[0])
+  const tokenTrend=trendChart(days,[
+    {label:'总 Token',color:'#1769e0',fill:true,width:3,value:dailyTokens},
+    {label:'输入',color:'#10a37f',value:day=>day.input_tokens},
+    {label:'输出',color:'#f59e0b',value:day=>day.output_tokens}
+  ],{id:'token-trend',unit:'Token'})
+  const accountTrend=accounts.length?trendChart(days,accounts.map(account=>({
+    label:account.label,color:account.color,value:day=>Number(day.accounts[account.id]?.requests)||0
+  })),{id:'account-trend',unit:'次请求'}):empty('users','暂无账号数据','账号池产生请求后会按账号生成趋势')
   const max=Math.max(1,...items.map(i=>i.requests))
   const chartBody=items.length?`<div class="card-body"><div class="chart">${items.slice(0,10).map(i=>`<div class="chart-col"><div class="chart-bar" data-value="${fmt(i.requests)} 次" style="height:${Math.max(3,i.requests/max*90)}%"></div><label title="${esc(i.name)}">${esc(i.name)}</label></div>`).join('')}</div></div>`:empty('analytics','暂无统计数据','完成首次模型调用后将自动生成图表')
   const tableBody=items.length?`<div class="table-wrap"><table class="table"><thead><tr><th>模型</th><th>请求数</th><th>输入 Token</th><th>输出 Token</th><th>总量</th></tr></thead><tbody>${items.map(i=>`<tr><td class="cell-main">${esc(i.name)}</td><td>${fmt(i.requests)}</td><td>${fmt(i.input_tokens)}</td><td>${fmt(i.output_tokens)}</td><td><b>${fmt((i.input_tokens||0)+(i.output_tokens||0))}</b></td></tr>`).join('')}</tbody></table></div>`:''
-  return pageHead('用量分析','统计数据保存在本地，不会上传到第三方',button('清空统计','trash','resetStats()','btn-danger'))+`<div class="metrics">${metric('总请求数',fmt(t.requests),'pulse','累计路由请求')}${metric('输入 Token',fmt(t.input),'download','模型输入消耗')}${metric('输出 Token',fmt(t.output),'analytics','模型输出消耗')}${metric('活跃模型',items.length,'server','产生过调用的模型')}</div>`+card('模型请求分布','按累计请求数排序',chartBody)+card('用量明细',`${items.length} 个活跃模型`,tableBody)
+  return pageHead('用量分析','按天、账号和模型分析本地 AI 使用情况',button('清空统计','trash','resetStats()','btn-danger'))+
+    `<div class="metrics">${metric('今日请求',fmt(today.requests),'pulse',`累计 ${fmt(t.requests)} 次完成请求`)}${metric('今日 Token',fmt(dailyTokens(today)),'download',`输入 ${fmt(today.input_tokens)} · 输出 ${fmt(today.output_tokens)}`)}${metric('近 30 日 Token',fmt(periodTokens),'analytics',activeDays?`日均 ${fmt(periodTokens/activeDays)} · ${activeDays} 个活跃日`:'等待积累每日数据')}${metric('单日峰值',fmt(dailyTokens(peak)),'server',`${dayLabel(peak.key,true)} · 当前共 ${items.length} 个活跃模型`)}</div>`+
+    `<div class="analytics-trend-grid">${card('每日 Token 变化趋势','最近 30 天 · 自动补齐无调用日期',`<div class="card-body trend-card-body">${tokenTrend}</div>`)}${card('账号每日使用趋势','路由尝试次数 · 重试单独计数',`<div class="card-body trend-card-body">${accountTrend}</div>`)}</div>`+
+    card('每日账号明细',`${dayLabel(detailDays[0].key,true)} 至今 · 汇总与账号用量对照`,dailyAccountTable(detailDays,accounts))+
+    `<div class="analytics-model-grid">${card('模型请求分布','按累计请求数排序',chartBody)}${card('累计用量明细',`${items.length} 个活跃模型`,tableBody||empty('analytics','暂无累计数据','完成首次模型调用后将显示模型明细'))}</div>`
 }
 function helpStep(number,title,desc,action='',done=false){
   return `<div class="help-step"><span class="help-number ${done?'done':''}">${done?svg('check'):number}</span><div><strong>${title}</strong><p>${desc}</p>${action?`<div class="help-action">${action}</div>`:''}</div></div>`

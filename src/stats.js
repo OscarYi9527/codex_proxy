@@ -4,7 +4,28 @@ import path from 'path'
 import { PROXY_DIR, atomicWriteJson } from './config.js'
 
 const STATS_FILE = path.join(PROXY_DIR, '..', 'codex-proxy-stats.json')
-let stats = { updated: new Date().toISOString(), providers: {}, accounts: {} }
+const DAILY_RETENTION_DAYS = 370
+let stats = { updated: new Date().toISOString(), providers: {}, accounts: {}, daily: {} }
+
+export function statsDayKey(value = Date.now()) {
+  const date = value instanceof Date ? value : new Date(value)
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date)
+  const part = type => parts.find(item => item.type === type)?.value
+  return `${part('year')}-${part('month')}-${part('day')}`
+}
+
+function pruneDaily(now = Date.now()) {
+  stats.daily ||= {}
+  const cutoff = statsDayKey(now - DAILY_RETENTION_DAYS * 24 * 60 * 60 * 1000)
+  for (const key of Object.keys(stats.daily)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || key < cutoff) delete stats.daily[key]
+  }
+}
 
 function loadStats() {
   try {
@@ -15,15 +36,18 @@ function loadStats() {
       stats.updated = stats.updated || new Date().toISOString()
       stats.providers ||= {}
       stats.accounts ||= {}
+      stats.daily ||= {}
+      pruneDaily()
       return
     }
   } catch {}
-  stats = { updated: new Date().toISOString(), providers: {}, accounts: {} }
+  stats = { updated: new Date().toISOString(), providers: {}, accounts: {}, daily: {} }
 }
 loadStats()
 
 export function saveStats() {
   stats.updated = new Date().toISOString()
+  pruneDaily()
   try {
     atomicWriteJson(STATS_FILE, stats)
     return true
@@ -44,7 +68,43 @@ function ensureModel(p, m) {
   return pr.models[m]
 }
 
-export function recordUsage(model, provider, inputTokens, outputTokens) {
+function ensureDaily(day = statsDayKey()) {
+  stats.daily ||= {}
+  if (!stats.daily[day]) {
+    stats.daily[day] = {
+      requests: 0,
+      account_attempts: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      providers: {},
+      accounts: {}
+    }
+  }
+  const daily = stats.daily[day]
+  daily.providers ||= {}
+  daily.accounts ||= {}
+  return daily
+}
+
+function ensureDailyProvider(day, provider) {
+  const daily = ensureDaily(day)
+  return daily.providers[provider] ||= { requests: 0, input_tokens: 0, output_tokens: 0 }
+}
+
+function ensureDailyAccount(day, accountId) {
+  const daily = ensureDaily(day)
+  return daily.accounts[accountId] ||= {
+    requests: 0,
+    successes: 0,
+    failures: 0,
+    rate_limited: 0,
+    completed_requests: 0,
+    input_tokens: 0,
+    output_tokens: 0
+  }
+}
+
+export function recordUsage(model, provider, inputTokens, outputTokens, accountId = null) {
   if (!model || !provider) return
   const i = Math.max(0, Number(inputTokens) || 0)
   const o = Math.max(0, Number(outputTokens) || 0)
@@ -56,6 +116,22 @@ export function recordUsage(model, provider, inputTokens, outputTokens) {
   md.requests++
   md.input_tokens += i
   md.output_tokens += o
+
+  const day = statsDayKey()
+  const daily = ensureDaily(day)
+  const dailyProvider = ensureDailyProvider(day, provider)
+  daily.requests++
+  daily.input_tokens += i
+  daily.output_tokens += o
+  dailyProvider.requests++
+  dailyProvider.input_tokens += i
+  dailyProvider.output_tokens += o
+  if (accountId) {
+    const dailyAccount = ensureDailyAccount(day, accountId)
+    dailyAccount.completed_requests++
+    dailyAccount.input_tokens += i
+    dailyAccount.output_tokens += o
+  }
 }
 
 export function recordAccountOutcome(accountId, {
@@ -119,6 +195,15 @@ export function recordAccountOutcome(accountId, {
   account.recent_events = account.recent_events
     .filter(event => new Date(event.at).getTime() >= cutoff)
     .slice(-2000)
+
+  const day = statsDayKey(account.last_request_at)
+  const daily = ensureDaily(day)
+  const dailyAccount = ensureDailyAccount(day, accountId)
+  daily.account_attempts++
+  dailyAccount.requests++
+  if (code >= 200 && code < 400) dailyAccount.successes++
+  else dailyAccount.failures++
+  if (code === 429) dailyAccount.rate_limited++
 }
 
 function recentWindow(events, durationMs, now) {
@@ -156,7 +241,7 @@ export function getStats() {
 }
 
 export function resetStats() {
-  stats = { updated: new Date().toISOString(), providers: {}, accounts: {} }
+  stats = { updated: new Date().toISOString(), providers: {}, accounts: {}, daily: {} }
   saveStats()
   return stats
 }

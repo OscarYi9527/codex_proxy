@@ -450,7 +450,10 @@ export async function handleChatGptSub(req, res, body, resolved) {
 
   try {
     return await pipeResponsesUpstream(upstream, res, {
-      onBody: (u) => { recordUsage(resolved.model, 'chatgpt-sub', u.input_tokens, u.output_tokens); saveStats() }
+      onBody: (u) => {
+        recordUsage(resolved.model, 'chatgpt-sub', u.input_tokens, u.output_tokens, res.proxyMeta?.accountId)
+        saveStats()
+      }
     })
   } finally {
     req.cleanupProxyUpstreamSignal?.()
@@ -514,7 +517,10 @@ export async function handleChatGptSubChatCompletions(req, res, body, resolved) 
 
   try {
     return await pipeResponsesUpstream(upstream, res, {
-      onBody: (u) => { recordUsage(resolved.model, 'chatgpt-sub', u.input_tokens, u.output_tokens); saveStats() }
+      onBody: (u) => {
+        recordUsage(resolved.model, 'chatgpt-sub', u.input_tokens, u.output_tokens, res.proxyMeta?.accountId)
+        saveStats()
+      }
     })
   } finally {
     req.cleanupProxyUpstreamSignal?.()

@@ -4,7 +4,7 @@ Windows 上的 Codex CLI / VS Code 多上游路由代理。它在保留原生 Re
 工具调用和流式输出的同时，统一接入 ChatGPT 订阅账号池、OpenAI API、DeepSeek
 和 OpenAI 兼容中转节点，并提供本地管理后台、稳定性保护与可观测性。
 
-当前版本：**2.1.0**
+当前版本：**2.2.0**
 
 ## 主要能力
 
@@ -30,6 +30,8 @@ Windows 上的 Codex CLI / VS Code 多上游路由代理。它在保留原生 Re
 - 上游重试遵循 `Retry-After` 并加入抖动；客户端断开会取消 ChatGPT、OpenAI、Relay 和 DeepSeek 请求。
 - 响应附带 `X-Codex-Proxy-Request-Id`、Provider、Account、Model、Latency 和 Fallback 元数据。
 - 管理后台健康矩阵展示每账号剩余额度、成功率、请求数、429、最近状态以及 P50/P95/平均延迟。
+- 控制台提供按月切换的 AI 使用日历，默认展示当前月份，并汇总今日请求、今日 Token 和连续活跃天数。
+- 用量分析提供最近 30 天 Token 折线趋势、逐账号每日请求趋势及每日账号明细。
 - 日志自动脱敏常见 Token/API Key/JWT，配置使用同目录原子写入。
 - Windows 使用 DPAPI 保护本机 AES-256-GCM 密钥；配置和账号备份中的 Token/API Key 均以密文保存。
 - 在 Codex 模型菜单中提供 `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、
@@ -359,6 +361,10 @@ powershell -ExecutionPolicy Bypass -File `
 - 按 provider 分组：`chatgpt`、`openai-api`、`deepseek`
 - 每 provider 包含：请求数、输入/输出 token 数
 - 每 provider 按 model 细分统计
+- 按自然日记录完成请求、账号路由尝试、输入/输出 Token，并细分到 provider 和 ChatGPT 账号
+- 每日统计保留约 370 天，用于生成使用日历、30 天趋势和逐账号明细
+- 每日历史从升级到支持该功能的版本后开始积累，不会根据已有累计数据反向推算
+- 所有统计均保存在本机，不会上传到第三方
 - 数据自动每 30 秒持久化到 `codex-proxy-stats.json`
 
 API 端点：

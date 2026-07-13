@@ -1,6 +1,7 @@
 const API = '/admin/api'
 let cfg = {}, statsData = { providers: {} }, diagnosticsData = { accounts: [], queue: {}, config_snapshots: [], account_backups: [], recent_route_decisions: [], provider_health: {providers:{}}, credential_protection: {}, circuits: [] }, modelCatalog = [], activePage = location.hash.slice(1) || 'overview'
 let pingResults = {}, modal = null, loginPoll = null, accountsPoll = null, draggedAccountId = null
+let accountViewMode = localStorage.getItem('codex-account-view') === 'compact' ? 'compact' : 'cards'
 
 const icons = {
   overview:'<path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/>',
@@ -12,7 +13,7 @@ const icons = {
   help:'<circle cx="12" cy="12" r="10"/><path d="M9.4 9a3 3 0 1 1 4.7 2.5c-1.3.8-2.1 1.3-2.1 3"/><path d="M12 18h.01"/>',
   refresh:'<path d="M20 6v5h-5"/><path d="M4 18v-5h5"/><path d="M18.5 9a7 7 0 0 0-12-2.5L4 11m16 2-2.5 4.5A7 7 0 0 1 5.5 15"/>',
   moon:'<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/>', sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/>',
-  plus:'<path d="M12 5v14M5 12h14"/>', check:'<path d="m5 12 4 4L19 6"/>', pulse:'<path d="M3 12h4l2-7 4 14 2-7h6"/>', server:'<rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/>', users:'<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><path d="M20 8v6m3-3h-6"/>', arrow:'<path d="M5 12h14m-6-6 6 6-6 6"/>', trash:'<path d="M3 6h18M8 6V4h8v2m3 0-1 15H6L5 6m5 5v6m4-6v6"/>', edit:'<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"/>', eye:'<circle cx="12" cy="12" r="3"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/>', x:'<path d="m6 6 12 12M18 6 6 18"/>', download:'<path d="M12 3v12m-5-5 5 5 5-5M5 21h14"/>', shield:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>'
+  plus:'<path d="M12 5v14M5 12h14"/>', check:'<path d="m5 12 4 4L19 6"/>', pulse:'<path d="M3 12h4l2-7 4 14 2-7h6"/>', server:'<rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/>', users:'<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><path d="M20 8v6m3-3h-6"/>', arrow:'<path d="M5 12h14m-6-6 6 6-6 6"/>', trash:'<path d="M3 6h18M8 6V4h8v2m3 0-1 15H6L5 6m5 5v6m4-6v6"/>', edit:'<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"/>', eye:'<circle cx="12" cy="12" r="3"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/>', x:'<path d="m6 6 12 12M18 6 6 18"/>', download:'<path d="M12 3v12m-5-5 5 5 5-5M5 21h14"/>', shield:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>', list:'<path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3" cy="6" r="1"/><circle cx="3" cy="12" r="1"/><circle cx="3" cy="18" r="1"/>', cards:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>'
 }
 function svg(name, cls=''){ return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${icons[name]||''}</svg>` }
 function esc(v=''){ return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])) }
@@ -51,6 +52,11 @@ function initTheme(){
   document.documentElement.dataset.theme=dark?'dark':'light'; document.getElementById('themeButton').innerHTML=svg(dark?'sun':'moon')
 }
 function toggleTheme(){ const dark=document.documentElement.dataset.theme!=='dark'; document.documentElement.dataset.theme=dark?'dark':'light'; localStorage.setItem('codex-theme',dark?'dark':'light'); document.getElementById('themeButton').innerHTML=svg(dark?'sun':'moon') }
+function setAccountViewMode(mode){
+  accountViewMode=mode==='compact'?'compact':'cards'
+  localStorage.setItem('codex-account-view',accountViewMode)
+  render()
+}
 
 async function load(showMessage=false,includeModels=true){
   const btn=document.getElementById('refreshButton'); btn.innerHTML=svg('refresh')
@@ -154,7 +160,7 @@ const accountStrategyLabels={
   'random':'随机',
   'lkgp':'最后成功路径'
 }
-function renderAccounts(){
+function renderAccountsLegacy(){
   const accounts=cfg.chatgptAccounts||[]
   const threshold=Number(cfg.chatgptLowQuotaThreshold??10)
   const remainingOf=a=>{
@@ -164,7 +170,9 @@ function renderAccounts(){
   const available=accounts.filter(a=>(a.status==='active'||!a.status)&&a.routing_enabled!==false&&(remainingOf(a)==null||remainingOf(a)>threshold)).length
   const activeId=cfg.activeChatgptAccountId
   const activeLabel=accounts.find(a=>a.id===activeId)
-  const body=accounts.length?`<div class="table-wrap"><table class="table"><thead><tr><th>优先级 / 账号</th><th>套餐 / ID</th><th>5 小时</th><th>1 周</th><th>健康度</th><th>延迟</th><th>权重</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${accounts.map((a,index)=>{
+  const resetTotal=accounts.reduce((sum,a)=>sum+Number(a.reset_credits?.available_count||0),0)
+  const beijingTime=value=>new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})
+  const body=accounts.length?`<div class="table-wrap account-matrix-wrap"><table class="table account-matrix"><thead><tr><th>账号 / 优先级</th><th>套餐、额度与重置次数</th><th>健康与性能</th><th>路由状态</th><th>操作</th></tr></thead><tbody>${accounts.map((a,index)=>{
     const isActive=a.id===activeId
     const health=(statsData.accounts||{})[a.id]||{}
     const runtime=(diagnosticsData.accounts||[]).find(item=>item.id===a.id)||{}
@@ -177,14 +185,191 @@ function renderAccounts(){
     const atReserve=remainingOf(a)!=null&&remainingOf(a)<=threshold
     const usageStale=!a.usage_updated_at||(Date.now()-new Date(a.usage_updated_at).getTime()>30*60*1000)
     const modelCooldownCount=Object.values(a.model_cooldowns||{}).filter(until=>Number(until)>Date.now()).length
-    return `<tr draggable="true" data-account-id="${esc(a.id)}" ondragstart="startAccountDrag(event,'${esc(a.id)}')" ondragover="event.preventDefault()" ondrop="dropAccount(event,'${esc(a.id)}')"><td><div class="cell-main" title="拖拽调整优先级"><span class="tag" style="cursor:grab">☰ ${index+1}</span> ${esc(a.label||a.email||'ChatGPT 账号')} ${isActive?'<span class="badge">Current</span>':'<span class="tag">Standby</span>'} ${routeEnabled&&usageStale?'<span class="tag">额度待刷新</span>':''} ${routeEnabled&&atReserve?'<span class="tag">已到安全余量</span>':''}</div><div class="cell-sub">${!routeEnabled?'仅保存 · 不参与路由':a.status==='cooldown'?'账号冷却中':a.status==='auth_error'?'登录已失效 · 请重新登录':atReserve?'已暂停 · 保留安全余量':'参与自动路由'}${a.cooldown_until?' · 恢复：'+new Date(a.cooldown_until).toLocaleString('zh-CN'):''}${modelCooldownCount?` · ${modelCooldownCount} 个模型冷却`:''}${runtime.concurrency_limit?` · 并发 ${runtime.active_requests||0}/${runtime.concurrency_limit}`:''}</div></td><td><div class="cell-main">${esc(a.plan_type||'-')}</div><div class="cell-sub">${esc((a.account_id||a.id||'-').slice(0,20))}</div></td><td>${usageWindowHtml(a.usage&&a.usage.primary,a)}${usageForecastHtml(a.usage_forecast&&a.usage_forecast.primary)}</td><td>${usageWindowHtml(a.usage&&a.usage.secondary,a)}${usageForecastHtml(a.usage_forecast&&a.usage_forecast.secondary)}</td><td>${healthHtml}</td><td>${latencyHtml}</td><td><input class="input" style="width:68px;height:30px" type="number" min="1" max="100" value="${Number(a.routing_weight)||1}" onchange="updateAccountWeight('${esc(a.id)}',this.value)" title="weighted 策略下生效"></td><td class="cell-sub">${a.usage_updated_at?new Date(a.usage_updated_at).toLocaleString('zh-CN'):'-'}</td><td><div class="card-actions">${button(routeEnabled?'停用路由':'启用路由',routeEnabled?'x':'check',`toggleAccountRouting('${esc(a.id)}',${routeEnabled?'false':'true'})`,'btn-sm')}${isActive?'<span class="status"><i></i>本机账号</span>':button('切换本机','arrow',`switchAccount('${esc(a.id)}')`,'btn-sm')}<button class="btn btn-sm" onclick="openRenameAccount('${esc(a.id)}')" title="账号改名">${svg('edit')}</button><button class="btn btn-sm" onclick="refreshAccountUsageOne('${esc(a.id)}')" title="刷新用量">${svg('refresh')}</button><button class="btn btn-sm btn-danger" onclick="removeAccount('${esc(a.id)}')">${svg('trash')}</button></div></td></tr>`
+    const reset=a.reset_credits
+    const resetCount=reset?Number(reset.available_count||0):null
+    const resetExpiry=(reset?.expires_at||[]).slice(0,3)
+    const resetHtml=`<div class="reset-credit-summary"><div><b>Codex 额度重置</b><span class="badge ${resetCount>0?'reset-available':''}">${resetCount==null?'待查询':`可用 ${resetCount} 次`}</span></div>${resetExpiry.length?resetExpiry.map(value=>`<small title="${esc(value)}">到期（北京时间）：${esc(beijingTime(value))}</small>`).join(''):`<small>${a.reset_credits_error?`查询失败：${esc(a.reset_credits_error)}`:reset?'暂无可用重置次数':'点击右侧“查询重置次数”获取'}</small>`}${reset?.updated_at?`<small>查询：${esc(beijingTime(reset.updated_at))}</small>`:''}</div>`
+    const quotaHtml=`<div class="account-plan"><b>${esc(a.plan_type||'套餐待同步')}</b><span>${esc((a.account_id||a.id||'-').slice(0,20))}</span></div><div class="quota-pair"><div><label>5 小时额度</label>${usageWindowHtml(a.usage&&a.usage.primary,a)}${usageForecastHtml(a.usage_forecast&&a.usage_forecast.primary)}</div><div><label>1 周额度</label>${usageWindowHtml(a.usage&&a.usage.secondary,a)}${usageForecastHtml(a.usage_forecast&&a.usage_forecast.secondary)}</div></div>${resetHtml}<div class="cell-sub">额度更新：${a.usage_updated_at?esc(beijingTime(a.usage_updated_at)):'尚未同步'}</div>`
+    const routeHtml=`<div class="route-state"><span class="status ${!routeEnabled||a.status==='auth_error'?'off':a.status==='cooldown'||atReserve?'warn':''}"><i></i>${!routeEnabled?'仅保存':a.status==='cooldown'?'账号冷却':a.status==='auth_error'?'登录失效':atReserve?'安全余量暂停':'参与路由'}</span>${isActive?'<span class="badge">本机账号</span>':'<span class="tag">备用登录</span>'}</div><div class="route-detail">${a.cooldown_until?`<span>恢复：${esc(beijingTime(a.cooldown_until))}</span>`:''}${modelCooldownCount?`<span>${modelCooldownCount} 个模型冷却</span>`:''}<span>并发 ${runtime.active_requests||0}/${runtime.concurrency_limit||3}</span></div><div class="weight-field"><label>路由权重</label><input class="input" type="number" min="1" max="100" value="${Number(a.routing_weight)||1}" onchange="updateAccountWeight('${esc(a.id)}',this.value)" title="weighted 策略下生效"></div>`
+    const resetDisabled=resetCount==null||resetCount<=0
+    const actionsHtml=`<div class="account-actions"><div class="account-action-row">${button(routeEnabled?'停用路由':'启用路由',routeEnabled?'x':'check',`toggleAccountRouting('${esc(a.id)}',${routeEnabled?'false':'true'})`,'btn-sm')}${isActive?'<span class="status"><i></i>当前本机</span>':button('切换本机','arrow',`switchAccount('${esc(a.id)}')`,'btn-sm')}</div><div class="account-action-row"><button class="btn btn-sm" onclick="openRenameAccount('${esc(a.id)}')" title="修改账号名称">${svg('edit')}改名</button><button class="btn btn-sm" onclick="refreshAccountUsageOne('${esc(a.id)}')" title="刷新 5 小时和每周额度">${svg('refresh')}刷新额度</button><button class="btn btn-sm btn-danger" onclick="removeAccount('${esc(a.id)}')" title="移除账号">${svg('trash')}</button></div><div class="reset-actions"><b>额度重置操作</b><div class="account-action-row"><button class="btn btn-sm" onclick="refreshAccountResetCreditsOne('${esc(a.id)}')">${svg('pulse')}查询重置次数</button><button class="btn btn-sm btn-danger" ${resetDisabled?'disabled title="请先查询并确认有可用重置次数"':`onclick="openResetQuota('${esc(a.id)}')"`}>${svg('refresh')}重置额度</button></div><small>重置前需输入账号名称并再次确认</small></div></div>`
+    return `<tr draggable="true" data-account-id="${esc(a.id)}" ondragstart="startAccountDrag(event,'${esc(a.id)}')" ondragover="event.preventDefault()" ondrop="dropAccount(event,'${esc(a.id)}')"><td><div class="account-identity"><div class="cell-main" title="拖拽调整优先级"><span class="tag drag-handle">☰ ${index+1}</span> ${esc(a.label||a.email||'ChatGPT 账号')}</div><div class="tags">${isActive?'<span class="badge">Current</span>':'<span class="tag">Standby</span>'}${routeEnabled&&usageStale?'<span class="tag">额度待刷新</span>':''}${routeEnabled&&atReserve?'<span class="tag">已到安全余量</span>':''}</div><div class="cell-sub">${!routeEnabled?'仅保存 · 不参与路由':a.status==='cooldown'?'账号冷却中':a.status==='auth_error'?'登录已失效 · 请重新登录':atReserve?'已暂停 · 保留安全余量':'参与自动路由'}</div></div></td><td>${quotaHtml}</td><td><div class="health-block">${healthHtml}</div><div class="latency-block">${latencyHtml}</div></td><td>${routeHtml}</td><td>${actionsHtml}</td></tr>`
   }).join('')}</tbody></table></div>`:empty('accounts','账号池为空','通过官方登录或导入 auth.json 即可启用自动轮换',button('官方安全登录','shield','openOfficialLogin()','btn-primary'))
-  const actions=button('官方安全登录','shield','openOfficialLogin()','btn-primary')+button('导入 auth.json','plus','openAccount()')+button('刷新全部用量','refresh','refreshAllUsage()')+button('重启 Codex','refresh','restartCodex()')
+  const actions=button('官方安全登录','shield','openOfficialLogin()','btn-primary')+button('导入 auth.json','plus','openAccount()')+button('刷新全部用量','refresh','refreshAllUsage()')+button('查询全部重置次数','pulse','refreshAllResetCredits()')+button('重启 Codex','refresh','restartCodex()')
   const strategyOptions=Object.entries(accountStrategyLabels).map(([value,label])=>`<option value="${value}" ${cfg.chatgptAccountStrategy===value?'selected':''}>${label}</option>`).join('')
-  const strategyBody=`<div class="card-body"><div class="form-grid"><div class="field"><label>账号选择模式</label><select id="f_chatgptAccountStrategy">${strategyOptions}</select></div><div class="field"><label>低额度避让阈值 <span class="hint">0-100%</span></label><input class="input" id="f_chatgptLowQuotaThreshold" type="number" min="0" max="100" value="${Number(cfg.chatgptLowQuotaThreshold??10)}"></div></div></div><div class="form-footer">${button('保存路由策略','check','saveConfig()','btn-primary')}</div>`
+  const strategyBody=`<section class="account-strategy-bar"><div class="account-strategy-copy"><span class="eyebrow">ROUTING POLICY</span><strong>请求分配策略</strong><small>控制新请求如何进入账号池</small></div><label><span>账号选择模式</span><select id="f_chatgptAccountStrategy">${strategyOptions}</select></label><label class="strategy-threshold"><span>低额度避让阈值</span><div><input class="input" id="f_chatgptLowQuotaThreshold" type="number" min="0" max="100" value="${Number(cfg.chatgptLowQuotaThreshold??10)}"><small>%</small></div></label>${button('保存策略','check','saveConfig()','btn-primary')}</section>`
   const decisions=diagnosticsData.recent_route_decisions||[]
   const decisionBody=decisions.length?`<div class="table-wrap"><table class="table"><thead><tr><th>时间 / Request ID</th><th>模型</th><th>结果</th><th>选择与跳过原因</th></tr></thead><tbody>${decisions.slice(0,15).map(item=>{const skipped=(item.accounts||[]).filter(account=>account.result==='skipped').slice(0,4);const result=item.selected_account_label?`选择 ${esc(item.selected_account_label)}`:item.outcome==='queue_timeout'?'排队超时':item.outcome==='client_disconnected'?'客户端已断开':'没有可用账号';return `<tr><td><div class="cell-main">${new Date(item.at).toLocaleTimeString('zh-CN')}</div><div class="cell-sub">${esc(item.request_id||'-')}</div></td><td>${esc(item.model||'-')}</td><td><div class="cell-main">${result}</div><div class="cell-sub">${item.queue_wait_ms?`等待 ${fmt(item.queue_wait_ms)} ms`:'无需等待'}</div></td><td>${skipped.length?skipped.map(account=>`<div class="cell-sub"><b>${esc(account.label||account.id)}</b>：${esc(account.reason)}</div>`).join(''):'<span class="cell-sub">没有账号被跳过</span>'}</td></tr>`}).join('')}</tbody></table></div>`:empty('pulse','暂无路由决策','发起一次 ChatGPT 订阅模型请求后，将显示账号选择和跳过原因')
-  return pageHead('ChatGPT 账号池','多账号统一托管，并在配额不足时自动切换',actions)+`<div class="metrics">${metric('账号总数',accounts.length,'users','全部订阅账号')}${metric('有效账号',available,'check',`${accounts.length-available} 个账号停用、冷却或到安全线`)}${metric('自适应并发','1–3','refresh',`当前队列 ${Number(diagnosticsData.queue?.depth)||0} · 超限自动排队`)}${metric('当前账号',activeLabel?esc(activeLabel.label||activeLabel.account_id||'已选择'):'未选择','shield','切换后本机 Codex 生效')}</div>`+card('路由策略','优先级模式使用下方拖拽顺序；权重模式使用每行权重',strategyBody)+card('账号健康矩阵','显示自适应并发、额度趋势、双层冷却和近期健康状态',body)+card('最近路由决策','解释每次请求为什么选择或跳过某个账号',decisionBody)
+  return pageHead('ChatGPT 账号池','多账号统一托管，并在配额不足时自动切换',actions)+`<div class="metrics">${metric('账号总数',accounts.length,'users','全部订阅账号')}${metric('有效账号',available,'check',`${accounts.length-available} 个账号停用、冷却或到安全线`)}${metric('可用重置次数',resetTotal,'refresh','按账号分别使用 · 重置前二次确认')}${metric('当前账号',activeLabel?esc(activeLabel.label||activeLabel.account_id||'已选择'):'未选择','shield',`当前队列 ${Number(diagnosticsData.queue?.depth)||0} · 切换后本机生效`)}</div>`+card('路由策略','优先级模式使用下方拖拽顺序；权重模式使用每行权重',strategyBody)+card('账号健康矩阵','额度、重置次数、健康、路由和操作集中分组显示',body)+card('最近路由决策','解释每次请求为什么选择或跳过某个账号',decisionBody)
+}
+function renderAccounts(){
+  const accounts=cfg.chatgptAccounts||[]
+  const threshold=Number(cfg.chatgptLowQuotaThreshold??10)
+  const remainingOf=a=>{
+    const values=[a.usage&&a.usage.primary,a.usage&&a.usage.secondary].filter(Boolean).map(w=>w.remaining_percent==null?(w.used_percent==null?null:100-Number(w.used_percent)):Number(w.remaining_percent)).filter(Number.isFinite)
+    return values.length?Math.min(...values):null
+  }
+  const activeId=cfg.activeChatgptAccountId
+  const activeLabel=accounts.find(a=>a.id===activeId)
+  const available=accounts.filter(a=>(a.status==='active'||!a.status)&&a.routing_enabled!==false&&(remainingOf(a)==null||remainingOf(a)>threshold)).length
+  const resetTotal=accounts.reduce((sum,a)=>sum+Number(a.reset_credits?.available_count||0),0)
+  const beijingTime=value=>new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})
+  const cards=accounts.map((a,index)=>{
+    const label=a.label||a.email||'ChatGPT 账号'
+    const initials=Array.from(label.trim()).slice(0,2).join('').toUpperCase()||'AI'
+    const isActive=a.id===activeId
+    const routeEnabled=a.routing_enabled!==false
+    const remaining=remainingOf(a)
+    const atReserve=remaining!=null&&remaining<=threshold
+    const usageStale=!a.usage_updated_at||(Date.now()-new Date(a.usage_updated_at).getTime()>30*60*1000)
+    const modelCooldownCount=Object.values(a.model_cooldowns||{}).filter(until=>Number(until)>Date.now()).length
+    const health=(statsData.accounts||{})[a.id]||{}
+    const runtime=(diagnosticsData.accounts||[]).find(item=>item.id===a.id)||{}
+    const oneHour=health.windows&&health.windows['1h']
+    const day=health.windows&&health.windows['24h']
+    const successRate=health.requests?`${Number(health.success_rate||0).toFixed(1)}%`:'—'
+    const requestCount=health.requests?fmt(health.requests):'—'
+    const p95=health.requests?`${fmt(health.p95_latency_ms)} ms`:'—'
+    const concurrency=`${runtime.active_requests||0}/${runtime.concurrency_limit||3}`
+    const routeLabel=!routeEnabled?'仅保存':a.status==='cooldown'?'冷却中':a.status==='auth_error'?'登录失效':atReserve?'额度保护':'参与路由'
+    const routeTone=!routeEnabled||a.status==='auth_error'?'off':a.status==='cooldown'||atReserve?'warn':'ok'
+    const reset=a.reset_credits
+    const resetCount=reset?Number(reset.available_count||0):null
+    const resetExpiry=(reset?.expires_at||[])[0]
+    const resetDisabled=resetCount==null||resetCount<=0
+    const resetDetail=a.reset_credits_error
+      ? `查询失败：${esc(a.reset_credits_error)}`
+      : resetExpiry
+        ? `最近到期：${esc(beijingTime(resetExpiry))}`
+        : reset
+          ? '当前没有可用重置次数'
+          : '尚未查询重置次数'
+    const hue=205+(index*47)%120
+    return `<article class="account-profile-card ${routeTone==='off'?'is-muted':''}" style="--account-hue:${hue}" draggable="true" data-account-id="${esc(a.id)}" ondragstart="startAccountDrag(event,'${esc(a.id)}')" ondragover="event.preventDefault()" ondrop="dropAccount(event,'${esc(a.id)}')">
+      <header class="account-profile-head">
+        <div class="account-profile-main">
+          <span class="account-rank drag-handle" title="拖拽调整优先级">${index+1}</span>
+          <div class="account-avatar">${esc(initials)}</div>
+          <div class="account-title">
+            <div><strong>${esc(label)}</strong><span class="account-state ${routeTone}"><i></i>${routeLabel}</span></div>
+            <small>${esc(a.plan_type||'套餐待同步')} · ${esc((a.account_id||a.id||'-').slice(0,24))}</small>
+          </div>
+        </div>
+        <div class="account-head-actions">
+          ${isActive?'<span class="account-local-badge">本机账号</span>':button('切换本机','arrow',`switchAccount('${esc(a.id)}')`,'btn-sm')}
+          ${button(routeEnabled?'停用路由':'启用路由',routeEnabled?'x':'check',`toggleAccountRouting('${esc(a.id)}',${routeEnabled?'false':'true'})`,'btn-sm')}
+        </div>
+      </header>
+      <div class="account-profile-body">
+        <section class="account-card-section quota-section">
+          <div class="account-section-head"><div><span>额度状态</span><small>${usageStale?'数据可能已过期':'最近数据有效'}</small></div><button class="account-link" onclick="refreshAccountUsageOne('${esc(a.id)}')">${svg('refresh')}刷新</button></div>
+          <div class="account-quota-grid">
+            <div class="account-quota-tile"><div class="account-tile-label"><span>5 小时</span><small>短周期</small></div>${usageWindowHtml(a.usage&&a.usage.primary,a)}${usageForecastHtml(a.usage_forecast&&a.usage_forecast.primary)}</div>
+            <div class="account-quota-tile"><div class="account-tile-label"><span>1 周</span><small>长周期</small></div>${usageWindowHtml(a.usage&&a.usage.secondary,a)}${usageForecastHtml(a.usage_forecast&&a.usage_forecast.secondary)}</div>
+          </div>
+        </section>
+        <section class="account-card-section performance-section">
+          <div class="account-section-head"><div><span>运行表现</span><small>${health.requests?'基于真实请求':'等待请求样本'}</small></div></div>
+          <div class="account-kpi-grid">
+            <div><small>成功率</small><strong>${successRate}</strong></div>
+            <div><small>请求数</small><strong>${requestCount}</strong></div>
+            <div><small>P95 延迟</small><strong>${p95}</strong></div>
+            <div><small>并发占用</small><strong>${concurrency}</strong></div>
+          </div>
+          <div class="account-performance-note">${oneHour||day?`1h 成功率 ${oneHour?.success_rate==null?'—':oneHour.success_rate+'%'} · 24h ${day?.success_rate==null?'—':day.success_rate+'%'}`:'暂无分时健康数据'}${health.rate_limited?` · ${health.rate_limited} 次 429`:''}</div>
+        </section>
+        <section class="account-card-section route-section">
+          <div class="account-section-head"><div><span>调度设置</span><small>${isActive?'当前本机登录':'账号池托管账号'}</small></div></div>
+          <div class="account-route-summary">
+            <div><span class="account-state ${routeTone}"><i></i>${routeLabel}</span><small>${modelCooldownCount?`${modelCooldownCount} 个模型冷却`:'无模型冷却'}</small></div>
+            <label><span>路由权重</span><input class="input" type="number" min="1" max="100" value="${Number(a.routing_weight)||1}" onchange="updateAccountWeight('${esc(a.id)}',this.value)" title="weighted 策略下生效"></label>
+          </div>
+          ${a.cooldown_until?`<div class="account-alert">预计恢复：${esc(beijingTime(a.cooldown_until))}</div>`:''}
+          ${health.last_error_type?`<div class="account-alert error" title="${esc(health.last_error_message||health.last_error_type)}">最近错误：${esc(health.last_error_type)}${health.last_status?` · HTTP ${health.last_status}`:''}</div>`:''}
+        </section>
+      </div>
+      <section class="account-reset-strip ${resetCount>0?'has-credit':''}">
+        <div class="account-reset-icon">${svg('refresh')}</div>
+        <div class="account-reset-copy">
+          <span>Codex 额度重置</span>
+          <strong>${resetCount==null?'待查询':`${resetCount} 次可用`}</strong>
+          <small>${resetDetail}${reset?.updated_at?` · 查询于 ${esc(beijingTime(reset.updated_at))}`:''}</small>
+        </div>
+        <div class="account-reset-actions">
+          <button class="btn btn-sm" onclick="refreshAccountResetCreditsOne('${esc(a.id)}')">${svg('pulse')}查询次数</button>
+          <button class="btn btn-sm btn-danger" ${resetDisabled?'disabled title="请先查询并确认有可用重置次数"':`onclick="openResetQuota('${esc(a.id)}')"`}>${svg('refresh')}重置额度</button>
+        </div>
+      </section>
+      <footer class="account-profile-foot">
+        <span>${a.usage_updated_at?`额度更新 ${esc(beijingTime(a.usage_updated_at))}`:'额度尚未同步'}</span>
+        <div>
+          <button class="account-link" onclick="openRenameAccount('${esc(a.id)}')">${svg('edit')}修改名称</button>
+          <button class="account-link danger" onclick="removeAccount('${esc(a.id)}')">${svg('trash')}移除账号</button>
+        </div>
+      </footer>
+    </article>`
+  }).join('')
+  const compactRows=accounts.map((a,index)=>{
+    const label=a.label||a.email||'ChatGPT 账号'
+    const initials=Array.from(label.trim()).slice(0,2).join('').toUpperCase()||'AI'
+    const isActive=a.id===activeId
+    const routeEnabled=a.routing_enabled!==false
+    const remaining=remainingOf(a)
+    const atReserve=remaining!=null&&remaining<=threshold
+    const runtime=(diagnosticsData.accounts||[]).find(item=>item.id===a.id)||{}
+    const health=(statsData.accounts||{})[a.id]||{}
+    const routeLabel=!routeEnabled?'仅保存':a.status==='cooldown'?'冷却中':a.status==='auth_error'?'登录失效':atReserve?'额度保护':'参与路由'
+    const routeTone=!routeEnabled||a.status==='auth_error'?'off':a.status==='cooldown'||atReserve?'warn':'ok'
+    const resetCount=a.reset_credits?Number(a.reset_credits.available_count||0):null
+    const quotaResetText=window=>{
+      if(!window)return '重置时间待同步'
+      if(window.reset_after_seconds!=null)return formatDuration(window.reset_after_seconds)
+      if(window.resets_at)return `${new Date(window.resets_at*1000).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false})} 重置`
+      return '重置时间待同步'
+    }
+    const quotaBar=(name,window)=>{
+      if(!window||window.used_percent==null)return `<div class="compact-quota is-empty"><span><b>${name}</b><em>待同步</em></span><i></i><small>${quotaResetText(window)}</small></div>`
+      const value=Math.max(0,Math.min(100,window.remaining_percent==null?100-Number(window.used_percent):Number(window.remaining_percent)))
+      const tone=value<=10?'var(--red)':value<=30?'var(--amber)':'var(--green)'
+      return `<div class="compact-quota" style="--quota-color:${tone}"><span><b>${name}</b><em>${value.toFixed(0)}%</em></span><i><b style="width:${value}%"></b></i><small>${quotaResetText(window)}</small></div>`
+    }
+    const hue=205+(index*47)%120
+    return `<article class="account-compact-row ${routeTone==='off'?'is-muted':''}" style="--account-hue:${hue}" draggable="true" data-account-id="${esc(a.id)}" ondragstart="startAccountDrag(event,'${esc(a.id)}')" ondragover="event.preventDefault()" ondrop="dropAccount(event,'${esc(a.id)}')">
+      <div class="compact-identity">
+        <span class="account-rank drag-handle" title="拖拽调整优先级">${index+1}</span>
+        <div class="account-avatar">${esc(initials)}</div>
+        <div><strong>${esc(label)}</strong><small>${esc(a.plan_type||'套餐待同步')} · ${esc((a.account_id||a.id||'-').slice(0,16))}</small></div>
+      </div>
+      <div class="compact-quota-group">${quotaBar('5 小时',a.usage&&a.usage.primary)}${quotaBar('1 周',a.usage&&a.usage.secondary)}</div>
+      <div class="compact-health">
+        <div><small>成功率</small><strong>${health.requests?Number(health.success_rate||0).toFixed(1)+'%':'—'}</strong></div>
+        <div><small>P95 延迟</small><strong>${health.requests?fmt(health.p95_latency_ms)+' ms':'—'}</strong></div>
+        <div><small>并发</small><strong>${runtime.active_requests||0}/${runtime.concurrency_limit||3}</strong></div>
+      </div>
+      <div class="compact-status">
+        <span class="account-state ${routeTone}"><i></i>${routeLabel}</span>
+        <small>重置次数 <b>${resetCount==null?'待查询':resetCount}</b>${isActive?' · 本机账号':''}</small>
+      </div>
+      <div class="compact-actions">
+        ${!isActive?`<button title="切换为本机账号" onclick="switchAccount('${esc(a.id)}')">${svg('arrow')}</button>`:''}
+        <button title="刷新额度" onclick="refreshAccountUsageOne('${esc(a.id)}')">${svg('refresh')}</button>
+        <button title="查询重置次数" onclick="refreshAccountResetCreditsOne('${esc(a.id)}')">${svg('pulse')}</button>
+        ${resetCount>0?`<button class="danger" title="重置额度" onclick="openResetQuota('${esc(a.id)}')">${svg('refresh')}</button>`:''}
+        <button title="${routeEnabled?'停用路由':'启用路由'}" onclick="toggleAccountRouting('${esc(a.id)}',${routeEnabled?'false':'true'})">${svg(routeEnabled?'x':'check')}</button>
+      </div>
+    </article>`
+  }).join('')
+  const compactHeader=`<div class="account-compact-header" aria-hidden="true"><span>账号 / 优先级</span><span class="compact-header-quota"><b>额度状态</b><small><i>5 小时周期</i><i>1 周周期</i></small></span><span class="compact-col-health">运行表现</span><span>路由 / 重置次数</span><span>快捷操作</span></div>`
+  const viewSwitch=`<div class="account-view-switch" role="group" aria-label="账号展示方式"><button class="${accountViewMode==='compact'?'active':''}" onclick="setAccountViewMode('compact')" title="条状简约型">${svg('list')}<span>简约</span></button><button class="${accountViewMode==='cards'?'active':''}" onclick="setAccountViewMode('cards')" title="卡片全面型">${svg('cards')}<span>全面</span></button></div>`
+  const accountBoard=accounts.length
+    ? `<section class="account-board"><div class="account-board-head"><div><span class="eyebrow">ACCOUNT POOL</span><h2>${accountViewMode==='compact'?'账号快速总览':'账号运行面板'}</h2><p>${accountViewMode==='compact'?'按列对齐比较额度、重置时间、性能和路由状态。':'拖拽左上角序号调整优先级；额度、健康度和高风险操作按功能分区。'}</p></div><div class="account-board-tools"><div class="account-board-legend"><span><i class="ok"></i>正常</span><span><i class="warn"></i>受限</span><span><i class="off"></i>停用</span></div>${viewSwitch}</div></div>${accountViewMode==='compact'?`<div class="account-compact-list">${compactHeader}${compactRows}</div>`:`<div class="account-card-grid">${cards}</div>`}</section>`
+    : card('账号池', '尚未添加订阅账号', empty('accounts','账号池为空','通过官方登录或导入 auth.json 即可启用自动轮换',button('官方安全登录','shield','openOfficialLogin()','btn-primary')))
+  const actions=button('官方安全登录','shield','openOfficialLogin()','btn-primary')+button('导入 auth.json','plus','openAccount()')+button('刷新全部用量','refresh','refreshAllUsage()')+button('查询全部重置次数','pulse','refreshAllResetCredits()')+button('重启 Codex','refresh','restartCodex()')
+  const strategyOptions=Object.entries(accountStrategyLabels).map(([value,label])=>`<option value="${value}" ${cfg.chatgptAccountStrategy===value?'selected':''}>${label}</option>`).join('')
+  const strategyBody=`<section class="account-strategy-bar"><div class="account-strategy-copy"><span class="eyebrow">ROUTING POLICY</span><strong>请求分配策略</strong><small>控制新请求如何进入账号池</small></div><label><span>账号选择模式</span><select id="f_chatgptAccountStrategy">${strategyOptions}</select></label><label class="strategy-threshold"><span>低额度避让阈值</span><div><input class="input" id="f_chatgptLowQuotaThreshold" type="number" min="0" max="100" value="${Number(cfg.chatgptLowQuotaThreshold??10)}"><small>%</small></div></label>${button('保存策略','check','saveConfig()','btn-primary')}</section>`
+  const decisions=diagnosticsData.recent_route_decisions||[]
+  const decisionBody=decisions.length?`<div class="table-wrap"><table class="table"><thead><tr><th>时间 / Request ID</th><th>模型</th><th>结果</th><th>选择与跳过原因</th></tr></thead><tbody>${decisions.slice(0,15).map(item=>{const skipped=(item.accounts||[]).filter(account=>account.result==='skipped').slice(0,4);const result=item.selected_account_label?`选择 ${esc(item.selected_account_label)}`:item.outcome==='queue_timeout'?'排队超时':item.outcome==='client_disconnected'?'客户端已断开':'没有可用账号';return `<tr><td><div class="cell-main">${new Date(item.at).toLocaleTimeString('zh-CN')}</div><div class="cell-sub">${esc(item.request_id||'-')}</div></td><td>${esc(item.model||'-')}</td><td><div class="cell-main">${result}</div><div class="cell-sub">${item.queue_wait_ms?`等待 ${fmt(item.queue_wait_ms)} ms`:'无需等待'}</div></td><td>${skipped.length?skipped.map(account=>`<div class="cell-sub"><b>${esc(account.label||account.id)}</b>：${esc(account.reason)}</div>`).join(''):'<span class="cell-sub">没有账号被跳过</span>'}</td></tr>`}).join('')}</tbody></table></div>`:empty('pulse','暂无路由决策','发起一次 ChatGPT 订阅模型请求后，将显示账号选择和跳过原因')
+  return pageHead('ChatGPT 账号池','以账号为中心查看额度、性能、调度和重置能力',actions)+`<div class="metrics">${metric('账号总数',accounts.length,'users','全部订阅账号')}${metric('有效账号',available,'check',`${accounts.length-available} 个账号当前不可调度`)}${metric('可用重置次数',resetTotal,'refresh','高风险操作需要二次确认')}${metric('当前本机账号',activeLabel?esc(activeLabel.label||activeLabel.account_id||'已选择'):'未选择','shield',`等待队列 ${Number(diagnosticsData.queue?.depth)||0}`)}</div>`+strategyBody+accountBoard+card('最近路由决策','解释每次请求为什么选择或跳过某个账号',decisionBody)
 }
 function renderAnalytics(){
   const t=totals(), items=allProviders().flatMap(p=>Object.entries(p.models||{}).map(([name,v])=>({name,...v}))).sort((a,b)=>b.requests-a.requests)
@@ -406,6 +591,37 @@ async function refreshAllUsage(){
 }
 async function refreshAccountUsageOne(id){
   try{const r=await fetch(API+'/chatgpt-accounts/'+encodeURIComponent(id)+'/refresh-usage',{method:'POST'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'刷新失败');cfg=d.config;render();toast(d.message||'用量已刷新')}catch(e){toast(e.message,'error')}
+}
+async function refreshAccountResetCreditsOne(id){
+  toast('正在查询 Codex 重置次数…')
+  try{const r=await fetch(API+'/chatgpt-accounts/'+encodeURIComponent(id)+'/reset-credits',{method:'POST'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'查询失败');cfg=d.config;render();toast(d.message||'Codex 重置次数已查询')}catch(e){toast(e.message,'error')}
+}
+async function refreshAllResetCredits(){
+  toast('正在查询全部账号的 Codex 重置次数…')
+  try{const r=await fetch(API+'/chatgpt-accounts/refresh-reset-credits-all',{method:'POST'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'查询失败');cfg=d.config;render();toast(d.message||'查询完成')}catch(e){toast(e.message,'error')}
+}
+function openResetQuota(id){
+  const account=(cfg.chatgptAccounts||[]).find(item=>item.id===id)
+  if(!account)return toast('账号不存在','error')
+  const count=Number(account.reset_credits?.available_count||0)
+  if(count<=0)return toast('请先查询并确认该账号有可用重置次数','error')
+  const name=account.label||account.account_id||account.id
+  const expiry=(account.reset_credits?.expires_at||[]).map(value=>new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})).join('；')
+  showModal('重置 Codex 额度',`<div class="reset-warning"><b>高风险操作：将立即消耗 1 次重置机会</b><p>账号：${esc(name)}<br>当前可用：${count} 次${expiry?`<br>到期（北京时间）：${esc(expiry)}`:''}</p><p>第一步确认：请输入完整账号名称 <b>${esc(name)}</b></p></div><div class="field"><label>账号名称</label><input class="input" id="reset_account_confirmation" autocomplete="off" placeholder="输入上方完整账号名称"><span class="hint">输入正确后还会显示最后一次系统确认。</span></div>`,'继续重置',`resetAccountQuota('${esc(id)}')`)
+  setTimeout(()=>document.getElementById('reset_account_confirmation')?.focus(),0)
+}
+async function resetAccountQuota(id){
+  const account=(cfg.chatgptAccounts||[]).find(item=>item.id===id)
+  if(!account)return toast('账号不存在','error')
+  const name=account.label||account.account_id||account.id
+  const entered=document.getElementById('reset_account_confirmation')?.value.trim()
+  if(entered!==name)return toast('账号名称不匹配，未执行重置','error')
+  if(!confirm(`最后确认：确定立即重置「${name}」的 Codex 额度吗？\n\n此操作会消耗 1 次重置机会，提交后无法撤销。`))return
+  try{
+    const r=await fetch(API+'/chatgpt-accounts/'+encodeURIComponent(id)+'/reset-quota',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({confirmed:true,confirmedAccountId:account.account_id,confirmedAccountLabel:name})}),d=await r.json()
+    if(!r.ok)throw new Error(d.error?.message||'额度重置失败')
+    cfg=d.config;closeModal();render();toast(d.message||'Codex 额度已重置')
+  }catch(e){toast(e.message,'error')}
 }
 function startAccountDrag(event,id){
   draggedAccountId=id

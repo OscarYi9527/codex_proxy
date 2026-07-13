@@ -5,13 +5,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { resolveCodexModel, isChatGptSubModel, isOpenAIApiModel, isRelayModel, parseRelayModel, buildModelsResponse, getThreadId } from '../src/models.js'
 import { recordUsage, recordAccountOutcome, getStats, resetStats, saveStats } from '../src/stats.js'
-import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurrencyLimit, accountRemainingPercent, accountUsageIsFresh, calculateUsageForecast, cooldownMsFromResponseText, ensureFreshToken, extractUsageFromBody, extractUsageFromHeaders, normalizeAccountRoutingStrategy, noteAccountAdaptiveOutcome, noteAccountSuccess, pickActiveAccount, refreshAccountUsage, releaseAccountRequest, renewAccountRequestLease, reserveAccountRequest, resetAccountRequestCounts, resetAccountStickiness } from '../src/chatgpt-accounts.js'
+import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurrencyLimit, accountRemainingPercent, accountUsageIsFresh, calculateUsageForecast, consumeAccountResetCredit, cooldownMsFromResponseText, ensureFreshToken, extractResetCredits, extractUsageFromBody, extractUsageFromHeaders, normalizeAccountRoutingStrategy, noteAccountAdaptiveOutcome, noteAccountSuccess, pickActiveAccount, refreshAccountResetCredits, refreshAccountUsage, releaseAccountRequest, renewAccountRequestLease, reserveAccountRequest, resetAccountRequestCounts, resetAccountStickiness } from '../src/chatgpt-accounts.js'
 import { proxyConfig, atomicWriteJson, configForSettingsSnapshot, mergeAccountBackup, mergeSettingsSnapshot, orderChatgptAccounts, renameChatgptAccountInList } from '../src/config.js'
 import { assertCircuitAvailable, getCircuitStates, recordCircuitResult, resetCircuits } from '../src/circuit-breaker.js'
 import { fetchWithRetry, proxyMetaHeaders, retryAfterMs } from '../src/server-utils.js'
 import { redactSecrets } from '../src/logger.js'
 import { createServer } from '../src/server.js'
-import { findDuplicateAccount, findPrivateBrowser, parseDeviceAuthOutput, privateBrowserArgs } from '../src/admin.js'
+import { findDuplicateAccount, findPrivateBrowser, parseDeviceAuthOutput, privateBrowserArgs, publicProxyConfig } from '../src/admin.js'
 import { acquireActiveAccountWithRetry, refreshBelowReserveAccounts } from '../src/routes/chatgpt-sub.js'
 import { getRouteDecisions, recordRouteDecision, resetRouteDecisions } from '../src/route-decisions.js'
 import { decryptConfigSecrets, encryptConfigSecrets, isEncryptedSecret } from '../src/credential-store.js'
@@ -297,6 +297,81 @@ describe('ChatGPT 账号额度解析', () => {
     assert.strictEqual(usage.primary.used_percent, 42)
     assert.strictEqual(usage.primary.remaining_percent, 58)
     assert.strictEqual(usage.secondary, null)
+  })
+})
+
+describe('Codex 额度重置', () => {
+  it('兼容重置次数接口字段并排除已使用或已过期次数', () => {
+    const reset = extractResetCredits({
+      reset_credits: {
+        totalCount: 4,
+        items: [
+          { id: 'credit-live', expiresAt: '2099-01-01T00:00:00Z', status: 'available' },
+          { redeemRequestId: 'credit-used', expires_at: '2099-01-01T00:00:00Z', status: 'used' },
+          { redeem_request_id: 'credit-expired', expires_at: '2000-01-01T00:00:00Z' }
+        ]
+      }
+    })
+
+    assert.strictEqual(reset.available_count, 1)
+    assert.strictEqual(reset.total_earned_count, 4)
+    assert.strictEqual(reset.credits[0].redeem_request_id, 'credit-live')
+    assert.strictEqual(reset.credits[0].expires_at, '2099-01-01T00:00:00.000Z')
+  })
+
+  it('额度重置必须同时确认账号名称和账号 ID', async () => {
+    const account = {
+      id: 'acct-local',
+      label: '工作账号',
+      account_id: 'upstream-account',
+      access_token: 'access',
+      expires_at: Date.now() + 60_000
+    }
+    const neverFetch = async () => {
+      assert.fail('确认失败时不应请求上游')
+    }
+
+    await assert.rejects(
+      consumeAccountResetCredit(account, {
+        confirmed: true,
+        confirmedAccountLabel: '其他账号',
+        confirmedAccountId: account.account_id
+      }, neverFetch),
+      error => error.code === 'ACCOUNT_LABEL_CONFIRMATION_MISMATCH'
+    )
+    await assert.rejects(
+      consumeAccountResetCredit(account, {
+        confirmed: true,
+        confirmedAccountLabel: account.label,
+        confirmedAccountId: 'wrong-account'
+      }, neverFetch),
+      error => error.code === 'ACCOUNT_CONFIRMATION_MISMATCH'
+    )
+  })
+
+  it('管理配置不会暴露凭据或一次性兑换标识', () => {
+    const config = publicProxyConfig({
+      chatgptAccounts: [{
+        id: 'acct-local',
+        access_token: 'access',
+        refresh_token: 'refresh',
+        id_token: 'id',
+        reset_credits: {
+          available_count: 1,
+          total_earned_count: 2,
+          expires_at: ['2099-01-01T00:00:00.000Z'],
+          updated_at: '2026-01-01T00:00:00.000Z',
+          credits: [{ redeem_request_id: 'one-time-secret' }]
+        }
+      }]
+    })
+    const account = config.chatgptAccounts[0]
+
+    assert.strictEqual(account.access_token, undefined)
+    assert.strictEqual(account.refresh_token, undefined)
+    assert.strictEqual(account.reset_credits.available_count, 1)
+    assert.strictEqual(account.reset_credits.credits, undefined)
+    assert.ok(!JSON.stringify(config).includes('one-time-secret'))
   })
 })
 

@@ -18,7 +18,7 @@ import { handleRelay, handleRelayChatCompletions } from './routes/relay.js'
 import { handlePing, handlePingAll } from './routes/ping.js'
 import { saveStats } from './stats.js'
 import { initializeProviderHealth, saveProviderHealth } from './provider-health.js'
-import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleAccountBackupsGet, handleConfigSnapshotsGet, handleAccountBackupRestore, handleConfigRollback, handleProviderHealthReset, handleRuntimeRepair, handleProxyRestart } from './admin.js'
+import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountResetCreditsGet, handleChatgptAccountsRefreshResetCreditsAll, handleChatgptAccountResetQuota, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleAccountBackupsGet, handleConfigSnapshotsGet, handleAccountBackupRestore, handleConfigRollback, handleProviderHealthReset, handleRuntimeRepair, handleProxyRestart } from './admin.js'
 
 const PORT = Number(process.env.CODEX_PROXY_PORT || 47892)
 const HOST = process.env.CODEX_PROXY_HOST || '127.0.0.1'
@@ -285,6 +285,9 @@ export function createServer({ fetchImpl = fetch } = {}) {
     if (req.method === 'POST' && url.pathname === '/admin/api/chatgpt-accounts/refresh-usage-all') {
       return handleChatgptAccountsRefreshAll(req, res)
     }
+    if (req.method === 'POST' && url.pathname === '/admin/api/chatgpt-accounts/refresh-reset-credits-all') {
+      return handleChatgptAccountsRefreshResetCreditsAll(req, res)
+    }
     if (req.method === 'POST' && url.pathname === '/admin/api/chatgpt-accounts/reorder') {
       const body = await readJson(req)
       return handleChatgptAccountsReorder(req, res, body)
@@ -292,6 +295,15 @@ export function createServer({ fetchImpl = fetch } = {}) {
     const refreshUsageMatch = url.pathname.match(/^\/admin\/api\/chatgpt-accounts\/([^/]+)\/refresh-usage$/)
     if (req.method === 'POST' && refreshUsageMatch) {
       return handleChatgptAccountRefreshUsage(req, res, decodeURIComponent(refreshUsageMatch[1]))
+    }
+    const resetCreditsMatch = url.pathname.match(/^\/admin\/api\/chatgpt-accounts\/([^/]+)\/reset-credits$/)
+    if (req.method === 'POST' && resetCreditsMatch) {
+      return handleChatgptAccountResetCreditsGet(req, res, decodeURIComponent(resetCreditsMatch[1]))
+    }
+    const resetQuotaMatch = url.pathname.match(/^\/admin\/api\/chatgpt-accounts\/([^/]+)\/reset-quota$/)
+    if (req.method === 'POST' && resetQuotaMatch) {
+      const body = await readJson(req)
+      return handleChatgptAccountResetQuota(req, res, decodeURIComponent(resetQuotaMatch[1]), body)
     }
     const switchMatch = url.pathname.match(/^\/admin\/api\/chatgpt-accounts\/([^/]+)\/switch$/)
     if (req.method === 'POST' && switchMatch) {

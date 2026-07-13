@@ -7,7 +7,7 @@ import { proxyConfig, reloadProxyConfig, saveProxyConfig, CONFIG_FILE, addRelay,
 import { getStats, resetStats } from './stats.js'
 import { sendJson, readJson } from './server-utils.js'
 import { syncRelayModels } from './sync-models.js'
-import { addChatgptAccount, deleteChatgptAccount, refreshAccountUsage, ensureFreshToken, parseAuthJson, getAccountRuntimeDiagnostics, repairAccountRuntimeState } from './chatgpt-accounts.js'
+import { addChatgptAccount, consumeAccountResetCredit, deleteChatgptAccount, refreshAccountResetCredits, refreshAccountUsage, ensureFreshToken, parseAuthJson, getAccountRuntimeDiagnostics, repairAccountRuntimeState } from './chatgpt-accounts.js'
 import { getAccountQueueDiagnostics } from './routes/chatgpt-sub.js'
 import { chinaFetch } from './china-fetch.js'
 import { getRouteDecisions } from './route-decisions.js'
@@ -15,10 +15,17 @@ import { getProviderHealth, resetProviderHealth } from './provider-health.js'
 
 function maskChatgptAccounts(accounts) {
   if (!accounts) return accounts
-  return accounts.map(({ access_token, refresh_token, id_token, ...account }) => account)
+  return accounts.map(({ access_token, refresh_token, id_token, ...account }) => {
+    if (!account.reset_credits) return account
+    const { available_count, total_earned_count, expires_at, updated_at } = account.reset_credits
+    return {
+      ...account,
+      reset_credits: { available_count, total_earned_count, expires_at, updated_at }
+    }
+  })
 }
 
-function publicProxyConfig(config) {
+export function publicProxyConfig(config) {
   const masked = { ...config }
   for (const key of ['deepseekApiKey', 'openaiApiKey']) {
     if (masked[key] && masked[key].length > 4) {
@@ -745,6 +752,77 @@ export function handleDiagnosticsGet(req, res) {
 
 export function handleConfigSnapshotsGet(req, res) {
   return sendJson(res, 200, { snapshots: listConfigSnapshots() })
+}
+
+export async function handleChatgptAccountResetCreditsGet(req, res, accountId) {
+  try {
+    const account = (proxyConfig.chatgptAccounts || []).find(a => a.id === accountId)
+    if (!account) {
+      return sendJson(res, 404, { error: { type: 'not_found_error', message: '账号不存在' } })
+    }
+    await refreshAccountResetCredits(account, chinaFetch(fetch))
+    return sendJson(res, 200, {
+      config: publicProxyConfig(proxyConfig),
+      message: 'Codex 重置次数已查询'
+    })
+  } catch (error) {
+    return sendJson(res, 502, { error: { type: 'server_error', message: error.message } })
+  }
+}
+
+export async function handleChatgptAccountsRefreshResetCreditsAll(req, res) {
+  const accounts = proxyConfig.chatgptAccounts || []
+  const errors = []
+  let cursor = 0
+  const worker = async () => {
+    while (cursor < accounts.length) {
+      const account = accounts[cursor++]
+      try {
+        await refreshAccountResetCredits(account, chinaFetch(fetch))
+      } catch (error) {
+        errors.push(`${account.label || account.id}: ${error.message}`)
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(2, accounts.length) }, worker))
+  return sendJson(res, 200, {
+    config: publicProxyConfig(proxyConfig),
+    message: errors.length ? `查询完成，部分账号失败：${errors.join('; ')}` : '全部账号的 Codex 重置次数已查询'
+  })
+}
+
+export async function handleChatgptAccountResetQuota(req, res, accountId, body) {
+  try {
+    const account = (proxyConfig.chatgptAccounts || []).find(a => a.id === accountId)
+    if (!account) {
+      return sendJson(res, 404, { error: { type: 'not_found_error', message: '账号不存在' } })
+    }
+    const result = await consumeAccountResetCredit(account, {
+      confirmed: body?.confirmed,
+      confirmedAccountId: body?.confirmedAccountId,
+      confirmedAccountLabel: body?.confirmedAccountLabel
+    }, chinaFetch(fetch))
+    return sendJson(res, 200, {
+      config: publicProxyConfig(proxyConfig),
+      message: result.refresh_warnings.length
+        ? `额度已重置，但刷新最新数据时遇到问题：${result.refresh_warnings.join('; ')}`
+        : 'Codex 额度已重置，最新额度和剩余重置次数已同步'
+    })
+  } catch (error) {
+    const status = ['NO_RESET_CREDITS', 'RESET_IN_PROGRESS'].includes(error.code)
+      ? 409
+      : [
+          'CONFIRMATION_REQUIRED',
+          'ACCOUNT_CONFIRMATION_MISMATCH',
+          'ACCOUNT_LABEL_CONFIRMATION_MISMATCH',
+          'RESET_CREDIT_INVALID'
+        ].includes(error.code)
+        ? 400
+        : 502
+    return sendJson(res, status, {
+      error: { type: status === 502 ? 'server_error' : 'invalid_request_error', message: error.message }
+    })
+  }
 }
 
 export function handleAccountBackupsGet(req, res) {

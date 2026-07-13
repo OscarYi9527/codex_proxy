@@ -14,6 +14,8 @@ import { getStats } from './stats.js'
 const OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 const OAUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token'
 const USAGE_PATH = '/backend-api/wham/usage'
+const RESET_CREDITS_PATH = '/backend-api/wham/rate-limit-reset-credits'
+const RESET_CREDITS_CONSUME_PATH = '/backend-api/wham/rate-limit-reset-credits/consume'
 const REFRESH_SAFETY_MARGIN_MS = 30 * 1000
 const DEFAULT_COOLDOWN_MS = 60 * 60 * 1000
 const MAX_REASONABLE_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000
@@ -36,6 +38,7 @@ const adaptiveConcurrency = new Map()
 const usageRefreshFailures = new Map()
 const tokenRefreshInFlight = new Map()
 const usageRefreshInFlight = new Map()
+const resetCreditConsumeInFlight = new Set()
 let roundRobinCursor = 0
 
 export const ACCOUNT_ROUTING_STRATEGIES = [
@@ -592,6 +595,203 @@ export function extractUsageFromHeaders(headers) {
   }
 }
 
+function normalizeResetCreditExpiry(value) {
+  if (value == null || value === '') return null
+  let timestamp
+  if (typeof value === 'number' || /^\d+$/.test(String(value))) {
+    const numeric = Number(value)
+    timestamp = numeric < 1e12 ? numeric * 1000 : numeric
+  } else {
+    timestamp = Date.parse(String(value))
+  }
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null
+}
+
+// The reset-credit endpoint is not part of the public OpenAI API and its
+// response has changed before. Keep the parser defensive, while preserving
+// redeem_request_id only in the short-lived return value used by consume.
+export function extractResetCredits(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null
+  const root = data.rate_limit_reset_credits || data.reset_credits || data
+  if (!root || typeof root !== 'object' || Array.isArray(root)) return null
+  const rawCredits = Array.isArray(root.credits)
+    ? root.credits
+    : (Array.isArray(root.items) ? root.items : [])
+  const credits = rawCredits.map(item => {
+    if (!item || typeof item !== 'object') return null
+    return {
+      redeem_request_id: item.redeem_request_id || item.redeemRequestId || item.id || null,
+      expires_at: normalizeResetCreditExpiry(item.expires_at ?? item.expiresAt),
+      status: item.status == null ? null : String(item.status).toLowerCase()
+    }
+  }).filter(Boolean)
+  const now = Date.now()
+  const usableCredits = credits.filter(item =>
+    !['consumed', 'redeemed', 'expired', 'used'].includes(item.status) &&
+    (!item.expires_at || Date.parse(item.expires_at) > now)
+  )
+  const availableCount = Number(
+    root.available_count ?? root.availableCount ?? root.remaining_count ?? root.remainingCount
+  )
+  const totalEarnedCount = Number(
+    root.total_earned_count ?? root.totalEarnedCount ?? root.total_count ?? root.totalCount
+  )
+  return {
+    available_count: Number.isFinite(availableCount)
+      ? Math.max(0, Math.trunc(availableCount))
+      : usableCredits.length,
+    total_earned_count: Number.isFinite(totalEarnedCount) ? Math.max(0, Math.trunc(totalEarnedCount)) : credits.length,
+    credits
+  }
+}
+
+function publicResetCredits(resetCredits, updatedAt = new Date().toISOString()) {
+  return {
+    available_count: resetCredits.available_count,
+    total_earned_count: resetCredits.total_earned_count,
+    expires_at: [...new Set(resetCredits.credits.map(item => item.expires_at).filter(Boolean))].sort(),
+    updated_at: updatedAt
+  }
+}
+
+async function prepareAccountForBackendRequest(account, fetchImpl) {
+  if (proxyConfig.activeChatgptAccountId === account.id) {
+    syncActiveAccountFromCodexHome(account)
+  } else {
+    await ensureFreshToken(account, fetchImpl)
+  }
+  return (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || account
+}
+
+async function fetchAccountResetCredits(account, fetchImpl = fetch) {
+  const currentAccount = await prepareAccountForBackendRequest(account, fetchImpl)
+  const backendOrigin = new URL(proxyConfig.chatgptResponsesUrl).origin
+  const response = await fetchImpl(backendOrigin + RESET_CREDITS_PATH, withChinaDispatcher({
+    method: 'GET',
+    signal: AbortSignal.timeout(15_000),
+    headers: {
+      authorization: `Bearer ${currentAccount.access_token}`,
+      'chatgpt-account-id': currentAccount.account_id,
+      accept: 'application/json'
+    }
+  }))
+  if (!response.ok) {
+    throw new Error(`获取 Codex 重置次数失败 (status ${response.status})`)
+  }
+  let data = null
+  try { data = await response.json() } catch {}
+  const parsed = extractResetCredits(data)
+  if (!parsed) throw new Error('Codex 重置次数接口返回了未知格式')
+  return { account: currentAccount, parsed }
+}
+
+export async function refreshAccountResetCredits(account, fetchImpl = fetch) {
+  const currentAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || account
+  try {
+    const result = await fetchAccountResetCredits(currentAccount, fetchImpl)
+    const latestAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || result.account
+    latestAccount.reset_credits = publicResetCredits(result.parsed)
+    latestAccount.reset_credits_error = null
+    persistAccount(latestAccount)
+    return latestAccount.reset_credits
+  } catch (error) {
+    const latestAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || currentAccount
+    latestAccount.reset_credits_error = String(error?.message || error).slice(0, 300)
+    persistAccount(latestAccount)
+    throw error
+  }
+}
+
+function resetCreditError(message, code) {
+  const error = new Error(message)
+  error.code = code
+  return error
+}
+
+export async function consumeAccountResetCredit(account, {
+  confirmed = false,
+  confirmedAccountId = '',
+  confirmedAccountLabel = ''
+} = {}, fetchImpl = fetch) {
+  if (confirmed !== true) throw resetCreditError('必须明确确认额度重置操作', 'CONFIRMATION_REQUIRED')
+  const expectedLabel = String(account?.label || account?.account_id || account?.id || '')
+  if (!expectedLabel || confirmedAccountLabel !== expectedLabel) {
+    throw resetCreditError('二次确认的账号名称不匹配', 'ACCOUNT_LABEL_CONFIRMATION_MISMATCH')
+  }
+  if (!account?.account_id || confirmedAccountId !== account.account_id) {
+    throw resetCreditError('二次确认的账号 ID 不匹配', 'ACCOUNT_CONFIRMATION_MISMATCH')
+  }
+  if (resetCreditConsumeInFlight.has(account.id)) {
+    throw resetCreditError('该账号正在重置额度，请勿重复提交', 'RESET_IN_PROGRESS')
+  }
+
+  resetCreditConsumeInFlight.add(account.id)
+  try {
+    // Always query again immediately before consume. Never trust the cached
+    // count or persist the one-time redeem_request_id.
+    const { account: currentAccount, parsed } = await fetchAccountResetCredits(account, fetchImpl)
+    if (parsed.available_count <= 0) {
+      throw resetCreditError('该账号当前没有可用的 Codex 额度重置次数', 'NO_RESET_CREDITS')
+    }
+    const now = Date.now()
+    const candidate = parsed.credits
+      .filter(item => {
+        if (!item.redeem_request_id) return false
+        if (['consumed', 'redeemed', 'expired', 'used'].includes(item.status)) return false
+        return !item.expires_at || Date.parse(item.expires_at) > now
+      })
+      .sort((a, b) => Date.parse(a.expires_at || '9999-12-31') - Date.parse(b.expires_at || '9999-12-31'))[0]
+    if (!candidate) {
+      throw resetCreditError('重置次数数据缺少有效的兑换标识，请先稍后重试查询', 'RESET_CREDIT_INVALID')
+    }
+
+    const backendOrigin = new URL(proxyConfig.chatgptResponsesUrl).origin
+    const response = await fetchImpl(backendOrigin + RESET_CREDITS_CONSUME_PATH, withChinaDispatcher({
+      method: 'POST',
+      signal: AbortSignal.timeout(15_000),
+      headers: {
+        authorization: `Bearer ${currentAccount.access_token}`,
+        'chatgpt-account-id': currentAccount.account_id,
+        accept: 'application/json',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({ redeem_request_id: candidate.redeem_request_id })
+    }))
+    if (!response.ok) {
+      throw new Error(`Codex 额度重置失败 (status ${response.status})`)
+    }
+
+    const latestAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || currentAccount
+    latestAccount.last_quota_reset_at = new Date().toISOString()
+    latestAccount.reset_credits = publicResetCredits({
+      ...parsed,
+      available_count: Math.max(0, parsed.available_count - 1),
+      credits: parsed.credits.filter(item => item !== candidate)
+    }, latestAccount.last_quota_reset_at)
+    persistAccount(latestAccount)
+
+    const refreshWarnings = []
+    try {
+      const refreshedAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || latestAccount
+      await refreshAccountUsage(refreshedAccount, fetchImpl)
+    } catch (error) {
+      refreshWarnings.push(error?.message || String(error))
+    }
+    try {
+      const refreshedAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || latestAccount
+      await refreshAccountResetCredits(refreshedAccount, fetchImpl)
+    } catch (error) {
+      refreshWarnings.push(error?.message || String(error))
+    }
+    return {
+      reset_at: latestAccount.last_quota_reset_at,
+      refresh_warnings: refreshWarnings
+    }
+  } finally {
+    resetCreditConsumeInFlight.delete(account.id)
+  }
+}
+
 export function applyAccountUsage(accountId, usage) {
   if (!usage) return
   const account = (proxyConfig.chatgptAccounts || []).find(a => a.id === accountId)
@@ -685,11 +885,7 @@ function syncActiveAccountFromCodexHome(account) {
 }
 
 async function refreshAccountUsageOnce(account, fetchImpl = fetch) {
-  if (proxyConfig.activeChatgptAccountId === account.id) {
-    syncActiveAccountFromCodexHome(account)
-  } else {
-    await ensureFreshToken(account, fetchImpl)
-  }
+  account = await prepareAccountForBackendRequest(account, fetchImpl)
   const base = new URL(proxyConfig.chatgptResponsesUrl).origin
   const response = await fetchImpl(base + USAGE_PATH, withChinaDispatcher({
     method: 'GET',

@@ -4,12 +4,18 @@ Windows 上的 Codex CLI / VS Code 多上游路由代理。它在保留原生 Re
 工具调用和流式输出的同时，统一接入 ChatGPT 订阅账号池、OpenAI API、DeepSeek
 和 OpenAI 兼容中转节点，并提供本地管理后台、稳定性保护与可观测性。
 
+当前版本：**2.1.0**
+
 ## 主要能力
 
 - ChatGPT 账号池按 5 小时/每周剩余额度选择账号，低额度账号自动避让。
 - 同一 `session-id` / `thread-id` 默认粘住最后成功账号，兼顾上下文缓存和稳定性。
 - 账号池支持优先级、轮询、额度、最少使用、延迟、可靠性、权重、随机和最后成功路径 9 种可选策略。
 - 管理后台支持拖拽调整账号优先级，并可设置每账号路由权重和低额度阈值。
+- 账号池提供“条状简约型”和“卡片全面型”两种视图，浏览器会记住上次选择。
+- 简约视图按固定列轨道纵向对齐账号、5 小时/每周额度、重置时间、性能、路由状态和快捷操作；未启用路由的账号使用灰色状态展示。
+- 支持按账号或全池查询 Codex 额度重置次数，并在有可用次数时从账号卡片执行额度重置。
+- 额度重置要求输入完整账号名称并最终确认；服务端再次校验账号名称、账号 ID 和最新可用次数，避免误操作或使用过期缓存。
 - 账号支持本地改名；新登录/导入账号会立即尝试同步额度，并明确显示同步中、失败或待重试状态。
 - 新登录或手动导入的账号可设为“仅保存”，不会切换本机 Codex，也不会参与代理路由；需要时可单独启用。
 - 合规稳定模式限制单账号并发为 3、忙碌请求进入本地等待队列、单请求最多尝试 2 个账号，并优先使用 30 分钟内的新鲜额度数据。
@@ -289,6 +295,9 @@ powershell -ExecutionPolicy Bypass -File `
 | `GET` | `/admin/api/stats` | 获取 Provider、模型和账号健康统计 |
 | `GET` | `/admin/api/diagnostics` | 获取不含 Token/邮箱的本地诊断报告 |
 | `GET` | `/admin/api/config-snapshots` | 列出最近配置快照 |
+| `POST` | `/admin/api/chatgpt-accounts/:id/reset-credits` | 查询指定账号的 Codex 重置次数 |
+| `POST` | `/admin/api/chatgpt-accounts/refresh-reset-credits-all` | 查询账号池全部账号的重置次数 |
+| `POST` | `/admin/api/chatgpt-accounts/:id/reset-quota` | 二次确认后消耗一次机会并重置额度 |
 | `POST` | `/admin/api/config-rollback` | 回滚所选配置快照 |
 | `POST` | `/admin/api/runtime-repair` | 清理异常冷却与过期租约 |
 | `POST` | `/admin/api/proxy/restart` | 优雅重启代理 |
@@ -333,6 +342,8 @@ powershell -ExecutionPolicy Bypass -File `
 - ChatGPT 官方隔离登录、账号仅保存/启用、拖拽优先级和 9 种路由策略
 - 账号改名、首次额度自动同步、独立账号备份以及只补回缺失账号的安全恢复
 - 5 小时/每周额度、趋势预测、1h/24h 成功率、P50/P95 延迟和双层冷却
+- 账号池简约/全面双视图、固定列对齐、额度重置时间和灰色停用状态
+- Codex 重置次数单账号/全池查询，以及带账号名称和账号 ID 双重校验的额度重置
 - 自适应并发、等待队列、请求租约、设置级安全回滚和优雅重启
 - 最近路由决策、Provider 熔断状态、恢复倒计时和手动重置
 - DPAPI + AES-256-GCM 凭据保护状态
@@ -361,8 +372,27 @@ API 端点：
 | POST | /admin/api/config-rollback | 仅回滚设置，不回退账号 Token/API Key |
 | GET | /admin/api/account-backups | 获取账号备份列表 |
 | POST | /admin/api/account-backups/restore | 合并恢复缺失账号，不覆盖现有凭据 |
+| POST | /admin/api/chatgpt-accounts/:id/reset-credits | 查询指定账号的 Codex 重置次数 |
+| POST | /admin/api/chatgpt-accounts/refresh-reset-credits-all | 查询全部账号的 Codex 重置次数 |
+| POST | /admin/api/chatgpt-accounts/:id/reset-quota | 经二次确认后重置指定账号额度 |
 | GET | /admin/api/resilience | 获取 Provider 熔断状态 |
 | DELETE | /admin/api/resilience | 重置 Provider 熔断状态 |
+
+#### Codex 额度重置
+
+重置次数接口属于 ChatGPT Codex 订阅后端能力，不是公开 OpenAI API；不同套餐或账号
+可能返回不可用。管理后台只持久化可用次数、总次数、到期时间和查询时间，不会把
+一次性的 `redeem_request_id` 返回前端或写入公开配置。
+
+执行重置时必须完成以下保护：
+
+1. 先查询并确认账号存在可用重置次数。
+2. 输入完整账号名称。
+3. 在最终系统提示中再次确认。
+4. 服务端校验账号名称和上游账号 ID。
+5. 提交前重新查询最新次数，再消耗最早到期的有效机会。
+
+额度重置会消耗一次机会且无法撤销。管理接口仅应通过 localhost 使用。
 
 配置文件支持以下字段（均可通过管理后台修改）：
 | 字段 | 说明 |

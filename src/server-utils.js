@@ -38,7 +38,7 @@ export function proxyMetaHeaders(res, extra = {}) {
 export function sendJson(res, status, data, headers = {}) {
   const text = JSON.stringify(data)
   res.writeHead(status, {
-    'content-type': 'application/json',
+    'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(text),
     ...proxyMetaHeaders(res),
     ...headers

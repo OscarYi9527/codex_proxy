@@ -734,6 +734,7 @@ describe('原子配置写入和管理 API', () => {
       const configResponse = await fetch(base + '/admin/api/config')
       const configText = await configResponse.text()
       assert.strictEqual(configResponse.status, 200)
+      assert.match(configResponse.headers.get('content-type'), /charset=utf-8/i)
       assert.ok(!configText.includes('"access_token"'))
       assert.ok(!configText.includes('"refresh_token"'))
       assert.ok(!configText.includes('"id_token"'))

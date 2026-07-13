@@ -1,5 +1,5 @@
 const API = '/admin/api'
-let cfg = {}, statsData = { providers: {} }, diagnosticsData = { accounts: [], queue: {}, config_snapshots: [], account_backups: [], recent_route_decisions: [], credential_protection: {}, circuits: [] }, modelCatalog = [], activePage = location.hash.slice(1) || 'overview'
+let cfg = {}, statsData = { providers: {} }, diagnosticsData = { accounts: [], queue: {}, config_snapshots: [], account_backups: [], recent_route_decisions: [], provider_health: {providers:{}}, credential_protection: {}, circuits: [] }, modelCatalog = [], activePage = location.hash.slice(1) || 'overview'
 let pingResults = {}, modal = null, loginPoll = null, accountsPoll = null, draggedAccountId = null
 
 const icons = {
@@ -77,9 +77,19 @@ function providerRows(){
     ['relay','中转节点',`${(cfg.relays||[]).length} 个兼容节点`,'relay',(cfg.relays||[]).length?'已配置':'未配置']
   ]
   return providers.map(([logo,name,sub,key,state])=>{
-    const p=(statsData.providers||{})[key]||{}, result=pingResults[key], status=result?(result.ok?'正常':'异常'):state
-    const statusClass=status==='正常'?'':status==='已配置'?'warn':'off'
-    return `<div class="provider-row"><div class="provider-name"><span class="provider-logo ${logo}">${logo==='chatgpt'?'G':logo==='openai'?'AI':logo==='deepseek'?'D':'R'}</span><div><strong>${name}</strong><small>${sub}</small></div></div><div class="latency-cell"><span class="status ${statusClass}"><i></i>${status}</span>${result?`<div class="cell-sub">${result.latency||0} ms</div>`:'<div class="cell-sub">尚未执行连通性检测</div>'}</div><div class="usage-cell"><span class="cell-sub">${fmt(p.requests)} 次请求</span><div class="mini-bar"><i style="width:${Math.min(100,(p.requests||0)/Math.max(1,totals().requests)*100)}%"></i></div></div><button class="btn btn-sm" onclick="pingChannel('${key}')">${svg('pulse')}检测</button></div>`
+    const p=(statsData.providers||{})[key]||{}, result=pingResults[key]
+    const healthProviders=diagnosticsData.provider_health?.providers||{}
+    const relayHealth=key==='relay'?Object.entries(healthProviders).filter(([id])=>id.startsWith('relay:')).map(([,value])=>value):[]
+    const persisted=key==='relay'
+      ? (relayHealth.find(item=>item.state==='unhealthy'||item.state==='auth_error')||relayHealth.find(item=>item.state==='degraded')||relayHealth[0])
+      : healthProviders[key]
+    const healthLabel={healthy:'正常',degraded:'受限',auth_error:'鉴权异常',unhealthy:'异常',unknown:'未知'}
+    const status=result?(result.ok?'正常':'异常'):(persisted?healthLabel[persisted.state]||'未知':state)
+    const statusClass=status==='正常'?'':status==='已配置'||status==='受限'||status==='未知'?'warn':'off'
+    const latency=result?.latency??persisted?.last_latency_ms
+    const checked=result?'刚刚检测':persisted?.last_checked_at?`最近 ${new Date(persisted.last_checked_at).toLocaleString('zh-CN')}`:'尚无健康记录'
+    const healthTitle=persisted?.last_error?` title="${esc(persisted.last_error)}"`:''
+    return `<div class="provider-row"><div class="provider-name"><span class="provider-logo ${logo}">${logo==='chatgpt'?'G':logo==='openai'?'AI':logo==='deepseek'?'D':'R'}</span><div><strong>${name}</strong><small>${sub}</small></div></div><div class="latency-cell"${healthTitle}><span class="status ${statusClass}"><i></i>${status}</span><div class="cell-sub">${latency!=null?`${fmt(latency)} ms · `:''}${checked}</div></div><div class="usage-cell"><span class="cell-sub">${fmt(p.requests)} 次请求</span><div class="mini-bar"><i style="width:${Math.min(100,(p.requests||0)/Math.max(1,totals().requests)*100)}%"></i></div></div><button class="btn btn-sm" onclick="pingChannel('${key}')">${svg('pulse')}检测</button></div>`
   }).join('')
 }
 function renderOverview(){
@@ -228,7 +238,7 @@ function renderSettings(){
   const accountBackups=diagnosticsData.account_backups||[]
   const accountBackupOptions=accountBackups.map(item=>`<option value="${esc(item.name)}">${new Date(item.created_at).toLocaleString('zh-CN')} · ${item.account_count==null?'格式待验证':item.account_count+' 个账号'}</option>`).join('')
   const accountRestore=`<div class="card-body"><div class="field"><label>账号备份 <span class="hint">删除和恢复前自动创建</span></label><select id="account_backup">${accountBackupOptions||'<option value="">暂无账号备份</option>'}</select><span class="hint">恢复仅补回当前缺失的账号，不覆盖现有账号、Token、名称或活动账号。敏感字段由当前 Windows 用户的 DPAPI 密钥加密。</span></div></div><div class="form-footer">${button('恢复缺失账号','refresh','restoreAccountBackup()','btn-danger')}</div>`
-  const operations=`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>脱敏诊断报告</b><div class="cell-sub">包含队列、并发、额度和运行状态，不包含 Token</div></div>${button('下载报告','download','downloadDiagnostics()')}</div><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>异常状态修复</b><div class="cell-sub">清理过期租约和异常冷却，不修改账号凭据</div></div>${button('立即检查','shield','repairRuntime()')}</div><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>优雅重启代理</b><div class="cell-sub">停止接收新请求，等待当前请求完成后由看门狗恢复</div></div>${button('优雅重启','refresh','gracefulRestartProxy()','btn-danger')}</div></div>`
+  const operations=`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>脱敏诊断报告</b><div class="cell-sub">包含队列、并发、额度和运行状态，不包含 Token</div></div>${button('下载报告','download','downloadDiagnostics()')}</div><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>异常状态修复</b><div class="cell-sub">清理过期租约和异常冷却，不修改账号凭据</div></div>${button('立即检查','shield','repairRuntime()')}</div><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>Provider 健康历史</b><div class="cell-sub">清空持久化的最近连通状态，不影响熔断或配置</div></div>${button('清空健康历史','refresh','resetProviderHealth()')}</div><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>优雅重启代理</b><div class="cell-sub">停止接收新请求，等待当前请求完成后由看门狗恢复</div></div>${button('优雅重启','refresh','gracefulRestartProxy()','btn-danger')}</div></div>`
   const circuits=diagnosticsData.circuits||[]
   const openCircuits=circuits.filter(item=>item.state!=='closed')
   const circuitBody=`<div class="card-body">${circuits.length?circuits.map(item=>{const remaining=item.state==='open'?Math.max(0,30-Math.floor((Date.now()-Number(item.openedAt||0))/1000)):0;return `<div class="provider-row" style="grid-template-columns:1fr auto"><div><b>${esc(item.name)}</b><div class="cell-sub">${item.lastFailure?.message?esc(item.lastFailure.message):'暂无最近错误'}</div></div><span class="status ${item.state==='closed'?'':item.state==='half-open'?'warn':'off'}"><i></i>${item.state==='closed'?'正常':item.state==='half-open'?'正在探测':`熔断中 · 约 ${remaining} 秒后探测`}</span></div>`}).join(''):'<span class="cell-sub">尚无 Provider 熔断记录</span>'}</div><div class="form-footer">${button('重置熔断状态','refresh','resetCircuits()',openCircuits.length?'btn-danger':'')}</div>`
@@ -494,6 +504,10 @@ async function gracefulRestartProxy(){
 async function resetCircuits(){
   if(!confirm('确定重置全部 Provider 熔断状态吗？如果上游仍不可用，熔断会再次自动开启。'))return
   try{const r=await fetch(API+'/resilience',{method:'DELETE'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'重置失败');diagnosticsData.circuits=d.circuits||[];render();toast('熔断状态已重置')}catch(e){toast(e.message,'error')}
+}
+async function resetProviderHealth(){
+  if(!confirm('确定清空 Provider 健康历史吗？这不会修改配置、账号或当前熔断状态。'))return
+  try{const r=await fetch(API+'/provider-health',{method:'DELETE'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'清空失败');diagnosticsData.provider_health=d.provider_health||{providers:{}};render();toast(d.message||'Provider 健康历史已清空')}catch(e){toast(e.message,'error')}
 }
 async function resetStats(){if(!confirm('确定清空全部本地用量统计吗？'))return;try{const r=await fetch(API+'/stats',{method:'DELETE'});statsData=await r.json();render();toast('统计数据已清空')}catch(e){toast(e.message,'error')}}
 function toast(message,type='success'){document.querySelector('.toast')?.remove();const el=document.createElement('div');el.className='toast '+type;el.innerHTML=`${svg(type==='error'?'x':'check')}<span>${esc(message)}</span>`;document.body.appendChild(el);setTimeout(()=>el.remove(),2800)}

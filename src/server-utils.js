@@ -2,6 +2,7 @@
 // Used by the main server and all route handlers
 
 import { assertCircuitAvailable, recordCircuitResult } from './circuit-breaker.js'
+import { recordProviderOutcome } from './provider-health.js'
 
 const MAX_BODY_BYTES = 16 * 1024 * 1024
 
@@ -115,9 +116,15 @@ export async function fetchWithRetry(fetchImpl, url, options, maxAttempts = 5) {
     const attemptAbort = attemptSignal(fetchOptions.signal, attemptTimeoutMs)
     let retryDelayMs = Math.round(500 * Math.pow(2, attempt) * (0.85 + Math.random() * 0.3))
     let preserveSignalForResponseBody = false
+    const attemptStartedAt = Date.now()
     try {
       const response = await fetchImpl(url, { ...fetchOptions, signal: attemptAbort.signal })
       recordCircuitResult(circuitKey, { status: response.status })
+      recordProviderOutcome(circuitKey, {
+        status: response.status,
+        latencyMs: Date.now() - attemptStartedAt,
+        source: 'request'
+      })
       if (retryStatuses.includes(response.status) && attempt < maxAttempts - 1) {
         const body = await response.text().catch(() => '')
         await response.body?.cancel().catch(() => {})
@@ -132,7 +139,16 @@ export async function fetchWithRetry(fetchImpl, url, options, maxAttempts = 5) {
       }
     } catch (error) {
       lastError = error
-      if (error.code !== 'CIRCUIT_OPEN') recordCircuitResult(circuitKey, { error })
+      const callerAborted = fetchOptions.signal?.aborted === true
+      if (error.code !== 'CIRCUIT_OPEN' && !callerAborted) recordCircuitResult(circuitKey, { error })
+      if (error.code !== 'CIRCUIT_OPEN' && !callerAborted) {
+        recordProviderOutcome(circuitKey, {
+          latencyMs: Date.now() - attemptStartedAt,
+          error,
+          source: 'request'
+        })
+      }
+      if (callerAborted) throw error
       if (attempt < maxAttempts - 1 && isRetryableError(error)) {
         console.error('[codex-proxy] fetch error (attempt %d/%d): %s', attempt + 1, maxAttempts, error.message)
       } else {

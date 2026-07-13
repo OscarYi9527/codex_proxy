@@ -17,7 +17,8 @@ import { handleDeepSeek, handleDeepSeekChatCompletions } from './routes/deepseek
 import { handleRelay, handleRelayChatCompletions } from './routes/relay.js'
 import { handlePing, handlePingAll } from './routes/ping.js'
 import { saveStats } from './stats.js'
-import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleAccountBackupsGet, handleConfigSnapshotsGet, handleAccountBackupRestore, handleConfigRollback, handleRuntimeRepair, handleProxyRestart } from './admin.js'
+import { initializeProviderHealth, saveProviderHealth } from './provider-health.js'
+import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleAccountBackupsGet, handleConfigSnapshotsGet, handleAccountBackupRestore, handleConfigRollback, handleProviderHealthReset, handleRuntimeRepair, handleProxyRestart } from './admin.js'
 
 const PORT = Number(process.env.CODEX_PROXY_PORT || 47892)
 const HOST = process.env.CODEX_PROXY_HOST || '127.0.0.1'
@@ -318,6 +319,7 @@ export function createServer({ fetchImpl = fetch } = {}) {
     }
     if (req.method === 'POST' && url.pathname === '/admin/api/config-rollback') return handleConfigRollback(req, res)
     if (req.method === 'POST' && url.pathname === '/admin/api/runtime-repair') return handleRuntimeRepair(req, res)
+    if (req.method === 'DELETE' && url.pathname === '/admin/api/provider-health') return handleProviderHealthReset(req, res)
     if (req.method === 'POST' && url.pathname === '/admin/api/proxy/restart') return handleProxyRestart(req, res)
     if (req.method === 'GET' && url.pathname === '/admin/api/resilience') {
       return sendJson(res, 200, { circuits: getCircuitStates() })
@@ -343,6 +345,7 @@ const isMain = process.argv[1]
   : false
 if (isMain) {
   const credentialProtection = initializeCredentialProtection()
+  initializeProviderHealth(path.join(PROXY_DIR, '..'))
   console.log('[codex-proxy] credential protection:', credentialProtection.enabled ? 'Windows DPAPI + AES-256-GCM' : 'disabled')
   acquireInstanceLock()
   const server = createServer()
@@ -353,6 +356,7 @@ if (isMain) {
     console.log(`[codex-proxy] ${signal} received; draining active requests`)
     releaseInstanceLock()
     saveStats()
+    saveProviderHealth()
     server.close(error => {
       if (error) console.error('[codex-proxy] graceful shutdown error:', error.message)
       process.exit(error ? 1 : 0)

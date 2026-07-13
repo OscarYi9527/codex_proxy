@@ -15,6 +15,7 @@ import { findDuplicateAccount, findPrivateBrowser, parseDeviceAuthOutput, privat
 import { acquireActiveAccountWithRetry, refreshBelowReserveAccounts } from '../src/routes/chatgpt-sub.js'
 import { getRouteDecisions, recordRouteDecision, resetRouteDecisions } from '../src/route-decisions.js'
 import { decryptConfigSecrets, encryptConfigSecrets, isEncryptedSecret } from '../src/credential-store.js'
+import { getProviderHealth, recordProviderOutcome, resetProviderHealth } from '../src/provider-health.js'
 
 describe('模型解析', () => {
   it('解析 body.model', () => {
@@ -141,6 +142,31 @@ describe('路由决策记录', () => {
     assert.strictEqual(decision.request_id, 'req-1')
     assert.strictEqual(decision.accounts[1].reason, '仅保存，未启用路由')
     assert.strictEqual(decision.accounts[1].access_token, undefined)
+  })
+})
+
+describe('Provider 健康状态', () => {
+  it('区分正常、受限、鉴权异常和上游故障', () => {
+    resetProviderHealth()
+    recordProviderOutcome('openai-api', { status: 200, latencyMs: 123 })
+    assert.strictEqual(getProviderHealth().providers['openai-api'].state, 'healthy')
+    recordProviderOutcome('openai-api', { status: 429, latencyMs: 50 })
+    assert.strictEqual(getProviderHealth().providers['openai-api'].state, 'degraded')
+    recordProviderOutcome('openai-api', { status: 401, latencyMs: 40 })
+    assert.strictEqual(getProviderHealth().providers['openai-api'].state, 'auth_error')
+    recordProviderOutcome('openai-api', { error: new Error('network failed'), latencyMs: 5000 })
+    const health = getProviderHealth().providers['openai-api']
+    assert.strictEqual(health.state, 'unhealthy')
+    assert.strictEqual(health.consecutive_failures, 1)
+    assert.strictEqual(health.last_error, 'network failed')
+  })
+
+  it('后续成功会清零连续失败次数', () => {
+    recordProviderOutcome('openai-api', { status: 204, latencyMs: 80 })
+    const health = getProviderHealth().providers['openai-api']
+    assert.strictEqual(health.state, 'healthy')
+    assert.strictEqual(health.consecutive_failures, 0)
+    assert.ok(health.last_success_at)
   })
 })
 
@@ -477,6 +503,7 @@ describe('稳定重试策略', () => {
   })
 
   it('调用方取消后不会继续发起上游请求', async () => {
+    resetProviderHealth()
     const controller = new AbortController()
     controller.abort(new Error('Client disconnected'))
     let calls = 0
@@ -484,10 +511,11 @@ describe('稳定重试策略', () => {
       fetchWithRetry(async () => {
         calls++
         return new Response('{}')
-      }, 'https://example.invalid', { signal: controller.signal, attemptTimeoutMs: 100 }, 2),
+      }, 'https://example.invalid', { signal: controller.signal, attemptTimeoutMs: 100, circuitKey: 'cancelled-provider' }, 2),
       /Client disconnected/
     )
     assert.strictEqual(calls, 0)
+    assert.strictEqual(getProviderHealth().providers['cancelled-provider'], undefined)
   })
 
   it('账号池可以让 429 立即交给账号轮换而不原账号重试', async () => {

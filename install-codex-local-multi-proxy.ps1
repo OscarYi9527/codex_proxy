@@ -30,6 +30,7 @@ $FilesToInstall = @(
     'src\models.js',
     'src\server-utils.js',
     'src\route-decisions.js',
+    'src\provider-health.js',
     'src\server.js',
     'src\stats.js',
     'src\sync-models.js',

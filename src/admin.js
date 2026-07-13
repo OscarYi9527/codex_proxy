@@ -11,6 +11,7 @@ import { addChatgptAccount, deleteChatgptAccount, refreshAccountUsage, ensureFre
 import { getAccountQueueDiagnostics } from './routes/chatgpt-sub.js'
 import { chinaFetch } from './china-fetch.js'
 import { getRouteDecisions } from './route-decisions.js'
+import { getProviderHealth, resetProviderHealth } from './provider-health.js'
 
 function maskChatgptAccounts(accounts) {
   if (!accounts) return accounts
@@ -736,6 +737,7 @@ export function handleDiagnosticsGet(req, res) {
     queue: getAccountQueueDiagnostics(),
     accounts: getAccountRuntimeDiagnostics(),
     recent_route_decisions: getRouteDecisions(30),
+    provider_health: getProviderHealth(),
     config_snapshots: listConfigSnapshots(),
     account_backups: listAccountBackups()
   })
@@ -787,6 +789,13 @@ export function handleRuntimeRepair(req, res) {
   return sendJson(res, 200, {
     repaired,
     message: repaired ? `已修复 ${repaired} 个异常账号状态` : '未发现需要修复的异常状态'
+  })
+}
+
+export function handleProviderHealthReset(req, res) {
+  return sendJson(res, 200, {
+    provider_health: resetProviderHealth(),
+    message: 'Provider 健康历史已清空'
   })
 }
 

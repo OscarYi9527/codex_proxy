@@ -36,6 +36,7 @@ patch-official-codex-app-model-filter.js
 # local secrets / runtime artifacts (new src/** layout)
 codex-proxy-config.json
 codex-proxy-stats.json
+codex-proxy-provider-health.json
 models-test.json
 .credential-key.dpapi.json
 .config-backups/

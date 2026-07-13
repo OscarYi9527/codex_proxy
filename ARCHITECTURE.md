@@ -31,6 +31,7 @@ flowchart LR
 | `src/config.js` | 配置加载、原子写入、快照和回滚 |
 | `src/credential-store.js` | Windows DPAPI 密钥封装与 AES-256-GCM 凭据加密 |
 | `src/route-decisions.js` | 最近路由决策的内存环形记录 |
+| `src/provider-health.js` | Provider 最近结果、错误和延迟的轻量持久化 |
 | `src/stats.js` | Provider/模型/账号健康统计与近期窗口 |
 | `src/circuit-breaker.js` | Provider 级熔断和半开恢复 |
 | `src/admin.js` | 本机管理 API、隔离登录、诊断和运维操作 |
@@ -90,6 +91,7 @@ flowchart TD
 - 普通模型限流只冷却“账号 + 模型”；账户/套餐级限流冷却整个账号。
 - 冷却最长 7 天，明显异常或过期状态会自动修复。
 - 429 不计入 Provider 熔断；网络错误、408 和 5xx 由 Provider 熔断器处理。
+- 实际请求与手动 ping 都更新 Provider 健康记录；客户端主动取消不会计为上游故障。
 
 ## 持久化与安全
 

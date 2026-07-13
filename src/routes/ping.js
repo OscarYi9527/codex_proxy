@@ -2,6 +2,7 @@ import { proxyConfig } from '../config.js'
 import { sendJson } from '../server-utils.js'
 import { chinaFetch, withChinaDispatcher } from '../china-fetch.js'
 import { resolveOpenAIUpstream } from './openai-api.js'
+import { recordProviderOutcome } from '../provider-health.js'
 
 // DeepSeek 连通性检查
 async function pingDeepSeek(fetchImpl) {
@@ -132,12 +133,27 @@ export async function handlePing(req, res, body) {
 
   if (pingModelId) {
     const result = await pingModel(req.fetchImpl, pingModelId)
+    const provider = pingModelId.startsWith('relay-')
+      ? `relay:${pingModelId.split('-')[1]}`
+      : (pingModelId.startsWith('openai-api-') ? 'openai-api' : null)
+    recordProviderOutcome(provider, {
+      status: result.status,
+      latencyMs: result.latency,
+      error: result.ok ? null : result.error || `HTTP ${result.status || 0}`,
+      source: 'manual_ping'
+    })
     return sendJson(res, result.ok ? 200 : 502, { ping: pingModelId, ...result })
   }
 
   if (type === 'relay') {
     if (!relayId) return sendJson(res, 400, { error: 'relayId 必填' })
     const result = await pingRelay(req.fetchImpl, relayId)
+    recordProviderOutcome(`relay:${relayId}`, {
+      status: result.status,
+      latencyMs: result.latency,
+      error: result.ok ? null : result.error || `HTTP ${result.status || 0}`,
+      source: 'manual_ping'
+    })
     return sendJson(res, result.ok ? 200 : 502, { ping: '中转站:' + relayId, ...result })
   }
 
@@ -146,6 +162,12 @@ export async function handlePing(req, res, body) {
   if (!fn) return sendJson(res, 400, { error: '未知类型: ' + type + ', 可选: deepseek, openai-api, chatgpt-sub, relay, model' })
 
   const result = await fn(req.fetchImpl)
+  recordProviderOutcome(type, {
+    status: result.status,
+    latencyMs: result.latency,
+    error: result.ok ? null : result.error || `HTTP ${result.status || 0}`,
+    source: 'manual_ping'
+  })
   const names = { 'deepseek': 'DeepSeek', 'openai-api': 'OpenAI API', 'chatgpt-sub': 'ChatGPT 订阅' }
   return sendJson(res, result.ok ? 200 : 502, { ping: names[type] || type, ...result })
 }
@@ -159,6 +181,14 @@ export async function handlePingAll(req, res) {
   }
   for (const relay of (proxyConfig.relays || [])) {
     results['relay:' + relay.id] = await pingRelay(req.fetchImpl, relay.id)
+  }
+  for (const [provider, result] of Object.entries(results)) {
+    recordProviderOutcome(provider, {
+      status: result.status,
+      latencyMs: result.latency,
+      error: result.ok ? null : result.error || `HTTP ${result.status || 0}`,
+      source: 'manual_ping'
+    })
   }
   const allOk = Object.values(results).every(r => r.ok)
   return sendJson(res, allOk ? 200 : 502, { results, allOk })

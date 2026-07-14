@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert'
+import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -11,12 +12,13 @@ import { assertCircuitAvailable, getCircuitStates, recordCircuitResult, resetCir
 import { fetchWithRetry, proxyMetaHeaders, retryAfterMs } from '../src/server-utils.js'
 import { redactSecrets } from '../src/logger.js'
 import { createServer } from '../src/server.js'
-import { findDuplicateAccount, findPrivateBrowser, parseDeviceAuthOutput, privateBrowserArgs, publicProxyConfig, resolveCodexLaunch, summarizeCodexLaunchFailure } from '../src/admin.js'
-import { acquireActiveAccountWithRetry, refreshBelowReserveAccounts } from '../src/routes/chatgpt-sub.js'
+import { findDuplicateAccount, findPrivateBrowser, getChatgptLoginPreflight, parseDeviceAuthOutput, privateBrowserArgs, publicProxyConfig, resolveCodexLaunch, summarizeCodexLaunchFailure } from '../src/admin.js'
+import { acquireActiveAccountWithRetry, handleChatGptSub, poolAvailabilityDetails, refreshBelowReserveAccounts, sendWithAccountRotation } from '../src/routes/chatgpt-sub.js'
 import { getRouteDecisions, recordRouteDecision, resetRouteDecisions } from '../src/route-decisions.js'
 import { decryptConfigSecrets, encryptConfigSecrets, isEncryptedSecret } from '../src/credential-store.js'
 import { getProviderHealth, recordProviderOutcome, resetProviderHealth } from '../src/provider-health.js'
 import { attachHttpErrorGuide, getHttpErrorGuide, listHttpErrorGuides } from '../src/error-guide.js'
+import { compareRuntimeTrees } from '../src/runtime-info.js'
 
 describe('模型解析', () => {
   it('解析 body.model', () => {
@@ -79,6 +81,35 @@ describe('安全配置快照', () => {
     assert.deepStrictEqual(restored.chatgpt_accounts, current.chatgpt_accounts)
     assert.strictEqual(restored.relays[0].name, '旧节点')
     assert.strictEqual(restored.relays[0].api_key, 'relay-current')
+  })
+})
+
+describe('运行版本与部署一致性', () => {
+  it('逐文件识别工作区和安装目录是否一致', () => {
+    const source = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-runtime-source-'))
+    const install = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-runtime-install-'))
+    try {
+      fs.writeFileSync(path.join(source, 'a.js'), 'same')
+      fs.writeFileSync(path.join(install, 'a.js'), 'same')
+      fs.writeFileSync(path.join(source, 'b.js'), 'new')
+      fs.writeFileSync(path.join(install, 'b.js'), 'old')
+      fs.writeFileSync(path.join(source, 'c.js'), 'missing install')
+
+      const mismatch = compareRuntimeTrees(source, install, ['a.js', 'b.js', 'c.js'])
+      assert.strictEqual(mismatch.synchronized, false)
+      assert.strictEqual(mismatch.checked_files, 3)
+      assert.deepStrictEqual(
+        mismatch.differences.map(item => [item.file, item.status]),
+        [['b.js', 'content_mismatch'], ['c.js', 'missing_installation']]
+      )
+
+      fs.copyFileSync(path.join(source, 'b.js'), path.join(install, 'b.js'))
+      fs.copyFileSync(path.join(source, 'c.js'), path.join(install, 'c.js'))
+      assert.strictEqual(compareRuntimeTrees(source, install, ['a.js', 'b.js', 'c.js']).synchronized, true)
+    } finally {
+      fs.rmSync(source, { recursive: true, force: true })
+      fs.rmSync(install, { recursive: true, force: true })
+    }
   })
 })
 
@@ -832,6 +863,237 @@ describe('稳定重试策略', () => {
     }
   })
 
+  it('所有账号冷却时不会选择账号', () => {
+    const original = proxyConfig.chatgptAccounts
+    proxyConfig.chatgptAccounts = [
+      { id: 'cool-a', status: 'cooldown', cooldown_until: Date.now() + 60_000, routing_enabled: true },
+      { id: 'cool-b', status: 'cooldown', cooldown_until: Date.now() + 120_000, routing_enabled: true }
+    ]
+    try {
+      assert.strictEqual(pickActiveAccount(), null)
+    } finally {
+      proxyConfig.chatgptAccounts = original
+    }
+  })
+
+  it('并发持续占满时队列按配置超时并清理票据', async () => {
+    const original = proxyConfig.chatgptAccounts
+    proxyConfig.chatgptAccounts = [{ id: 'busy-timeout', status: 'active', routing_enabled: true }]
+    resetAccountRequestCounts()
+    try {
+      assert.strictEqual(reserveAccountRequest('busy-timeout', 'busy-1'), true)
+      assert.strictEqual(reserveAccountRequest('busy-timeout', 'busy-2'), true)
+      assert.strictEqual(reserveAccountRequest('busy-timeout', 'busy-3'), true)
+      const account = await acquireActiveAccountWithRetry(
+        { aborted: false, headers: {}, requestId: 'queue-timeout-test' },
+        'gpt-test',
+        null,
+        'queue-timeout-session',
+        async () => {},
+        { retryMs: 1, retryCount: 1 }
+      )
+      assert.strictEqual(account, null)
+      assert.strictEqual(getRouteDecisions(1)[0].outcome, 'queue_timeout')
+    } finally {
+      resetAccountRequestCounts()
+      proxyConfig.chatgptAccounts = original
+    }
+  })
+
+  it('429 会切换账号且单请求最多请求两个账号', async () => {
+    const original = proxyConfig.chatgptAccounts
+    const accounts = [
+      { id: 'rate-a', account_id: 'up-a', access_token: 'a', status: 'active' },
+      { id: 'rate-b', account_id: 'up-b', access_token: 'b', status: 'active' },
+      { id: 'rate-c', account_id: 'up-c', access_token: 'c', status: 'active' }
+    ]
+    proxyConfig.chatgptAccounts = accounts
+    const queue = [...accounts]
+    let fetchCalls = 0
+    const cooled = []
+    const released = []
+    try {
+      const request = Object.assign(new EventEmitter(), {
+        headers: {},
+        requestId: 'rate-matrix',
+        accountLeaseId: 'lease-rate',
+        clientAbortSignal: new AbortController().signal
+      })
+      const result = await sendWithAccountRotation(
+        request,
+        async () => {},
+        '{}',
+        { model: 'gpt-test', tryResponsesLite: false },
+        {
+          acquireAccount: async () => queue.shift() || null,
+          ensureToken: async () => {},
+          fetchRetry: async () => {
+            fetchCalls++
+            return new Response(JSON.stringify({ error: { code: 'rate_limit' } }), { status: 429 })
+          },
+          markCooldown: async id => cooled.push(id),
+          releaseAccount: id => released.push(id)
+        }
+      )
+      assert.strictEqual(fetchCalls, 2)
+      assert.strictEqual(result.attempts, 2)
+      assert.strictEqual(result.upstream.status, 429)
+      assert.deepStrictEqual(cooled, ['rate-a', 'rate-b'])
+      assert.deepStrictEqual(released, ['rate-a', 'rate-b'])
+    } finally {
+      proxyConfig.chatgptAccounts = original
+      resetStats()
+    }
+  })
+
+  it('网络错误和 Token 刷新失败都会轮换两个账号并释放租约', async () => {
+    const original = proxyConfig.chatgptAccounts
+    const accounts = [
+      { id: 'failure-a', account_id: 'up-a', access_token: 'a', status: 'active' },
+      { id: 'failure-b', account_id: 'up-b', access_token: 'b', status: 'active' }
+    ]
+    proxyConfig.chatgptAccounts = accounts
+    try {
+      for (const failure of ['network', 'token']) {
+        const queue = [...accounts]
+        const released = []
+        let attempts = 0
+        await assert.rejects(
+          sendWithAccountRotation(
+            Object.assign(new EventEmitter(), {
+              headers: {},
+              requestId: `${failure}-matrix`,
+              accountLeaseId: `lease-${failure}`,
+              clientAbortSignal: new AbortController().signal
+            }),
+            async () => {},
+            '{}',
+            { model: 'gpt-test', tryResponsesLite: false },
+            {
+              acquireAccount: async () => queue.shift() || null,
+              ensureToken: async () => {
+                if (failure === 'token') {
+                  const error = new Error('refresh token rejected')
+                  error.code = 'TOKEN_REFRESH_PERMANENT'
+                  error.retryable = false
+                  throw error
+                }
+              },
+              fetchRetry: async () => {
+                attempts++
+                throw new Error('network disconnected')
+              },
+              releaseAccount: id => released.push(id)
+            }
+          ),
+          error => {
+            assert.strictEqual(error.accountAttempts, 2)
+            assert.strictEqual(error.accountPoolExhausted, true)
+            return true
+          }
+        )
+        assert.strictEqual(failure === 'network' ? attempts : 0, failure === 'network' ? 2 : 0)
+        assert.deepStrictEqual(released, ['failure-a', 'failure-b'])
+      }
+    } finally {
+      proxyConfig.chatgptAccounts = original
+      resetStats()
+    }
+  })
+
+  it('两次账号失败后返回包含账号分类和最后错误的可诊断 503', async () => {
+    const original = proxyConfig.chatgptAccounts
+    proxyConfig.chatgptAccounts = [
+      { id: 'stored', routing_enabled: false },
+      { id: 'auth', routing_enabled: true, status: 'auth_error' },
+      { id: 'cool', routing_enabled: true, status: 'cooldown', cooldown_until: Date.now() + 60_000 },
+      { id: 'reserve', routing_enabled: true, status: 'active', usage: { primary: { remaining_percent: 10 } } },
+      { id: 'busy', routing_enabled: true, status: 'active' }
+    ]
+    resetAccountRequestCounts()
+    reserveAccountRequest('busy', 'busy-a')
+    reserveAccountRequest('busy', 'busy-b')
+    reserveAccountRequest('busy', 'busy-c')
+    const req = Object.assign(new EventEmitter(), {
+      headers: {},
+      requestId: 'diagnostic-503',
+      clientAbortSignal: new AbortController().signal
+    })
+    const response = {
+      status: null,
+      body: '',
+      writeHead(status) { this.status = status },
+      write() {},
+      end(value = '') { this.body += value }
+    }
+    try {
+      await handleChatGptSub(req, response, { model: 'gpt-test' }, { model: 'gpt-test' }, {
+        sendWithRotation: async () => {
+          const error = new Error('second account network failure')
+          error.accountAttempts = 2
+          error.accountPoolExhausted = true
+          throw error
+        }
+      })
+      const payload = JSON.parse(response.body)
+      assert.strictEqual(response.status, 503)
+      assert.strictEqual(payload.error.type, 'account_pool_attempts_exhausted')
+      assert.strictEqual(payload.error.details.account_attempts, 2)
+      assert.strictEqual(payload.error.details.stored_only, 1)
+      assert.strictEqual(payload.error.details.auth_error, 1)
+      assert.strictEqual(payload.error.details.cooling, 1)
+      assert.strictEqual(payload.error.details.below_reserve, 1)
+      assert.strictEqual(payload.error.details.busy, 1)
+      assert.match(payload.error.details.last_error, /second account/)
+      assert.strictEqual(payload.error.guide.status, 503)
+    } finally {
+      resetAccountRequestCounts()
+      proxyConfig.chatgptAccounts = original
+    }
+  })
+
+  it('上游流在客户端取消时仍释放已占用的账号租约', async () => {
+    const original = proxyConfig.chatgptAccounts
+    const account = { id: 'cancel-account', account_id: 'upstream', status: 'active', routing_enabled: true }
+    proxyConfig.chatgptAccounts = [account]
+    resetAccountRequestCounts()
+    reserveAccountRequest(account.id, 'cancel-lease')
+    const req = Object.assign(new EventEmitter(), {
+      headers: {},
+      requestId: 'cancel-release',
+      accountLeaseId: 'cancel-lease',
+      clientAbortSignal: new AbortController().signal
+    })
+    const response = {
+      writeHead() {},
+      write() {},
+      end() {}
+    }
+    const abortedUpstream = new Response(new ReadableStream({
+      start(controller) {
+        controller.error(new Error('Client disconnected'))
+      }
+    }), { status: 200 })
+    try {
+      await assert.rejects(
+        handleChatGptSub(req, response, { model: 'gpt-test' }, { model: 'gpt-test' }, {
+          sendWithRotation: async () => ({
+            upstream: abortedUpstream,
+            account,
+            attempts: 1,
+            queueWaitMs: 0,
+            queuePosition: 1
+          })
+        }),
+        /Client disconnected/
+      )
+      assert.strictEqual(accountActiveRequestCount(account.id), 0)
+    } finally {
+      resetAccountRequestCounts()
+      proxyConfig.chatgptAccounts = original
+    }
+  })
+
   it('低额度缓存超过两分钟时按需刷新并恢复账号选择', async () => {
     const original = proxyConfig.chatgptAccounts
     const account = {
@@ -1059,6 +1321,13 @@ describe('原子配置写入和管理 API', () => {
       assert.ok(errorGuide.codes.some(item => item.status === 402))
       assert.ok(errorGuide.codes.some(item => item.status === 503))
 
+      const runtimeResponse = await fetch(base + '/admin/api/runtime-info')
+      const runtime = await runtimeResponse.json()
+      assert.strictEqual(runtimeResponse.status, 200)
+      assert.ok(runtime.runtime.path)
+      assert.ok(runtime.runtime.entry.endsWith(path.join('src', 'server.js')))
+      assert.ok(runtime.runtime.started_at)
+
       const statsResponse = await fetch(base + '/admin/api/stats')
       const stats = await statsResponse.json()
       assert.strictEqual(statsResponse.status, 200)
@@ -1078,6 +1347,26 @@ describe('原子配置写入和管理 API', () => {
 })
 
 describe('官方安全登录隔离', () => {
+  it('登录预检汇总 CLI、app-server、浏览器和修复命令', () => {
+    const preflight = getChatgptLoginPreflight({
+      launch: {
+        command: 'codex.exe',
+        source: 'VS Code Codex 扩展',
+        version: 'codex-cli 0.144.0',
+        checks: [
+          { source: '全局 npm Codex CLI', command: 'node.exe', ok: false, error: '缺少平台运行包' },
+          { source: 'VS Code Codex 扩展', command: 'codex.exe', ok: true, version: 'codex-cli 0.144.0', app_server: true }
+        ]
+      },
+      browser: { kind: 'edge', executable: 'msedge.exe' }
+    })
+    assert.strictEqual(preflight.ok, true)
+    assert.strictEqual(preflight.selected.source, 'VS Code Codex 扩展')
+    assert.strictEqual(preflight.oauth.app_server_available, true)
+    assert.strictEqual(preflight.browser.kind, 'edge')
+    assert.ok(preflight.repair_commands.some(command => command.includes('@openai/codex@latest')))
+  })
+
   it('全局 npm Codex 损坏时回退到可用的原生 Codex', () => {
     const candidates = [
       { command: 'node.exe', argsPrefix: ['codex.js'], source: '全局 npm Codex CLI' },

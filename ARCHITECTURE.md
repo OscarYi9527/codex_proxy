@@ -34,6 +34,8 @@ flowchart LR
 | `src/provider-health.js` | Provider 最近结果、错误和延迟的轻量持久化 |
 | `src/stats.js` | Provider/模型/账号健康统计与近期窗口 |
 | `src/circuit-breaker.js` | Provider 级熔断和半开恢复 |
+| `src/error-guide.js` | HTTP 错误分类、原因和处理建议查找表 |
+| `src/runtime-info.js` | 运行路径、版本、Commit 和工作区/安装副本一致性 |
 | `src/admin.js` | 本机管理 API、隔离登录、诊断和运维操作 |
 | `src/admin_app.js` | 管理后台交互与零基础教程 |
 
@@ -117,11 +119,24 @@ flowchart TD
 同时监听端口。收到 `SIGTERM` 后服务停止接收新请求，最长等待约 5 分钟完成现有
 连接；Watchdog 使用 `/live` 检测并启动新实例。
 
+## 版本一致性与安全部署
+
+- `runtime-files.json` 是安装器、运行树对比和更新脚本共享的唯一文件清单，运行数据不在其中。
+- 安装器和更新脚本生成 `.release-manifest.json`，记录版本、Commit、来源目录、部署时间和逐文件 SHA-256。
+- `src/runtime-info.js` 在运行时报告真实入口、PID、启动时间和角色，并逐文件比较工作区与安装目录。
+- `update-codex-proxy.ps1` 先备份变化文件，再原子部署并请求优雅重启。
+- 部署健康门禁同时校验 `/live`、实际运行路径、Commit 和文件同步状态；任一失败即恢复文件及旧 manifest，并重启旧副本。
+- `.last-deployment.json` 记录最近成功或回滚结果，便于后台和脱敏诊断展示。
+- 官方登录前分别探测每个 Codex 候选的 `--version` 与 `app-server --help`，同时检查私密浏览器；不再把仅输出 Node.js 版本的损坏 npm 启动器当作可用 CLI。
+
 ## 管理与诊断接口
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `GET` | `/admin/api/diagnostics` | 脱敏运行诊断 |
+| `GET` | `/admin/api/runtime-info` | 运行版本、路径和部署一致性 |
+| `POST` | `/admin/api/deploy-update` | 启动本机安全部署流程 |
+| `GET` | `/admin/api/chatgpt-login/preflight` | CLI、OAuth app-server 与浏览器预检 |
 | `GET` | `/admin/api/config-snapshots` | 配置快照列表 |
 | `POST` | `/admin/api/config-rollback` | 回滚快照 |
 | `GET` | `/admin/api/account-backups` | 加密账号备份列表 |

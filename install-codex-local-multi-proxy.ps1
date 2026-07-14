@@ -20,45 +20,12 @@ $ProviderId = 'local_multi_proxy'
 $ProviderName = 'Local Multi-Upstream Proxy'
 $SourceDir = $PSScriptRoot
 
-$FilesToInstall = @(
-    'package.json',
-    'index.js',
-    'codex-models.json',
-    'src\config.js',
-    'src\credential-store.js',
-    'src\logger.js',
-    'src\models.js',
-    'src\server-utils.js',
-    'src\route-decisions.js',
-    'src\provider-health.js',
-    'src\server.js',
-    'src\stats.js',
-    'src\sync-models.js',
-    'src\admin.js',
-    'src\admin_app.js',
-    'src\admin.html',
-    'src\admin_html_head.txt',
-    'src\convert\anthropic.js',
-    'src\convert\chat-completions.js',
-    'src\convert\stream.js',
-    'src\routes\chatgpt-sub.js',
-    'src\routes\deepseek.js',
-    'src\routes\openai-api.js',
-    'src\routes\relay.js',
-    'src\routes\thread-route.js',
-    'src\routes\ping.js',
-    'codex-safe.ps1',
-    'codex-mode.ps1',
-    'codex-env-proxy.ps1',
-    'set-codex-route.ps1',
-    'start-codex-proxy.ps1',
-    'stop-codex-proxy.ps1',
-    'codex-proxy-watchdog.ps1',
-    'start-codex-proxy.vbs',
-    'install-codex-proxy-autostart.ps1',
-    'uninstall-codex-proxy-autostart.ps1',
-    'install-vscode-codex-compat.ps1',
-    'repair-codex-model-cache.ps1',
+$RuntimeListFile = Join-Path $SourceDir 'runtime-files.json'
+if (-not (Test-Path -LiteralPath $RuntimeListFile)) {
+    throw "Missing runtime file list: $RuntimeListFile"
+}
+$RuntimeList = Get-Content -LiteralPath $RuntimeListFile -Raw -Encoding UTF8 | ConvertFrom-Json
+$FilesToInstall = @($RuntimeList.files | ForEach-Object { ([string]$_).Replace('/', '\') }) + @(
     'tests\test-codex-proxy.js',
     'test-codex-routing.ps1',
     'test-codex-lite-matrix.ps1'
@@ -112,6 +79,38 @@ function Backup-And-Copy([string]$RelativePath, [string]$BackupRoot) {
     }
     Copy-Item -LiteralPath $src -Destination $dst -Force
     Write-Step "installed: $RelativePath"
+}
+
+function Write-ReleaseManifest {
+    if ($DryRun) {
+        Write-Step 'would write .release-manifest.json'
+        return
+    }
+    $package = Get-Content -LiteralPath (Join-Path $SourceDir 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $commit = $null
+    try {
+        $commit = (& git -C $SourceDir rev-parse HEAD 2>$null | Select-Object -First 1).Trim()
+        if ($LASTEXITCODE -ne 0) { $commit = $null }
+    } catch {}
+    $hashes = [ordered]@{}
+    foreach ($relativePath in $RuntimeList.files) {
+        $normalized = ([string]$relativePath).Replace('\', '/')
+        $hashes[$normalized] = (Get-FileHashText (Join-Path $SourceDir $relativePath)).ToLowerInvariant()
+    }
+    $manifest = [ordered]@{
+        schema_version = 1
+        version = $package.version
+        commit = $commit
+        source_root = [IO.Path]::GetFullPath($SourceDir)
+        install_root = [IO.Path]::GetFullPath($InstallDir)
+        deployed_at = (Get-Date).ToUniversalTime().ToString('o')
+        files = $hashes
+    }
+    $target = Join-Path $InstallDir '.release-manifest.json'
+    $temp = Join-Path $InstallDir ('.release-manifest.{0}.tmp' -f $PID)
+    [IO.File]::WriteAllText($temp, ($manifest | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $temp -Destination $target -Force
+    Write-Step "wrote release manifest: version=$($package.version) commit=$commit"
 }
 
 function Seed-ConfigIfMissing {
@@ -247,6 +246,7 @@ $backupRoot = Join-Path $InstallDir ('.install-backup\{0}' -f (Get-Date -Format 
 foreach ($file in $FilesToInstall) {
     Backup-And-Copy $file $backupRoot
 }
+Write-ReleaseManifest
 
 Seed-ConfigIfMissing
 

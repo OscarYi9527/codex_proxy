@@ -12,6 +12,7 @@ import { getAccountQueueDiagnostics } from './routes/chatgpt-sub.js'
 import { chinaFetch } from './china-fetch.js'
 import { getRouteDecisions } from './route-decisions.js'
 import { getProviderHealth, resetProviderHealth } from './provider-health.js'
+import { getRuntimeDeploymentInfo } from './runtime-info.js'
 
 function maskChatgptAccounts(accounts) {
   if (!accounts) return accounts
@@ -160,9 +161,26 @@ function probeCodexLaunch(candidate) {
     })
     const combined = `${result.stdout || ''}\n${result.stderr || ''}`.trim()
     if (!result.error && result.status === 0) {
+      const appServer = spawnSync(candidate.command, [...(candidate.argsPrefix || []), 'app-server', '--help'], {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 5000
+      })
+      if (appServer.error || appServer.status !== 0) {
+        return {
+          ok: false,
+          version: String(result.stdout || combined).trim().split(/\r?\n/)[0] || '版本未知',
+          app_server: false,
+          error: summarizeCodexLaunchFailure(
+            `${appServer.stdout || ''}\n${appServer.stderr || ''}`.trim() || appServer.error?.message,
+            '当前 Codex CLI 不支持 app-server OAuth'
+          )
+        }
+      }
       return {
         ok: true,
-        version: String(result.stdout || combined).trim().split(/\r?\n/)[0] || '版本未知'
+        version: String(result.stdout || combined).trim().split(/\r?\n/)[0] || '版本未知',
+        app_server: true
       }
     }
     return {
@@ -179,14 +197,24 @@ export function resolveCodexLaunch({
   probe = probeCodexLaunch
 } = {}) {
   const failures = []
+  const checks = []
   for (const candidate of candidates) {
     const result = probe(candidate)
+    checks.push({
+      source: candidate.source || candidate.command,
+      command: candidate.command,
+      ok: result?.ok === true,
+      version: result?.version || null,
+      app_server: result?.app_server === true,
+      error: result?.ok ? null : (result?.error || '无法启动')
+    })
     if (result?.ok) {
       return {
         ...candidate,
         argsPrefix: [...(candidate.argsPrefix || [])],
         version: result.version || '版本未知',
-        failures
+        failures,
+        checks
       }
     }
     failures.push(`${candidate.source || candidate.command}：${result?.error || '无法启动'}`)
@@ -197,7 +225,43 @@ export function resolveCodexLaunch({
     source: null,
     version: null,
     failures,
+    checks,
     error: failures.slice(-3).join('；') || '未找到 Codex CLI 或 VS Code Codex 扩展'
+  }
+}
+
+export function getChatgptLoginPreflight({
+  launch = resolveCodexLaunch(),
+  browser = findPrivateBrowser()
+} = {}) {
+  return {
+    ok: Boolean(launch.command),
+    selected: launch.command ? {
+      source: launch.source,
+      command: launch.command,
+      version: launch.version,
+      app_server: true
+    } : null,
+    candidates: launch.checks,
+    browser: browser ? {
+      kind: browser.kind,
+      executable: browser.executable,
+      private_mode: Boolean(privateBrowserArgs(browser.kind, 'https://example.com'))
+    } : null,
+    oauth: {
+      app_server_available: Boolean(launch.command),
+      private_browser_available: Boolean(browser)
+    },
+    repair_commands: [
+      'npm uninstall -g @openai/codex',
+      'npm install -g @openai/codex@latest',
+      'codex --version'
+    ],
+    message: !launch.command
+      ? `没有可用的 Codex app-server：${launch.error}`
+      : (!browser
+          ? '未找到支持私密模式的 Chrome、Edge 或 Firefox'
+          : `预检通过，将使用 ${launch.source} ${launch.version} 和 ${browser.kind} 私密窗口`)
   }
 }
 
@@ -710,6 +774,11 @@ export function handleChatgptLoginStatus(req, res) {
   return sendJson(res, 200, publicLoginSession())
 }
 
+export function handleChatgptLoginPreflight(req, res) {
+  const preflight = getChatgptLoginPreflight()
+  return sendJson(res, preflight.ok ? 200 : 503, preflight)
+}
+
 export function handleChatgptLoginCancel(req, res) {
   if (!isLocalAdminRequest(req)) {
     return sendJson(res, 403, {
@@ -884,6 +953,7 @@ export function handleStatsDelete(req, res) {
 }
 
 export function handleDiagnosticsGet(req, res) {
+  const deployment = getRuntimeDeploymentInfo()
   return sendJson(res, 200, {
     generated_at: new Date().toISOString(),
     process: {
@@ -894,6 +964,7 @@ export function handleDiagnosticsGet(req, res) {
       tls_verification: process.env.NODE_TLS_REJECT_UNAUTHORIZED !== '0'
     },
     credential_protection: getCredentialProtectionStatus(),
+    deployment,
     queue: getAccountQueueDiagnostics(),
     accounts: getAccountRuntimeDiagnostics(),
     recent_route_decisions: getRouteDecisions(30),
@@ -942,6 +1013,58 @@ export async function handleChatgptAccountsRefreshResetCreditsAll(req, res) {
     config: publicProxyConfig(proxyConfig),
     message: errors.length ? `查询完成，部分账号失败：${errors.join('; ')}` : '全部账号的 Codex 重置次数已查询'
   })
+}
+
+export function handleRuntimeInfoGet(req, res) {
+  return sendJson(res, 200, getRuntimeDeploymentInfo())
+}
+
+export function handleDeployUpdate(req, res) {
+  if (!isLocalAdminRequest(req)) {
+    return sendJson(res, 403, { error: { type: 'permission_error', message: '部署更新只能从本机管理后台发起' } })
+  }
+  const deployment = getRuntimeDeploymentInfo()
+  if (!deployment.can_deploy) {
+    return sendJson(res, 409, {
+      error: {
+        type: 'deployment_not_available',
+        message: deployment.consistency.synchronized
+          ? '工作区与安装目录已经一致，无需部署'
+          : '无法定位可部署的工作区或安装目录'
+      }
+    })
+  }
+  const script = deployment.update_script
+  if (!script || !fs.existsSync(script)) {
+    return sendJson(res, 503, {
+      error: { type: 'service_unavailable', message: '工作区缺少 update-codex-proxy.ps1，无法执行安全部署' }
+    })
+  }
+  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  try {
+    const child = spawn(powershell, [
+      '-NoProfile',
+      '-ExecutionPolicy', 'Bypass',
+      '-File', script,
+      '-SourceDir', deployment.source.path,
+      '-InstallDir', deployment.installation.path
+    ], {
+      detached: true,
+      windowsHide: true,
+      stdio: 'ignore',
+      cwd: deployment.source.path
+    })
+    child.unref()
+    return sendJson(res, 202, {
+      message: '已启动安全部署：将自动备份、重启、健康检查，失败时自动回滚',
+      source: deployment.source.path,
+      installation: deployment.installation.path
+    })
+  } catch (error) {
+    return sendJson(res, 500, {
+      error: { type: 'server_error', message: `无法启动部署脚本：${error.message}` }
+    })
+  }
 }
 
 export async function handleChatgptAccountResetQuota(req, res, accountId, body) {

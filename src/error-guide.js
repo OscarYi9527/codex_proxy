@@ -98,6 +98,12 @@ const ERROR_TYPE_OVERRIDES = {
     meaning: '本地等待队列超时前，没有任何 ChatGPT 账号恢复为可用状态。',
     causes: ['所有账号均未启用、登录失效、额度达到安全余量、处于冷却或并发已满'],
     actions: ['前往“账号池”检查启用状态、额度、登录、冷却和并发', '有请求仍在运行时先等待，不要连续重试']
+  },
+  account_pool_attempts_exhausted: {
+    title: 'ChatGPT 账号尝试全部失败',
+    meaning: '单个请求已按安全上限尝试两个账号，但均因登录、网络或上游错误失败。',
+    causes: ['两个候选账号均发生 Token 刷新、网络、鉴权或上游连接错误'],
+    actions: ['查看错误详情中的 account_attempts 和 last_error', '检查账号登录状态与网络，不要立即连续重试']
   }
 }
 

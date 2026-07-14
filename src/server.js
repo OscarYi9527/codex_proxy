@@ -19,7 +19,7 @@ import { handlePing, handlePingAll } from './routes/ping.js'
 import { saveStats } from './stats.js'
 import { initializeProviderHealth, saveProviderHealth } from './provider-health.js'
 import { listHttpErrorGuides } from './error-guide.js'
-import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountResetCreditsGet, handleChatgptAccountsRefreshResetCreditsAll, handleChatgptAccountResetQuota, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleAccountBackupsGet, handleConfigSnapshotsGet, handleAccountBackupRestore, handleConfigRollback, handleProviderHealthReset, handleRuntimeRepair, handleProxyRestart } from './admin.js'
+import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginPreflight, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountResetCreditsGet, handleChatgptAccountsRefreshResetCreditsAll, handleChatgptAccountResetQuota, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleRuntimeInfoGet, handleDeployUpdate, handleAccountBackupsGet, handleConfigSnapshotsGet, handleAccountBackupRestore, handleConfigRollback, handleProviderHealthReset, handleRuntimeRepair, handleProxyRestart } from './admin.js'
 
 const PORT = Number(process.env.CODEX_PROXY_PORT || 47892)
 const HOST = process.env.CODEX_PROXY_HOST || '127.0.0.1'
@@ -257,6 +257,8 @@ export function createServer({ fetchImpl = fetch } = {}) {
     if (req.method === 'GET' && url.pathname === '/admin/api/error-guide') {
       return sendJson(res, 200, { codes: listHttpErrorGuides() })
     }
+    if (req.method === 'GET' && url.pathname === '/admin/api/runtime-info') return handleRuntimeInfoGet(req, res)
+    if (req.method === 'POST' && url.pathname === '/admin/api/deploy-update') return handleDeployUpdate(req, res)
     if (req.method === 'GET' && url.pathname === '/admin/api/config') return handleAdminConfigGet(req, res)
     if (req.method === 'PUT' && url.pathname === '/admin/api/config') return handleAdminConfigPut(req, res)
 
@@ -279,6 +281,9 @@ export function createServer({ fetchImpl = fetch } = {}) {
     }
     if (req.method === 'POST' && url.pathname === '/admin/api/chatgpt-login/start') {
       return handleChatgptLoginStart(req, res)
+    }
+    if (req.method === 'GET' && url.pathname === '/admin/api/chatgpt-login/preflight') {
+      return handleChatgptLoginPreflight(req, res)
     }
     if (req.method === 'GET' && url.pathname === '/admin/api/chatgpt-login/status') {
       return handleChatgptLoginStatus(req, res)

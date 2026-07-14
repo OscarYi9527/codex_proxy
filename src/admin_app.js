@@ -2,6 +2,7 @@ const API = '/admin/api'
 let cfg = {}, statsData = { providers: {} }, diagnosticsData = { accounts: [], queue: {}, config_snapshots: [], account_backups: [], recent_route_decisions: [], provider_health: {providers:{}}, credential_protection: {}, circuits: [] }, modelCatalog = [], activePage = location.hash.slice(1) || 'overview'
 let pingResults = {}, modal = null, loginPoll = null, accountsPoll = null, draggedAccountId = null, resetQuotaSubmitting = false
 let errorGuideData = []
+let loginPreflightData = null
 let accountViewMode = localStorage.getItem('codex-account-view') === 'compact' ? 'compact' : 'cards'
 let usageCalendarMonth = statsDateKey().slice(0,7)
 let animateNextRender = true
@@ -251,12 +252,26 @@ function providerRows(){
     return `<div class="provider-row"><div class="provider-name"><span class="provider-logo ${logo}">${logo==='chatgpt'?'G':logo==='openai'?'AI':logo==='deepseek'?'D':'R'}</span><div><strong>${name}</strong><small>${sub}</small></div></div><div class="latency-cell"${healthTitle}><span class="status ${statusClass}"><i></i>${status}</span><div class="cell-sub">${latency!=null?`${fmt(latency)} ms · `:''}${checked}</div></div><div class="usage-cell"><span class="cell-sub">${fmt(p.requests)} 次请求</span><div class="mini-bar"><i style="width:${Math.min(100,(p.requests||0)/Math.max(1,totals().requests)*100)}%"></i></div></div><button class="btn btn-sm" onclick="pingChannel('${key}')">${svg('pulse')}检测</button></div>`
   }).join('')
 }
+function deploymentBanner(){
+  const deployment=diagnosticsData.deployment
+  if(!deployment)return ''
+  const consistency=deployment.consistency||{}
+  if(consistency.synchronized===true)return ''
+  const source=deployment.source?.path||'未识别工作区'
+  const installation=deployment.installation?.path||'未识别安装目录'
+  const message=consistency.synchronized===false
+    ? `检测到工作区与实际安装目录有 ${Number(consistency.difference_count)||0} 个运行文件不一致。`
+    : '当前运行实例无法定位对应工作区，不能自动判断是否已部署最新代码。'
+  const action=deployment.can_deploy?button('备份并部署更新','refresh','deployWorkspaceUpdate()','btn-danger'):''
+  return `<div class="help-note" style="margin-bottom:18px;border-color:color-mix(in srgb,var(--red) 32%,var(--border));background:color-mix(in srgb,var(--red) 6%,var(--surface))"><div style="display:flex;align-items:center;justify-content:space-between;gap:14px"><div><b style="color:var(--red)">运行版本不一致</b><p>${esc(message)}<br>工作区：${esc(source)}<br>安装目录：${esc(installation)}</p></div>${action}</div></div>`
+}
 function renderOverview(){
   const t=totals()
   const today=normalizedDaily(1)[0]
   const recent=allProviders().flatMap(p=>Object.entries(p.models||{})).sort((a,b)=>(b[1].requests||0)-(a[1].requests||0)).slice(0,4)
   const activity=recent.length?recent.map(([name,v])=>`<div class="activity"><span class="activity-icon">${svg('arrow')}</span><div><p><b>${esc(name)}</b> 完成 ${fmt(v.requests)} 次路由请求</p><small>输入 ${fmt(v.input_tokens)} · 输出 ${fmt(v.output_tokens)} Tokens</small></div></div>`).join(''):empty('pulse','暂无调用记录','请求将在这里实时汇总')
   return pageHead('控制台概览','统一查看模型网关、账号池和节点状态',button('检测全部通道','pulse','pingAll()','btn-primary'))+
+    deploymentBanner()+
     `<div class="metrics">${metric('今日请求',fmt(today.requests),'pulse',`累计完成 ${fmt(t.requests)} 次`)}${metric('今日 Token',fmt(dailyTokens(today)),'analytics',`输入 ${fmt(today.input_tokens)} · 输出 ${fmt(today.output_tokens)}`)}${metric('连续活跃',`${activeStreak()} 天`,'server','以每天产生请求或 Token 记录计算')}${metric('账号池',String((cfg.chatgptAccounts||[]).length),'users',`今日 ${fmt(today.account_attempts)} 次账号路由尝试`)}</div>`+
     `<div class="grid overview-grid">${card('AI 使用日历','按月查看 · 默认显示当前月份 · 数据仅保存在本机',`<div class="card-body usage-calendar-body">${usageHeatmap()}</div>`)}${card('最近调用','按模型请求量排序',`<div class="card-body">${activity}</div>`)}${card('服务状态','上游通道与实时连通性',`<div class="card-body">${providerRows()}</div>`,button('管理服务','',"switchPage('providers')",'btn-sm'))}${card('运行信息','当前网关环境',`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">默认模型</span><b>${esc(cfg.defaultModel||'-')}</b></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">统计更新时间</span><b>${statsData.updated?new Date(statsData.updated).toLocaleTimeString('zh-CN'):'-'}</b></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">部署模式</span><span class="badge">Local</span></div></div>`)}</div>`
 }
@@ -612,7 +627,9 @@ function renderSettings(){
   const modelOptions=models.map(model=>`<option value="${esc(model.id)}" ${cfg.defaultModel===model.id?'selected':''}>${esc(model.name)} · ${esc(model.id)}</option>`).join('')
   const body=`<div class="card-body"><div class="form-grid"><div class="field"><label>默认模型 <span class="hint">来自当前可用模型目录</span></label><select id="f_defaultModel">${modelOptions||'<option value="">暂无可用模型</option>'}</select></div><div class="field"><label>OpenAI 默认上游</label><select id="f_openaiApiUpstream"><option value="official" ${cfg.openaiApiUpstream==='official'?'selected':''}>官方 API</option>${relayOptions}</select></div></div></div><div class="form-footer">${button('保存设置','check','saveConfig()','btn-primary')}</div>`
   const credentialProtection=diagnosticsData.credential_protection||{}
-  const info=`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">网关版本</span><b>2.0.0</b></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">管理 API</span><code>/admin/api</code></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">配置热重载</span><span class="badge">已启用</span></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">凭据保护</span><span class="status ${credentialProtection.enabled?'':'off'}"><i></i>${credentialProtection.enabled?'DPAPI + AES-256-GCM':'未启用'}</span></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">数据存储</span><span>本地 JSON</span></div></div>`
+  const deployment=diagnosticsData.deployment||{},runtime=deployment.runtime||{},consistency=deployment.consistency||{}
+  const shortCommit=value=>value?String(value).slice(0,10):'未知'
+  const info=`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">网关版本</span><b>${esc(runtime.version||'未知')}</b></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">运行 Commit</span><code>${esc(shortCommit(runtime.commit))}</code></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">启动时间</span><b>${runtime.started_at?esc(new Date(runtime.started_at).toLocaleString('zh-CN')):'未知'}</b></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">运行文件路径</span><code style="max-width:330px;overflow:hidden;text-overflow:ellipsis" title="${esc(runtime.entry||runtime.path||'')}">${esc(runtime.entry||runtime.path||'未知')}</code></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">工作区</span><code style="max-width:330px;overflow:hidden;text-overflow:ellipsis" title="${esc(deployment.source?.path||'')}">${esc(deployment.source?.path||'未识别')}</code></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">安装目录</span><code style="max-width:330px;overflow:hidden;text-overflow:ellipsis" title="${esc(deployment.installation?.path||'')}">${esc(deployment.installation?.path||'未识别')}</code></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">部署一致性</span><span class="status ${consistency.synchronized===true?'':consistency.synchronized===false?'off':'warn'}"><i></i>${consistency.synchronized===true?'已同步':consistency.synchronized===false?`${Number(consistency.difference_count)||0} 个文件不一致`:'无法判断'}</span></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">管理 API</span><code>/admin/api</code></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">配置热重载</span><span class="badge">已启用</span></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">凭据保护</span><span class="status ${credentialProtection.enabled?'':'off'}"><i></i>${credentialProtection.enabled?'DPAPI + AES-256-GCM':'未启用'}</span></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">数据存储</span><span>本地 JSON</span></div></div>${deployment.can_deploy?`<div class="form-footer">${button('备份并部署工作区更新','refresh','deployWorkspaceUpdate()','btn-danger')}</div>`:''}`
   const snapshots=diagnosticsData.config_snapshots||[]
   const snapshotOptions=snapshots.map(item=>`<option value="${esc(item.name)}">${new Date(item.created_at).toLocaleString('zh-CN')} · ${esc(item.name.split('-').slice(6).join('-').replace('.json','')||'配置')}</option>`).join('')
   const rollback=`<div class="card-body"><div class="field"><label>配置快照 <span class="hint">最多保留最近 10 份</span></label><select id="config_snapshot">${snapshotOptions||'<option value="">暂无快照</option>'}</select></div></div><div class="form-footer">${button('回滚所选快照','refresh','rollbackConfigSnapshot()','btn-danger')}</div>`
@@ -750,8 +767,37 @@ async function importCurrentAccount(){
     cfg=d.config;closeModal();render();toast(d.message||'当前账号已导入')
   }catch(e){toast(e.message,'error')}
 }
-function openOfficialLogin(){
-  showModal('OpenAI 官方安全登录',`<div class="form-grid"><div class="field full"><div style="padding:13px;border-radius:10px;background:var(--primary-soft);color:var(--primary);font-size:11px;line-height:1.7">登录通过隔离的 Codex app-server 浏览器 OAuth 完成，不会修改本机现有 Codex 的 auth.json。新账号默认仅保存，不参与代理路由。</div></div><div class="field full"><label>邮箱或账号备注 <span class="hint">仅用于账号池中识别，可选</span></label><input class="input" id="login_label" type="email" autocomplete="email" placeholder="例如 name@example.com"></div><div class="field full"><label style="display:flex;align-items:center;gap:8px"><input id="login_routing_enabled" type="checkbox"> 登录后立即参与自动路由</label><span class="hint">不勾选时只放入账号池，不影响当前 Codex，也不会被代理选中。</span></div><div class="field full"><label>登录流程</label><div id="login_status" class="input" style="height:auto;min-height:48px;display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span class="status off"><i></i>等待开始</span></div></div><div class="field full"><span class="hint">完成官方页面的登录和授权后，本地回调会自动通知后台并导入账号。重复账号会被拒绝，不会覆盖已有账号。</span></div></div>`,'开始官方登录','startOfficialLogin()')
+function loginPreflightHtml(data){
+  if(!data)return '<span class="status warn"><i></i>正在检测 Codex CLI、app-server OAuth 和私密浏览器…</span>'
+  const candidates=(data.candidates||[]).map(item=>`<div style="display:flex;justify-content:space-between;gap:10px"><span>${esc(item.source)}</span><span class="status ${item.ok?'':'off'}"><i></i>${item.ok?esc(item.version||'可用'):esc(item.error||'不可用')}</span></div>`).join('')
+  const browser=data.browser
+    ? `<div style="display:flex;justify-content:space-between;gap:10px"><span>私密浏览器</span><span class="status"><i></i>${esc(data.browser.kind)} · 可用</span></div>`
+    : '<div style="display:flex;justify-content:space-between;gap:10px"><span>私密浏览器</span><span class="status warn"><i></i>未找到，将提供手动登录链接</span></div>'
+  const repairs=data.ok?'':`<div class="help-note" style="margin-top:10px"><b>修复命令</b><p><code>${(data.repair_commands||[]).map(esc).join('<br>')}</code></p></div>`
+  return `<div style="display:grid;gap:8px"><div class="status ${data.ok?'':'off'}"><i></i>${esc(data.message||'预检完成')}</div>${candidates||'<span class="cell-sub">没有发现 Codex CLI</span>'}${browser}${repairs}<button class="btn btn-sm" type="button" onclick="copyLoginDiagnostics()">${svg('download')}复制登录诊断</button></div>`
+}
+async function openOfficialLogin(){
+  loginPreflightData=null
+  showModal('OpenAI 官方安全登录',`<div class="form-grid"><div class="field full"><div style="padding:13px;border-radius:10px;background:var(--primary-soft);color:var(--primary);font-size:11px;line-height:1.7">登录通过隔离的 Codex app-server 浏览器 OAuth 完成，不会修改本机现有 Codex 的 auth.json。新账号默认仅保存，不参与代理路由。</div></div><div class="field full"><label>登录环境预检</label><div id="login_preflight" class="help-note">${loginPreflightHtml(null)}</div></div><div class="field full"><label>邮箱或账号备注 <span class="hint">仅用于账号池中识别，可选</span></label><input class="input" id="login_label" type="email" autocomplete="email" placeholder="例如 name@example.com"></div><div class="field full"><label style="display:flex;align-items:center;gap:8px"><input id="login_routing_enabled" type="checkbox"> 登录后立即参与自动路由</label><span class="hint">不勾选时只放入账号池，不影响当前 Codex，也不会被代理选中。</span></div><div class="field full"><label>登录流程</label><div id="login_status" class="input" style="height:auto;min-height:48px;display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span class="status off"><i></i>等待预检</span></div></div><div class="field full"><span class="hint">完成官方页面的登录和授权后，本地回调会自动通知后台并导入账号。重复账号会被拒绝，不会覆盖已有账号。</span></div></div>`,'开始官方登录','startOfficialLogin()')
+  const submit=modal?.querySelector('.modal-foot .btn-primary')
+  if(submit)submit.disabled=true
+  try{
+    const response=await fetch(API+'/chatgpt-login/preflight',{cache:'no-store'}),data=await response.json()
+    loginPreflightData=data
+    const target=document.getElementById('login_preflight')
+    if(target)target.innerHTML=loginPreflightHtml(data)
+    if(submit)submit.disabled=!data.ok
+    const status=document.getElementById('login_status')
+    if(status)status.innerHTML=`<span class="status ${data.ok?'':'off'}"><i></i>${data.ok?'预检通过，可以开始官方登录':esc(data.message||'预检失败')}</span>`
+  }catch(error){
+    const target=document.getElementById('login_preflight')
+    if(target)target.innerHTML=loginPreflightHtml({ok:false,message:error.message,candidates:[],repair_commands:[]})
+  }
+}
+async function copyLoginDiagnostics(){
+  if(!loginPreflightData)return toast('预检尚未完成','error')
+  const text=JSON.stringify(loginPreflightData,null,2)
+  try{await navigator.clipboard.writeText(text);toast('登录诊断已复制')}catch{toast(text,'error')}
 }
 function loginStatusContent(d){
   const state=d.status==='waiting'?'warn':d.status==='success'?'':'off'
@@ -765,6 +811,7 @@ async function copyDeviceCode(code){
   try{await navigator.clipboard.writeText(code);toast('设备验证码已复制')}catch{toast('复制失败，请手动复制验证码','error')}
 }
 async function startOfficialLogin(){
+  if(!loginPreflightData?.ok)return toast('请先等待登录环境预检通过','error')
   const label=document.getElementById('login_label')?.value.trim()||''
   const routingEnabled=document.getElementById('login_routing_enabled')?.checked===true
   const status=document.getElementById('login_status')
@@ -937,6 +984,37 @@ async function restoreAccountBackup(){
     if(!r.ok)throw new Error(d.error?.message||'账号恢复失败')
     cfg=d.config;toast(d.message);await load(false,false)
   }catch(e){toast(e.message,'error')}
+}
+async function deployWorkspaceUpdate(){
+  const deployment=diagnosticsData.deployment||{}
+  const differenceCount=Number(deployment.consistency?.difference_count)||0
+  if(!confirm(`确定部署工作区更新到实际安装目录吗？\n\n不一致文件：${differenceCount}\n安装目录：${deployment.installation?.path||'未知'}\n\n系统会先备份，随后重启并执行健康检查；验证失败会自动回滚。`))return
+  try{
+    const response=await fetch(API+'/deploy-update',{method:'POST'}),data=await response.json()
+    if(!response.ok)throw new Error(data.error?.message||'无法启动部署')
+    toast(data.message||'安全部署已启动')
+    for(let attempt=0;attempt<100;attempt++){
+      await new Promise(resolve=>setTimeout(resolve,1000))
+      try{
+        const live=await fetch('/live',{cache:'no-store'})
+        if(!live.ok)continue
+        const runtimeResponse=await fetch(API+'/runtime-info',{cache:'no-store'})
+        if(!runtimeResponse.ok)continue
+        const runtime=await runtimeResponse.json()
+        if(runtime.consistency?.synchronized===true){
+          toast(`部署完成 · ${runtime.runtime?.version||'版本未知'} · ${String(runtime.runtime?.commit||'').slice(0,10)}`)
+          await load(false,false)
+          return
+        }
+        if(runtime.last_deployment?.status==='rolled_back'){
+          throw new Error(`部署验证失败，已自动回滚：${runtime.last_deployment.error||'未知原因'}`)
+        }
+      }catch(error){
+        if(/已自动回滚/.test(error.message))throw error
+      }
+    }
+    throw new Error('部署仍在进行或健康检查超时，请查看安装目录中的 .last-deployment.json')
+  }catch(error){toast(error.message,'error')}
 }
 async function gracefulRestartProxy(){
   const active=(diagnosticsData.accounts||[]).reduce((sum,item)=>sum+Number(item.active_requests||0),0),queued=Number(diagnosticsData.queue?.depth||0)

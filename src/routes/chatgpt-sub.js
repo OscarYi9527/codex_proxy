@@ -126,7 +126,17 @@ export async function refreshBelowReserveAccounts(
 // could select the same newly-free account, then all but one failed reserve;
 // because that account had already been added to `tried`, those requests
 // waited for a minute and eventually returned a false 503.
-export async function acquireActiveAccountWithRetry(req, model, tried = null, sessionKey = null, fetchImpl = fetch) {
+export async function acquireActiveAccountWithRetry(
+  req,
+  model,
+  tried = null,
+  sessionKey = null,
+  fetchImpl = fetch,
+  {
+    retryMs = BUSY_ACCOUNT_RETRY_MS,
+    retryCount = BUSY_ACCOUNT_RETRY_COUNT
+  } = {}
+) {
   const effectiveSessionKey = sessionKey || accountSessionKey(req)
   const ticket = {
     id: req.requestId || `queue_${Date.now()}_${Math.random().toString(36).slice(2)}`,
@@ -137,7 +147,7 @@ export async function acquireActiveAccountWithRetry(req, model, tried = null, se
   let maxPosition = accountWaitQueue.length
   let quotaRefreshAttempted = false
   try {
-    for (let attempt = 0; attempt <= BUSY_ACCOUNT_RETRY_COUNT; attempt++) {
+    for (let attempt = 0; attempt <= retryCount; attempt++) {
       const position = accountWaitQueue.indexOf(ticket)
       maxPosition = Math.max(maxPosition, position + 1)
       if (position === 0) {
@@ -176,7 +186,7 @@ export async function acquireActiveAccountWithRetry(req, model, tried = null, se
           return null
         }
       }
-      if (attempt === BUSY_ACCOUNT_RETRY_COUNT || req.aborted) {
+      if (attempt === retryCount || req.aborted) {
         recordRouteDecision({
           requestId: req.requestId,
           model,
@@ -187,7 +197,7 @@ export async function acquireActiveAccountWithRetry(req, model, tried = null, se
         })
         return null
       }
-      await sleep(BUSY_ACCOUNT_RETRY_MS)
+      await sleep(retryMs)
     }
   } finally {
     const index = accountWaitQueue.indexOf(ticket)
@@ -242,10 +252,23 @@ async function rateLimitScope(response) {
 // a 429 and retrying the same request. Stops after cycling the whole pool so
 // an all-accounts-exhausted request can't loop forever; in that case the last
 // (still-429) upstream response is returned unchanged for passthrough to the client.
-async function sendWithAccountRotation(req, chatGptFetch, upstreamBody, { model, tryResponsesLite }) {
+export async function sendWithAccountRotation(
+  req,
+  chatGptFetch,
+  upstreamBody,
+  { model, tryResponsesLite },
+  {
+    acquireAccount = acquireActiveAccountWithRetry,
+    ensureToken = ensureFreshToken,
+    fetchRetry = fetchWithRetry,
+    markCooldown = markAccountCooldown,
+    markAuthFailure = markAccountAuthFailure,
+    releaseAccount = releaseAccountRequest
+  } = {}
+) {
   const tried = new Set()
   const sessionKey = accountSessionKey(req)
-  let account = await acquireActiveAccountWithRetry(req, model, null, sessionKey, chatGptFetch)
+  let account = await acquireAccount(req, model, null, sessionKey, chatGptFetch)
   const poolSize = (proxyConfig.chatgptAccounts || []).length
   let includeResponsesLite = tryResponsesLite
   let attempts = 0
@@ -257,7 +280,7 @@ async function sendWithAccountRotation(req, chatGptFetch, upstreamBody, { model,
     tried.add(account.id)
     const attemptStartedAt = Date.now()
     try {
-      await ensureFreshToken(account, chatGptFetch)
+      await ensureToken(account, chatGptFetch)
 
       const options = withChinaDispatcher({
         method: 'POST',
@@ -269,13 +292,13 @@ async function sendWithAccountRotation(req, chatGptFetch, upstreamBody, { model,
         // retrying a known-limited account.
         retryStatuses: [502, 503, 504]
       })
-      let upstream = await fetchWithRetry(chatGptFetch, proxyConfig.chatgptResponsesUrl, options, 2)
+      let upstream = await fetchRetry(chatGptFetch, proxyConfig.chatgptResponsesUrl, options, 2)
 
       if (includeResponsesLite && await isResponsesLiteUnsupported(upstream)) {
         responsesLiteUnsupportedModels.add(model)
         includeResponsesLite = false
         await upstream.body?.cancel()
-        upstream = await fetchWithRetry(chatGptFetch, proxyConfig.chatgptResponsesUrl, {
+        upstream = await fetchRetry(chatGptFetch, proxyConfig.chatgptResponsesUrl, {
           ...options,
           headers: buildAccountPoolHeaders(req, account, { includeResponsesLite }),
           signal: upstreamSignalFor(req)
@@ -295,15 +318,15 @@ async function sendWithAccountRotation(req, chatGptFetch, upstreamBody, { model,
       if (upstream.status === 429) {
         const scope = await rateLimitScope(upstream)
         requestLog(req, `chatgpt-account=${account.id} status=429 cooldown_scope=${scope} rotate`)
-        await markAccountCooldown(account.id, upstream.clone(), { model, scope })
-        releaseAccountRequest(account.id, req.accountLeaseId)
-        account = await acquireActiveAccountWithRetry(req, model, tried, sessionKey, chatGptFetch)
+        await markCooldown(account.id, upstream.clone(), { model, scope })
+        releaseAccount(account.id, req.accountLeaseId)
+        account = await acquireAccount(req, model, tried, sessionKey, chatGptFetch)
         continue
       }
       if (upstream.status === 401 || upstream.status === 403) {
-        markAccountAuthFailure(account.id, upstream.status)
-        releaseAccountRequest(account.id, req.accountLeaseId)
-        account = await acquireActiveAccountWithRetry(req, model, tried, sessionKey, chatGptFetch)
+        markAuthFailure(account.id, upstream.status)
+        releaseAccount(account.id, req.accountLeaseId)
+        account = await acquireAccount(req, model, tried, sessionKey, chatGptFetch)
         continue
       }
 
@@ -319,7 +342,7 @@ async function sendWithAccountRotation(req, chatGptFetch, upstreamBody, { model,
         reservedAccountId: account.id
       }
     } catch (error) {
-      releaseAccountRequest(account.id, req.accountLeaseId)
+      releaseAccount(account.id, req.accountLeaseId)
       lastError = error
       const errorType = error.code === 'CIRCUIT_OPEN'
         ? 'circuit_open'
@@ -334,11 +357,15 @@ async function sendWithAccountRotation(req, chatGptFetch, upstreamBody, { model,
         latencyMs: Date.now() - attemptStartedAt
       })
       requestLog(req, `chatgpt-account=${account.id} network_error=${error.message} rotate`)
-      account = await acquireActiveAccountWithRetry(req, model, tried, sessionKey, chatGptFetch)
+      account = await acquireAccount(req, model, tried, sessionKey, chatGptFetch)
     }
   }
 
-  if (!last && lastError) throw lastError
+  if (!last && lastError) {
+    lastError.accountAttempts = attempts
+    lastError.accountPoolExhausted = attempts >= MAX_ACCOUNT_ATTEMPTS_PER_REQUEST
+    throw lastError
+  }
   return last ? { ...last, attempts, reservedAccountId: null } : null
 }
 
@@ -360,25 +387,42 @@ function hasEnabledAccountPool() {
   return (proxyConfig.chatgptAccounts || []).some(account => account.routing_enabled !== false)
 }
 
-function poolAvailabilityDetails(model) {
+export function poolAvailabilityDetails(model) {
   const now = Date.now()
   const threshold = Number(proxyConfig.chatgptLowQuotaThreshold ?? 10)
-  const details = { enabled: 0, busy: 0, cooling: 0, model_cooling: 0, below_reserve: 0 }
+  const details = {
+    total: (proxyConfig.chatgptAccounts || []).length,
+    enabled: 0,
+    stored_only: 0,
+    auth_error: 0,
+    busy: 0,
+    cooling: 0,
+    model_cooling: 0,
+    below_reserve: 0,
+    eligible: 0
+  }
   for (const account of (proxyConfig.chatgptAccounts || [])) {
-    if (account.routing_enabled === false) continue
+    if (account.routing_enabled === false) {
+      details.stored_only++
+      continue
+    }
     details.enabled++
-    if (account.status === 'cooldown' && Number(account.cooldown_until) > now) details.cooling++
+    if (account.status === 'auth_error') details.auth_error++
+    else if (account.status === 'cooldown' && Number(account.cooldown_until) > now) details.cooling++
     else if (model && Number(account.model_cooldowns?.[model]) > now) details.model_cooling++
     else {
       const remaining = accountRemainingPercent(account)
       if (remaining !== null && remaining <= threshold) details.below_reserve++
       else if (accountActiveRequestCount(account.id) >= accountConcurrencyLimit(account.id)) details.busy++
+      else details.eligible++
     }
   }
   return details
 }
 
-export async function handleChatGptSub(req, res, body, resolved) {
+export async function handleChatGptSub(req, res, body, resolved, {
+  sendWithRotation = sendWithAccountRotation
+} = {}) {
   setProxyMeta(res, { provider: 'chatgpt-sub', model: resolved.model })
   requestLog(req, `model=${resolved.model} body_model=${resolved.bodyModel || '-'} thread=${resolved.threadId || '-'} effort=${resolved.reasoningEffort || '-'}`)
 
@@ -402,7 +446,27 @@ export async function handleChatGptSub(req, res, body, resolved) {
   let upstream
   let leaseRenewal = null
   if (useAccountPool) {
-    const result = await sendWithAccountRotation(req, chatGptFetch, upstreamBody, { model: resolved.model, tryResponsesLite })
+    let result
+    try {
+      result = await sendWithRotation(req, chatGptFetch, upstreamBody, { model: resolved.model, tryResponsesLite })
+    } catch (error) {
+      if (error.accountPoolExhausted) {
+        const details = {
+          ...poolAvailabilityDetails(resolved.model),
+          account_attempts: Number(error.accountAttempts) || MAX_ACCOUNT_ATTEMPTS_PER_REQUEST,
+          last_error: error.message
+        }
+        requestLog(req, `account_pool_attempts_exhausted details=${JSON.stringify(details)}`)
+        return sendJson(res, 503, {
+          error: {
+            type: 'account_pool_attempts_exhausted',
+            message: `Two ChatGPT account attempts failed. Check account login, network, cooldown, and recent route decisions. Last error: ${error.message}`,
+            details
+          }
+        }, { 'retry-after': '3' })
+      }
+      throw error
+    }
     if (!result) {
       const details = poolAvailabilityDetails(resolved.model)
       requestLog(req, `account_pool_unavailable details=${JSON.stringify(details)}`)

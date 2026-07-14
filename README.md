@@ -4,7 +4,7 @@ Windows 上的 Codex CLI / VS Code 多上游路由代理。它在保留原生 Re
 工具调用和流式输出的同时，统一接入 ChatGPT 订阅账号池、OpenAI API、DeepSeek
 和 OpenAI 兼容中转节点，并提供本地管理后台、稳定性保护与可观测性。
 
-当前版本：**2.2.0**
+当前版本：**2.2.1**
 
 ## 主要能力
 
@@ -23,6 +23,9 @@ Windows 上的 Codex CLI / VS Code 多上游路由代理。它在保留原生 Re
 - Token 刷新和额度刷新均使用单飞合并，区分临时网络错误与必须重新登录的永久凭据错误。
 - 额度历史会生成到达安全余量的趋势预测，并支持模型级、账号级双层冷却。
 - 提供优雅重启、全局单实例锁、安全配置回滚、账号独立备份/合并恢复、脱敏诊断报告和异常状态自动修复。
+- 后台显示实际运行目录、入口、版本、Commit、启动时间和 PID，并对比工作区与安装副本；不一致时醒目提示。
+- 支持一键备份部署：只复制运行清单内文件，随后重启并校验存活、运行路径、Commit 和文件一致性；失败自动恢复备份。
+- 官方登录前预检全局 CLI、VS Code 内置 CLI、`app-server` OAuth 能力和私密浏览器，并可复制诊断与修复命令。
 - 额度优先从真实模型响应头更新；后台仅刷新参与路由的账号，全池约 30 分钟、当前账号最低约 5 分钟，并带随机抖动与失败退避。
 - 408、5xx 和网络错误由轻量 Provider Circuit Breaker 隔离，并支持半开自动恢复。
 - 管理后台展示 Provider 熔断、恢复倒计时和最近账号路由决策，解释账号被选择或跳过的原因。
@@ -179,6 +182,29 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
   -NoAutostart -StartProxy
 ```
 
+### 安全部署更新
+
+管理后台“系统设置”会同时展示当前运行副本、工作区和默认安装目录。当工作区存在尚未
+部署的运行文件时，顶部会显示版本不一致警告，可点击“一键备份并部署更新”。也可以
+在工作区手动执行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  .\update-codex-proxy.ps1
+```
+
+脚本以 `runtime-files.json` 为唯一运行文件清单，部署前备份变化文件，使用原子替换写入，
+然后请求优雅重启并检查 `/live` 与 `/admin/api/runtime-info`。运行路径、Commit、文件
+一致性或健康检查任一失败都会恢复备份并重新启动旧版本。运行数据、账号配置、统计和
+日志不在清单中，不会被覆盖。
+
+仅预览变化或只复制、不重启：
+
+```powershell
+.\update-codex-proxy.ps1 -DryRun
+.\update-codex-proxy.ps1 -NoRestart
+```
+
 自定义安装目录或端口：
 
 ```powershell
@@ -299,6 +325,9 @@ powershell -ExecutionPolicy Bypass -File `
 | `GET` | `/admin/api/stats` | 获取 Provider、模型和账号健康统计 |
 | `GET` | `/admin/api/diagnostics` | 获取不含 Token/邮箱的本地诊断报告 |
 | `GET` | `/admin/api/error-guide` | 获取 HTTP 错误码原因与处理建议查找表 |
+| `GET` | `/admin/api/runtime-info` | 获取实际运行版本、路径及部署一致性 |
+| `POST` | `/admin/api/deploy-update` | 从本机启动备份、部署、重启、健康检查和自动回滚 |
+| `GET` | `/admin/api/chatgpt-login/preflight` | 检查 Codex CLI、app-server OAuth 和私密浏览器 |
 | `GET` | `/admin/api/config-snapshots` | 列出最近配置快照 |
 | `POST` | `/admin/api/chatgpt-accounts/:id/reset-credits` | 查询指定账号的 Codex 重置次数 |
 | `POST` | `/admin/api/chatgpt-accounts/refresh-reset-credits-all` | 查询账号池全部账号的重置次数 |
@@ -355,6 +384,8 @@ powershell -ExecutionPolicy Bypass -File `
 - 自适应并发、等待队列、请求租约、设置级安全回滚和优雅重启
 - 最近路由决策、Provider 熔断状态、恢复倒计时和手动重置
 - DPAPI + AES-256-GCM 凭据保护状态
+- 实际运行版本/Commit/路径与工作区安装一致性，以及安全一键部署
+- 官方登录前 CLI、`app-server` OAuth 与浏览器预检，可复制完整诊断和修复命令
 - 零基础使用教程，以及一键生成不含凭据和邮箱的诊断报告
 
 用量统计 API：
@@ -388,6 +419,9 @@ API 端点：
 | PUT | /admin/api/config | 保存配置到文件并热重载 |
 | GET | /admin/api/diagnostics | 获取队列、账号、熔断和凭据保护状态 |
 | GET | /admin/api/error-guide | 获取 HTTP 错误码原因与处理建议查找表 |
+| GET | /admin/api/runtime-info | 获取实际运行位置、版本、Commit 和安装一致性 |
+| POST | /admin/api/deploy-update | 启动安全部署、重启、健康检查和失败回滚 |
+| GET | /admin/api/chatgpt-login/preflight | 获取官方登录环境预检结果 |
 | GET | /admin/api/config-snapshots | 获取设置快照列表 |
 | POST | /admin/api/config-rollback | 仅回滚设置，不回退账号 Token/API Key |
 | GET | /admin/api/account-backups | 获取账号备份列表 |
@@ -480,6 +514,9 @@ requires_openai_auth = true
 | `codex-proxy-watchdog.log` | watchdog 恢复记录 |
 | `.credential-key.dpapi.json` | 由当前 Windows 用户 DPAPI 保护的本机数据密钥 |
 | `.account-backups\` | 已加密的账号池备份，删除/恢复前自动创建 |
+| `.release-manifest.json` | 安装版本、Commit、来源和运行文件 SHA-256 清单 |
+| `.last-deployment.json` | 最近一次部署成功或自动回滚结果 |
+| `.deploy-backups\` | 安全部署覆盖前的按时间戳文件备份 |
 
 常用诊断命令：
 
@@ -487,6 +524,8 @@ requires_openai_auth = true
 Get-Content "$HOME\.claude\proxy\codex-proxy-requests.log" -Tail 50
 Get-Content "$HOME\.codex-local-multi-proxy\codex-proxy.error.log" -Tail 50
 Get-Process -Id (Get-Content "$HOME\.codex-local-multi-proxy\.codex-proxy.pid")
+Invoke-RestMethod http://127.0.0.1:47892/admin/api/runtime-info
+Invoke-RestMethod http://127.0.0.1:47892/admin/api/chatgpt-login/preflight
 ```
 
 ## 测试

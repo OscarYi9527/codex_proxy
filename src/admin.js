@@ -799,6 +799,8 @@ export async function handleChatgptAccountResetQuota(req, res, accountId, body) 
     }
     const result = await consumeAccountResetCredit(account, {
       confirmed: body?.confirmed,
+      confirmedTargetAccount: body?.confirmedTargetAccount,
+      confirmedCreditConsumption: body?.confirmedCreditConsumption,
       confirmedAccountId: body?.confirmedAccountId,
       confirmedAccountLabel: body?.confirmedAccountLabel
     }, chinaFetch(fetch))
@@ -813,6 +815,8 @@ export async function handleChatgptAccountResetQuota(req, res, accountId, body) 
       ? 409
       : [
           'CONFIRMATION_REQUIRED',
+          'TARGET_ACCOUNT_CONFIRMATION_REQUIRED',
+          'RESET_IMPACT_CONFIRMATION_REQUIRED',
           'ACCOUNT_CONFIRMATION_MISMATCH',
           'ACCOUNT_LABEL_CONFIRMATION_MISMATCH',
           'RESET_CREDIT_INVALID'

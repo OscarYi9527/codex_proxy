@@ -15,7 +15,7 @@ Windows 上的 Codex CLI / VS Code 多上游路由代理。它在保留原生 Re
 - 账号池提供“条状简约型”和“卡片全面型”两种视图，浏览器会记住上次选择。
 - 简约视图按固定列轨道纵向对齐账号、5 小时/每周额度、重置时间、性能、路由状态和快捷操作；未启用路由的账号使用灰色状态展示。
 - 支持按账号或全池查询 Codex 额度重置次数，并在有可用次数时从账号卡片执行额度重置。
-- 额度重置要求输入完整账号名称并最终确认；服务端再次校验账号名称、账号 ID 和最新可用次数，避免误操作或使用过期缓存。
+- 额度重置会显著标注为高风险操作，要求输入完整账号名称、勾选目标账号和次数消耗确认项，并通过最终系统确认；服务端再次校验全部确认、账号 ID 和最新可用次数。
 - 账号支持本地改名；新登录/导入账号会立即尝试同步额度，并明确显示同步中、失败或待重试状态。
 - 新登录或手动导入的账号可设为“仅保存”，不会切换本机 Codex，也不会参与代理路由；需要时可单独启用。
 - 合规稳定模式限制单账号并发为 3、忙碌请求进入本地等待队列、单请求最多尝试 2 个账号，并优先使用 30 分钟内的新鲜额度数据。
@@ -301,7 +301,7 @@ powershell -ExecutionPolicy Bypass -File `
 | `GET` | `/admin/api/config-snapshots` | 列出最近配置快照 |
 | `POST` | `/admin/api/chatgpt-accounts/:id/reset-credits` | 查询指定账号的 Codex 重置次数 |
 | `POST` | `/admin/api/chatgpt-accounts/refresh-reset-credits-all` | 查询账号池全部账号的重置次数 |
-| `POST` | `/admin/api/chatgpt-accounts/:id/reset-quota` | 二次确认后消耗一次机会并重置额度 |
+| `POST` | `/admin/api/chatgpt-accounts/:id/reset-quota` | 完成三重确认后消耗一次机会并重置额度 |
 | `POST` | `/admin/api/config-rollback` | 回滚所选配置快照 |
 | `POST` | `/admin/api/runtime-repair` | 清理异常冷却与过期租约 |
 | `POST` | `/admin/api/proxy/restart` | 优雅重启代理 |
@@ -347,7 +347,7 @@ powershell -ExecutionPolicy Bypass -File `
 - 账号改名、首次额度自动同步、独立账号备份以及只补回缺失账号的安全恢复
 - 5 小时/每周额度、趋势预测、1h/24h 成功率、P50/P95 延迟和双层冷却
 - 账号池简约/全面双视图、固定列对齐、额度重置时间和灰色停用状态
-- Codex 重置次数单账号/全池查询，以及带账号名称和账号 ID 双重校验的额度重置
+- Codex 重置次数单账号/全池查询，以及带风险勾选、账号名称和账号 ID 多重校验的额度重置
 - 月度 AI 使用日历、今日指标、30 天双栏趋势图和逐账号每日 Token/成功/失败明细
 - AI 日历与最近调用、服务状态与运行信息采用两列等高网格，桌面端上下边界对齐
 - 精密运维控制台主题、明暗模式、键盘焦点状态、减少动态效果支持和移动端单列布局
@@ -392,7 +392,7 @@ API 端点：
 | POST | /admin/api/account-backups/restore | 合并恢复缺失账号，不覆盖现有凭据 |
 | POST | /admin/api/chatgpt-accounts/:id/reset-credits | 查询指定账号的 Codex 重置次数 |
 | POST | /admin/api/chatgpt-accounts/refresh-reset-credits-all | 查询全部账号的 Codex 重置次数 |
-| POST | /admin/api/chatgpt-accounts/:id/reset-quota | 经二次确认后重置指定账号额度 |
+| POST | /admin/api/chatgpt-accounts/:id/reset-quota | 经三重确认后重置指定账号额度 |
 | GET | /admin/api/resilience | 获取 Provider 熔断状态 |
 | DELETE | /admin/api/resilience | 重置 Provider 熔断状态 |
 
@@ -406,9 +406,22 @@ API 端点：
 
 1. 先查询并确认账号存在可用重置次数。
 2. 输入完整账号名称。
-3. 在最终系统提示中再次确认。
-4. 服务端校验账号名称和上游账号 ID。
-5. 提交前重新查询最新次数，再消耗最早到期的有效机会。
+3. 勾选“确认目标账号”和“消耗 1 次且不可撤销”两个风险确认项。
+4. 在最终系统提示中再次确认；提交期间不要关闭弹窗或重复点击。
+5. 服务端校验所有确认项、账号名称和上游账号 ID。
+6. 提交前重新查询最新次数，再消耗最早到期的有效机会。
+
+管理接口请求体必须显式携带全部确认信息：
+
+```json
+{
+  "confirmed": true,
+  "confirmedTargetAccount": true,
+  "confirmedCreditConsumption": true,
+  "confirmedAccountId": "上游账号 ID",
+  "confirmedAccountLabel": "完整账号名称"
+}
+```
 
 额度重置会消耗一次机会且无法撤销。管理接口仅应通过 localhost 使用。
 

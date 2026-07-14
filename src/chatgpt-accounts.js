@@ -757,10 +757,18 @@ function resetCreditError(message, code) {
 
 export async function consumeAccountResetCredit(account, {
   confirmed = false,
+  confirmedTargetAccount = false,
+  confirmedCreditConsumption = false,
   confirmedAccountId = '',
   confirmedAccountLabel = ''
 } = {}, fetchImpl = fetch) {
   if (confirmed !== true) throw resetCreditError('必须明确确认额度重置操作', 'CONFIRMATION_REQUIRED')
+  if (confirmedTargetAccount !== true) {
+    throw resetCreditError('必须勾选确认当前额度重置的目标账号', 'TARGET_ACCOUNT_CONFIRMATION_REQUIRED')
+  }
+  if (confirmedCreditConsumption !== true) {
+    throw resetCreditError('必须确认额度重置会消耗 1 次机会且无法撤销', 'RESET_IMPACT_CONFIRMATION_REQUIRED')
+  }
   const expectedLabel = String(account?.label || account?.account_id || account?.id || '')
   if (!expectedLabel || confirmedAccountLabel !== expectedLabel) {
     throw resetCreditError('二次确认的账号名称不匹配', 'ACCOUNT_LABEL_CONFIRMATION_MISMATCH')

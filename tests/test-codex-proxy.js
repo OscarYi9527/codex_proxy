@@ -406,6 +406,8 @@ describe('Codex 额度重置', () => {
     await assert.rejects(
       consumeAccountResetCredit(account, {
         confirmed: true,
+        confirmedTargetAccount: true,
+        confirmedCreditConsumption: true,
         confirmedAccountLabel: '其他账号',
         confirmedAccountId: account.account_id
       }, neverFetch),
@@ -414,11 +416,91 @@ describe('Codex 额度重置', () => {
     await assert.rejects(
       consumeAccountResetCredit(account, {
         confirmed: true,
+        confirmedTargetAccount: true,
+        confirmedCreditConsumption: true,
         confirmedAccountLabel: account.label,
         confirmedAccountId: 'wrong-account'
       }, neverFetch),
       error => error.code === 'ACCOUNT_CONFIRMATION_MISMATCH'
     )
+  })
+
+  it('缺少任一风险确认时不会请求上游', async () => {
+    const account = {
+      id: 'acct-local',
+      label: '工作账号',
+      account_id: 'upstream-account'
+    }
+    const neverFetch = async () => {
+      assert.fail('风险确认不完整时不应请求上游')
+    }
+    const baseConfirmation = {
+      confirmed: true,
+      confirmedTargetAccount: true,
+      confirmedCreditConsumption: true,
+      confirmedAccountLabel: account.label,
+      confirmedAccountId: account.account_id
+    }
+
+    await assert.rejects(
+      consumeAccountResetCredit(account, {
+        ...baseConfirmation,
+        confirmedTargetAccount: false
+      }, neverFetch),
+      error => error.code === 'TARGET_ACCOUNT_CONFIRMATION_REQUIRED'
+    )
+    await assert.rejects(
+      consumeAccountResetCredit(account, {
+        ...baseConfirmation,
+        confirmedCreditConsumption: false
+      }, neverFetch),
+      error => error.code === 'RESET_IMPACT_CONFIRMATION_REQUIRED'
+    )
+  })
+
+  it('完成全部确认后才进入最新次数查询和重置流程', async () => {
+    const account = {
+      id: 'acct-local',
+      label: '工作账号',
+      account_id: 'upstream-account',
+      access_token: 'access',
+      expires_at: Date.now() + 60_000
+    }
+    const calls = []
+    const mockFetch = async (url, options = {}) => {
+      calls.push({ url: String(url), method: options.method })
+      if (calls.length === 1) {
+        return new Response(JSON.stringify({
+          reset_credits: {
+            available_count: 1,
+            credits: [{
+              redeem_request_id: 'credit-live',
+              expires_at: '2099-01-01T00:00:00Z',
+              status: 'available'
+            }]
+          }
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+      return new Response('upstream unavailable', { status: 502 })
+    }
+
+    await assert.rejects(
+      consumeAccountResetCredit(account, {
+        confirmed: true,
+        confirmedTargetAccount: true,
+        confirmedCreditConsumption: true,
+        confirmedAccountLabel: account.label,
+        confirmedAccountId: account.account_id
+      }, mockFetch),
+      /Codex 额度重置失败/
+    )
+    assert.strictEqual(calls.length, 2)
+    assert.match(calls[0].url, /rate-limit-reset-credits$/)
+    assert.match(calls[1].url, /rate-limit-reset-credits\/consume$/)
+    assert.strictEqual(calls[1].method, 'POST')
   })
 
   it('管理配置不会暴露凭据或一次性兑换标识', () => {

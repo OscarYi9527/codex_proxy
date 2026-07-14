@@ -1,6 +1,6 @@
 const API = '/admin/api'
 let cfg = {}, statsData = { providers: {} }, diagnosticsData = { accounts: [], queue: {}, config_snapshots: [], account_backups: [], recent_route_decisions: [], provider_health: {providers:{}}, credential_protection: {}, circuits: [] }, modelCatalog = [], activePage = location.hash.slice(1) || 'overview'
-let pingResults = {}, modal = null, loginPoll = null, accountsPoll = null, draggedAccountId = null
+let pingResults = {}, modal = null, loginPoll = null, accountsPoll = null, draggedAccountId = null, resetQuotaSubmitting = false
 let accountViewMode = localStorage.getItem('codex-account-view') === 'compact' ? 'compact' : 'cards'
 let usageCalendarMonth = statsDateKey().slice(0,7)
 let animateNextRender = true
@@ -443,7 +443,7 @@ function renderAccounts(){
       <section class="account-reset-strip ${resetCount>0?'has-credit':''}">
         <div class="account-reset-icon">${svg('refresh')}</div>
         <div class="account-reset-copy">
-          <span>Codex 额度重置</span>
+          <span>Codex 额度重置 · <b class="reset-risk-label" style="color:var(--red);font-weight:800">高风险 / 不可撤销</b></span>
           <strong>${resetCount==null?'待查询':`${resetCount} 次可用`}</strong>
           <small>${resetDetail}${reset?.updated_at?` · 查询于 ${esc(beijingTime(reset.updated_at))}`:''}</small>
         </div>
@@ -503,13 +503,13 @@ function renderAccounts(){
       </div>
       <div class="compact-status">
         <span class="account-state ${routeTone}"><i></i>${routeLabel}</span>
-        <small>重置次数 <b>${resetCount==null?'待查询':resetCount}</b>${isActive?' · 本机账号':''}</small>
+        <small>重置次数 <b>${resetCount==null?'待查询':resetCount}</b>${resetCount>0?' · <em class="reset-risk-label" style="color:var(--red);font-style:normal;font-weight:800">高风险</em>':''}${isActive?' · 本机账号':''}</small>
       </div>
       <div class="compact-actions">
         ${!isActive?`<button title="切换为本机账号" onclick="switchAccount('${esc(a.id)}')">${svg('arrow')}</button>`:''}
         <button title="刷新额度" onclick="refreshAccountUsageOne('${esc(a.id)}')">${svg('refresh')}</button>
         <button title="查询重置次数" onclick="refreshAccountResetCreditsOne('${esc(a.id)}')">${svg('pulse')}</button>
-        ${resetCount>0?`<button class="danger" title="重置额度" onclick="openResetQuota('${esc(a.id)}')">${svg('refresh')}</button>`:''}
+        ${resetCount>0?`<button class="danger" title="高风险：消耗 1 次并重置额度（不可撤销）" onclick="openResetQuota('${esc(a.id)}')">${svg('refresh')}</button>`:''}
         <button title="${routeEnabled?'停用路由':'启用路由'}" onclick="toggleAccountRouting('${esc(a.id)}',${routeEnabled?'false':'true'})">${svg(routeEnabled?'x':'check')}</button>
       </div>
     </article>`
@@ -558,6 +558,7 @@ function helpFeature(icon,title,desc,page){
   return `<button class="help-feature" onclick="switchPage('${page}')"><span>${svg(icon)}</span><div><strong>${title}</strong><small>${desc}</small></div>${svg('arrow')}</button>`
 }
 function renderHelp(){
+  const quotaResetGuide=`<div class="help-manual"><div class="help-note" style="border-color:color-mix(in srgb,var(--red) 28%,var(--border));background:color-mix(in srgb,var(--red) 6%,var(--surface-2))"><b style="color:var(--red)">高风险：会消耗 1 次重置机会且无法撤销</b><p>只有账号确实有可用重置次数并且你明确需要立即恢复额度时才使用；不确定时不要操作。</p></div><ol><li><b>先查询重置次数。</b><span>进入账号池，点击目标账号的“查询次数”，确认可用次数和到期时间。</span></li><li><b>核对目标账号。</b><span>点击标有“高风险”的重置入口，检查弹窗中的账号名称，再完整输入该名称。</span></li><li><b>勾选两项风险确认。</b><span>分别确认目标账号正确，以及操作会消耗 1 次机会并且不可撤销。</span></li><li><b>完成最终系统确认。</b><span>只有三步全部完成后才会提交。提交期间不要关闭弹窗、刷新页面或重复点击，等待额度和剩余次数自动刷新。</span></li></ol></div>`
   const accounts=cfg.chatgptAccounts||[]
   const enabled=accounts.filter(a=>a.routing_enabled!==false).length
   const hasProvider=Boolean(enabled||cfg.openaiApiKey||cfg.deepseekApiKey||(cfg.relays||[]).length)
@@ -576,7 +577,7 @@ function renderHelp(){
     `<div class="help-banner"><div><span class="badge">推荐配置</span><h2>最后成功路径 + 10% 安全余量</h2><p>优先保证稳定，不需要频繁切换账号，也不会等到额度完全用完。</p></div>${button('去账号池配置','arrow',"switchPage('accounts')",'btn-primary')}</div>`+
     card('这个系统是做什么的？','先理解用途，再开始操作',`<div class="card-body help-intro"><p><b>它是运行在你电脑上的本地模型网关。</b>Codex 把请求交给它，它再根据你选择的规则，从 ChatGPT 订阅账号、官方 API、DeepSeek 或中转节点中选择一个可用通道。</p><p>它主要解决三件事：<b>统一管理账号和服务、在额度不足时稳定切换、集中查看额度与健康状态。</b>管理后台仅用于本机配置，不会替你注册账号，也不会绕过官方限制。</p></div>`)+
     card('第一步：我应该选择哪种接入方式？','只需要选择一种，也可以以后再增加',chooser)+
-    `<div class="grid"><div>${card('四步快速开始',`${accounts.length} 个账号 · ${enabled} 个参与路由`,`<div class="card-body help-steps">${steps}</div>`)}${card('ChatGPT 账号完整操作步骤','第一次使用建议逐条完成',exactGuide)}${card('API 和中转节点怎么配置？','按你选择的接入方式阅读',otherGuides)}${card('常见问题和故障排查','从登录、额度到账号切换',faq)}</div><div>${card('左侧功能都有什么？','点击即可前往',`<div class="help-features">${helpFeature('overview','控制台概览','看服务是否正常、最近有没有调用','overview')}${helpFeature('providers','模型服务','配置官方 API 和 DeepSeek','providers')}${helpFeature('relays','中转节点','添加第三方兼容服务','relays')}${helpFeature('accounts','账号池','添加账号、查看额度和切换策略','accounts')}${helpFeature('analytics','用量分析','查看请求和 Token 用量','analytics')}${helpFeature('settings','系统设置','选择默认模型和显示偏好','settings')}</div>`)}${card('四个重要概念','先分清这些就不容易误操作',concepts)}${card('页面状态怎么看？','看到这些文字时该做什么',statusGuide)}${card('新手安全原则','避免误操作和凭据泄露',`<div class="card-body help-note"><p>① 只登录自己拥有的账号；② 只在 OpenAI 官方页面输入密码和验证码；③ 不上传 auth.json；④ 不频繁刷新额度或反复登录；⑤ 不确定时保持“仅保存”，不要切换本机账号。</p></div>`)}</div></div>`
+    `<div class="grid"><div>${card('四步快速开始',`${accounts.length} 个账号 · ${enabled} 个参与路由`,`<div class="card-body help-steps">${steps}</div>`)}${card('ChatGPT 账号完整操作步骤','第一次使用建议逐条完成',exactGuide)}${card('额度重置怎么安全操作？','高风险功能 · 使用前逐项确认',quotaResetGuide)}${card('API 和中转节点怎么配置？','按你选择的接入方式阅读',otherGuides)}${card('常见问题和故障排查','从登录、额度到账号切换',faq)}</div><div>${card('左侧功能都有什么？','点击即可前往',`<div class="help-features">${helpFeature('overview','控制台概览','看服务是否正常、最近有没有调用','overview')}${helpFeature('providers','模型服务','配置官方 API 和 DeepSeek','providers')}${helpFeature('relays','中转节点','添加第三方兼容服务','relays')}${helpFeature('accounts','账号池','添加账号、查看额度和切换策略','accounts')}${helpFeature('analytics','用量分析','查看请求和 Token 用量','analytics')}${helpFeature('settings','系统设置','选择默认模型和显示偏好','settings')}</div>`)}${card('四个重要概念','先分清这些就不容易误操作',concepts)}${card('页面状态怎么看？','看到这些文字时该做什么',statusGuide)}${card('新手安全原则','避免误操作和凭据泄露',`<div class="card-body help-note"><p>① 只登录自己拥有的账号；② 只在 OpenAI 官方页面输入密码和验证码；③ 不上传 auth.json；④ 不频繁刷新额度或反复登录；⑤ 不确定时保持“仅保存”，不要切换本机账号。</p></div>`)}</div></div>`
 }
 async function copyProxyAddress(){
   const value=`${location.origin}/v1`
@@ -787,21 +788,52 @@ function openResetQuota(id){
   if(count<=0)return toast('请先查询并确认该账号有可用重置次数','error')
   const name=account.label||account.account_id||account.id
   const expiry=(account.reset_credits?.expires_at||[]).map(value=>new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})).join('；')
-  showModal('重置 Codex 额度',`<div class="reset-warning"><b>高风险操作：将立即消耗 1 次重置机会</b><p>账号：${esc(name)}<br>当前可用：${count} 次${expiry?`<br>到期（北京时间）：${esc(expiry)}`:''}</p><p>第一步确认：请输入完整账号名称 <b>${esc(name)}</b></p></div><div class="field"><label>账号名称</label><input class="input" id="reset_account_confirmation" autocomplete="off" placeholder="输入上方完整账号名称"><span class="hint">输入正确后还会显示最后一次系统确认。</span></div>`,'继续重置',`resetAccountQuota('${esc(id)}')`)
+  showModal('重置 Codex 额度',`<div class="reset-warning"><b>高风险操作 · 消耗 1 次 · 不可撤销</b><p>账号：${esc(name)}<br>当前可用：${count} 次${expiry?`<br>到期（北京时间）：${esc(expiry)}`:''}</p><p>必须依次完成账号名称、风险选项和最终系统确认，才会提交重置。</p></div><div class="field"><label>第一步：输入完整账号名称 <b>${esc(name)}</b></label><input class="input" id="reset_account_confirmation" autocomplete="off" placeholder="输入上方完整账号名称" oninput="updateResetQuotaConfirmation('${esc(id)}')"><span class="hint">名称必须完全一致，用于防止选错账号。</span></div><div class="reset-confirmations help-note" style="display:grid;gap:10px;margin-top:15px"><b>第二步：勾选以下两项确认</b><label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer"><input type="checkbox" id="reset_target_confirmation" style="margin-top:2px" onchange="updateResetQuotaConfirmation('${esc(id)}')"><span>我确认当前要重置的目标账号是 <strong>${esc(name)}</strong>。</span></label><label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer"><input type="checkbox" id="reset_credit_confirmation" style="margin-top:2px" onchange="updateResetQuotaConfirmation('${esc(id)}')"><span>我已知晓此操作会立即消耗 <strong>1 次重置机会</strong>，提交后无法撤销。</span></label></div><p class="reset-final-hint" style="margin:13px 0 0;color:var(--muted);font-size:10px">第三步：点击下方按钮后，系统还会进行最后一次确认。</p>`,'确认并继续',`resetAccountQuota('${esc(id)}')`)
+  const submit=modal?.querySelector('.modal-foot .btn-primary')
+  if(submit){
+    submit.id='reset_quota_submit'
+    submit.classList.remove('btn-primary')
+    submit.classList.add('btn-danger')
+    submit.disabled=true
+  }
   setTimeout(()=>document.getElementById('reset_account_confirmation')?.focus(),0)
+}
+function updateResetQuotaConfirmation(id){
+  const account=(cfg.chatgptAccounts||[]).find(item=>item.id===id)
+  const name=account&&(account.label||account.account_id||account.id)
+  const entered=document.getElementById('reset_account_confirmation')?.value.trim()
+  const targetConfirmed=document.getElementById('reset_target_confirmation')?.checked===true
+  const creditConfirmed=document.getElementById('reset_credit_confirmation')?.checked===true
+  const submit=document.getElementById('reset_quota_submit')
+  const ready=Boolean(name&&entered===name&&targetConfirmed&&creditConfirmed&&!resetQuotaSubmitting)
+  if(submit){
+    submit.disabled=!ready
+    submit.textContent=resetQuotaSubmitting?'正在提交…':'确认并继续'
+  }
+  return ready
 }
 async function resetAccountQuota(id){
   const account=(cfg.chatgptAccounts||[]).find(item=>item.id===id)
   if(!account)return toast('账号不存在','error')
+  if(resetQuotaSubmitting)return toast('额度重置正在提交，请勿重复操作','error')
   const name=account.label||account.account_id||account.id
   const entered=document.getElementById('reset_account_confirmation')?.value.trim()
   if(entered!==name)return toast('账号名称不匹配，未执行重置','error')
+  const confirmedTargetAccount=document.getElementById('reset_target_confirmation')?.checked===true
+  const confirmedCreditConsumption=document.getElementById('reset_credit_confirmation')?.checked===true
+  if(!confirmedTargetAccount||!confirmedCreditConsumption)return toast('请先勾选全部风险确认项','error')
   if(!confirm(`最后确认：确定立即重置「${name}」的 Codex 额度吗？\n\n此操作会消耗 1 次重置机会，提交后无法撤销。`))return
+  resetQuotaSubmitting=true
+  updateResetQuotaConfirmation(id)
   try{
-    const r=await fetch(API+'/chatgpt-accounts/'+encodeURIComponent(id)+'/reset-quota',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({confirmed:true,confirmedAccountId:account.account_id,confirmedAccountLabel:name})}),d=await r.json()
+    const r=await fetch(API+'/chatgpt-accounts/'+encodeURIComponent(id)+'/reset-quota',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({confirmed:true,confirmedTargetAccount,confirmedCreditConsumption,confirmedAccountId:account.account_id,confirmedAccountLabel:name})}),d=await r.json()
     if(!r.ok)throw new Error(d.error?.message||'额度重置失败')
     cfg=d.config;closeModal();render();toast(d.message||'Codex 额度已重置')
   }catch(e){toast(e.message,'error')}
+  finally{
+    resetQuotaSubmitting=false
+    updateResetQuotaConfirmation(id)
+  }
 }
 function startAccountDrag(event,id){
   draggedAccountId=id

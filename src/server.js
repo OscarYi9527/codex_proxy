@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url'
 import { PROXY_DIR, initializeCredentialProtection, proxyConfig } from './config.js'
 import { requestLog } from './logger.js'
 import { sendJson, readJson, id, setProxyMeta } from './server-utils.js'
+import { getCodeTurnRequestState, markCodeTurnRequest, readCodeTurnMetadata } from './request-state.js'
 import { getCircuitStates, resetCircuits } from './circuit-breaker.js'
 import { resolveCodexModel, buildModelsResponse, isChatGptSubModel, isOpenAIApiModel, isRelayModel, shouldRouteViaOpenAIApi } from './models.js'
 import { handleThreadRouteReq } from './routes/thread-route.js'
@@ -154,6 +155,17 @@ export function createServer({ fetchImpl = fetch } = {}) {
       return handleThreadRouteReq(req, res, url)
     }
 
+    // Code uses this local-only endpoint after an interruption to determine
+    // whether the Proxy received / forwarded a particular turn. It contains
+    // only opaque IDs and request lifecycle metadata.
+    const codeTurnStateMatch = url.pathname.match(/^\/control\/code-turns\/([^/]+)\/([^/]+)$/)
+    if (req.method === 'GET' && codeTurnStateMatch) {
+      const sessionId = decodeURIComponent(codeTurnStateMatch[1])
+      const turnId = decodeURIComponent(codeTurnStateMatch[2])
+      const state = getCodeTurnRequestState(sessionId, turnId)
+      return sendJson(res, 200, { state })
+    }
+
     // Models list (with dynamic relay injection)
     if (req.method === 'GET' && url.pathname.endsWith('/models')) {
       let localModels = []
@@ -175,17 +187,41 @@ export function createServer({ fetchImpl = fetch } = {}) {
 
     // POST /v1/responses
     if (req.method === 'POST' && (url.pathname === '/v1/responses' || url.pathname.endsWith('/responses'))) {
+      let codeTurn
       try {
         const body = await readJson(req)
+        codeTurn = readCodeTurnMetadata(req, body)
+        markCodeTurnRequest(codeTurn, {
+          state: 'received',
+          requestId: req.requestId
+        })
         const resolved = resolveCodexModel(body)
         setProxyMeta(res, { model: resolved.model })
         requestLog(req, 'model=' + resolved.model + ' effort=' + (resolved.reasoningEffort || 'default') + ' stream=' + body.stream)
 
-        if (isRelayModel(resolved.model)) return await handleRelay(req, res, body, resolved)
-        if (shouldRouteViaOpenAIApi(resolved.model)) return await handleOpenAIApi(req, res, body, resolved)
-        if (isChatGptSubModel(resolved.model)) return await handleChatGptSub(req, res, body, resolved)
-        return await handleDeepSeek(req, res, body, resolved)
+        markCodeTurnRequest(codeTurn, {
+          state: 'forwarded',
+          requestId: req.requestId,
+          model: resolved.model
+        })
+        if (isRelayModel(resolved.model)) await handleRelay(req, res, body, resolved)
+        else if (shouldRouteViaOpenAIApi(resolved.model)) await handleOpenAIApi(req, res, body, resolved)
+        else if (isChatGptSubModel(resolved.model)) await handleChatGptSub(req, res, body, resolved)
+        else await handleDeepSeek(req, res, body, resolved)
+        if (!req.clientAbortSignal.aborted && !res.destroyed) {
+          markCodeTurnRequest(codeTurn, {
+            state: res.statusCode >= 200 && res.statusCode < 400 ? 'completed' : 'failed',
+            requestId: req.requestId,
+            model: resolved.model,
+            status: res.statusCode
+          })
+        }
       } catch (error) {
+        markCodeTurnRequest(codeTurn, {
+          state: 'failed',
+          requestId: req.requestId,
+          status: res.statusCode || 502
+        })
         if (req.clientAbortSignal.aborted || res.destroyed) return
         console.error('[codex-proxy] request failed:', error.message)
         if (!res.headersSent) return sendJson(res, 502, { error: { type: 'proxy_error', message: error.message } })

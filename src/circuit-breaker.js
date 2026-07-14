@@ -4,6 +4,12 @@
 
 const DEFAULT_FAILURE_THRESHOLD = 3
 const DEFAULT_RESET_TIMEOUT_MS = 30_000
+// A half-open probe normally resolves in seconds. If the caller disconnects
+// or the probe request otherwise never reports its result back through
+// recordCircuitResult, halfOpenProbeActive would stay true forever and wedge
+// the circuit open permanently. Treat a probe older than this as abandoned
+// and let the next request take over as a fresh probe.
+const DEFAULT_PROBE_STALE_MS = 60_000
 const circuits = new Map()
 
 function stateFor(name) {
@@ -14,7 +20,8 @@ function stateFor(name) {
       failures: 0,
       openedAt: null,
       lastFailure: null,
-      halfOpenProbeActive: false
+      halfOpenProbeActive: false,
+      halfOpenProbeStartedAt: null
     })
   }
   return circuits.get(name)
@@ -26,21 +33,28 @@ function isProviderFailure(status, error) {
 }
 
 export function assertCircuitAvailable(name, {
-  resetTimeoutMs = DEFAULT_RESET_TIMEOUT_MS
+  resetTimeoutMs = DEFAULT_RESET_TIMEOUT_MS,
+  probeStaleMs = DEFAULT_PROBE_STALE_MS
 } = {}) {
   if (!name) return
   const circuit = stateFor(name)
   if (circuit.state === 'half-open') {
-    const error = new Error(`Upstream circuit "${name}" is probing recovery`)
-    error.code = 'CIRCUIT_OPEN'
-    error.retryAfterMs = resetTimeoutMs
-    throw error
+    if (circuit.halfOpenProbeActive && Date.now() - circuit.halfOpenProbeStartedAt < probeStaleMs) {
+      const error = new Error(`Upstream circuit "${name}" is probing recovery`)
+      error.code = 'CIRCUIT_OPEN'
+      error.retryAfterMs = probeStaleMs
+      throw error
+    }
+    circuit.halfOpenProbeActive = true
+    circuit.halfOpenProbeStartedAt = Date.now()
+    return
   }
   if (circuit.state !== 'open') return
 
   if (Date.now() - circuit.openedAt >= resetTimeoutMs && !circuit.halfOpenProbeActive) {
     circuit.state = 'half-open'
     circuit.halfOpenProbeActive = true
+    circuit.halfOpenProbeStartedAt = Date.now()
     return
   }
 
@@ -64,6 +78,7 @@ export function recordCircuitResult(name, {
       circuit.openedAt = null
       circuit.lastFailure = null
       circuit.halfOpenProbeActive = false
+      circuit.halfOpenProbeStartedAt = null
     }
     return
   }
@@ -75,6 +90,7 @@ export function recordCircuitResult(name, {
     message: error?.message || null
   }
   circuit.halfOpenProbeActive = false
+  circuit.halfOpenProbeStartedAt = null
 
   if (circuit.state === 'half-open' || circuit.failures >= failureThreshold) {
     circuit.state = 'open'

@@ -749,6 +749,22 @@ describe('Provider 熔断器', () => {
     assert.strictEqual(getCircuitStates()[0].state, 'closed')
     resetCircuits()
   })
+
+  it('半开探测请求被取消后不会永久卡死，过期后允许新探测', () => {
+    resetCircuits()
+    recordCircuitResult('stuck-provider', { status: 503, failureThreshold: 1 })
+    assert.strictEqual(getCircuitStates()[0].state, 'open')
+    // 进入半开态，模拟这次探测请求本身发起了但从未回报结果（例如调用方断开连接）
+    assert.doesNotThrow(() => assertCircuitAvailable('stuck-provider', { resetTimeoutMs: 0 }))
+    assert.strictEqual(getCircuitStates()[0].state, 'half-open')
+    // 探测还很新鲜时，其余请求应继续被拒绝
+    assert.throws(() => assertCircuitAvailable('stuck-provider', { probeStaleMs: 60_000 }), /probing recovery/)
+    // 探测过期（probeStaleMs=0）后，下一次请求应被允许作为新的探测
+    assert.doesNotThrow(() => assertCircuitAvailable('stuck-provider', { probeStaleMs: 0 }))
+    recordCircuitResult('stuck-provider', { status: 200 })
+    assert.strictEqual(getCircuitStates()[0].state, 'closed')
+    resetCircuits()
+  })
 })
 
 describe('稳定重试策略', () => {

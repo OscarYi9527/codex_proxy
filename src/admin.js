@@ -55,6 +55,152 @@ function resolveCodexJsPath() {
   return process.env.CODEX_CLI_JS || path.join(appData, 'npm', 'node_modules', '@openai', 'codex', 'bin', 'codex.js')
 }
 
+function vscodeCodexCandidates() {
+  if (process.platform !== 'win32') return []
+  const roots = [
+    path.join(os.homedir(), '.vscode', 'extensions'),
+    path.join(os.homedir(), '.vscode-insiders', 'extensions')
+  ]
+  const archFolders = process.arch === 'arm64'
+    ? ['windows-arm64', 'windows-x86_64']
+    : ['windows-x86_64', 'windows-arm64']
+  const candidates = []
+  for (const root of roots) {
+    let extensions = []
+    try {
+      extensions = fs.readdirSync(root, { withFileTypes: true })
+        .filter(entry => entry.isDirectory() && entry.name.startsWith('openai.chatgpt-'))
+        .map(entry => {
+          const fullPath = path.join(root, entry.name)
+          let modified = 0
+          try { modified = fs.statSync(fullPath).mtimeMs } catch {}
+          return { fullPath, modified }
+        })
+        .sort((a, b) => b.modified - a.modified)
+    } catch {}
+    for (const extension of extensions) {
+      for (const archFolder of archFolders) {
+        candidates.push({
+          command: path.join(extension.fullPath, 'bin', archFolder, 'codex.exe'),
+          argsPrefix: [],
+          source: 'VS Code Codex 扩展'
+        })
+      }
+    }
+  }
+  return candidates
+}
+
+function codexLaunchCandidates() {
+  const candidates = []
+  const add = candidate => {
+    if (!candidate?.command || !fs.existsSync(candidate.command)) return
+    const key = `${path.resolve(candidate.command).toLowerCase()}\0${(candidate.argsPrefix || []).join('\0')}`
+    if (candidates.some(item => item.key === key)) return
+    candidates.push({ ...candidate, key })
+  }
+
+  add({
+    command: process.env.CODEX_CLI_EXE,
+    argsPrefix: [],
+    source: 'CODEX_CLI_EXE'
+  })
+  const codexJs = resolveCodexJsPath()
+  if (fs.existsSync(codexJs)) {
+    add({
+      command: process.execPath,
+      argsPrefix: [codexJs],
+      source: process.env.CODEX_CLI_JS ? 'CODEX_CLI_JS' : '全局 npm Codex CLI'
+    })
+  }
+
+  if (process.platform === 'win32') {
+    try {
+      const where = spawnSync('where.exe', ['codex'], {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 3000
+      })
+      for (const value of String(where.stdout || '').split(/\r?\n/)) {
+        const executable = value.trim()
+        if (/\.exe$/i.test(executable)) {
+          add({ command: executable, argsPrefix: [], source: 'PATH 中的 Codex CLI' })
+        }
+      }
+    } catch {}
+  }
+  vscodeCodexCandidates().forEach(add)
+  return candidates.map(({ key, ...candidate }) => candidate)
+}
+
+export function summarizeCodexLaunchFailure(output, fallback = 'Codex CLI 无法启动') {
+  const text = String(output || '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
+  if (/Missing optional dependency\s+(@openai\/codex-[^\s.]+)/i.test(text)) {
+    const dependency = text.match(/Missing optional dependency\s+(@openai\/codex-[^\s.]+)/i)?.[1]
+    return `全局 Codex CLI 安装不完整，缺少 ${dependency || '平台运行包'}`
+  }
+  const lines = text.split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line =>
+      line &&
+      !/^Node\.js v\d+/i.test(line) &&
+      !/^at\s+/i.test(line) &&
+      !/^[\^~]+$/.test(line) &&
+      !/^file:\/\/\//i.test(line)
+    )
+  return lines.find(line => /^Error:/i.test(line))?.replace(/^Error:\s*/i, '') || lines.at(-1) || fallback
+}
+
+function probeCodexLaunch(candidate) {
+  try {
+    const result = spawnSync(candidate.command, [...(candidate.argsPrefix || []), '--version'], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 5000
+    })
+    const combined = `${result.stdout || ''}\n${result.stderr || ''}`.trim()
+    if (!result.error && result.status === 0) {
+      return {
+        ok: true,
+        version: String(result.stdout || combined).trim().split(/\r?\n/)[0] || '版本未知'
+      }
+    }
+    return {
+      ok: false,
+      error: summarizeCodexLaunchFailure(combined || result.error?.message, `退出码 ${result.status}`)
+    }
+  } catch (error) {
+    return { ok: false, error: error.message }
+  }
+}
+
+export function resolveCodexLaunch({
+  candidates = codexLaunchCandidates(),
+  probe = probeCodexLaunch
+} = {}) {
+  const failures = []
+  for (const candidate of candidates) {
+    const result = probe(candidate)
+    if (result?.ok) {
+      return {
+        ...candidate,
+        argsPrefix: [...(candidate.argsPrefix || [])],
+        version: result.version || '版本未知',
+        failures
+      }
+    }
+    failures.push(`${candidate.source || candidate.command}：${result?.error || '无法启动'}`)
+  }
+  return {
+    command: null,
+    argsPrefix: [],
+    source: null,
+    version: null,
+    failures,
+    error: failures.slice(-3).join('；') || '未找到 Codex CLI 或 VS Code Codex 扩展'
+  }
+}
+
 // Best-effort: finds any local process whose command line references the
 // resolved codex.js (the CLI, its `login` subprocess, etc) and kills it, so a
 // freshly-switched-to account's auth.json is picked up on next Codex invocation.
@@ -110,7 +256,9 @@ function publicLoginSession() {
     startedAt: loginSession.startedAt,
     verificationUrl: loginSession.verificationUrl || null,
     userCode: loginSession.userCode || null,
-    privateBrowserKind: loginSession.privateBrowserKind || null
+    privateBrowserKind: loginSession.privateBrowserKind || null,
+    codexSource: loginSession.codexSource || null,
+    codexVersion: loginSession.codexVersion || null
   }
 }
 
@@ -453,10 +601,13 @@ export async function handleChatgptLoginStart(req, res) {
       })
     }
     const body = await readJson(req)
-    const codexJs = resolveCodexJsPath()
-    if (!fs.existsSync(codexJs)) {
+    const codexLaunch = resolveCodexLaunch()
+    if (!codexLaunch.command) {
       return sendJson(res, 503, {
-        error: { type: 'service_unavailable', message: '未找到本机 Codex CLI，请先安装或更新 Codex' }
+        error: {
+          type: 'service_unavailable',
+          message: `未找到可用的 Codex CLI。${codexLaunch.error}。请修复全局安装，或安装/更新 OpenAI Codex VS Code 扩展。`
+        }
       })
     }
 
@@ -471,7 +622,7 @@ export async function handleChatgptLoginStart(req, res) {
     const session = {
       id: `login_${Date.now().toString(36)}`,
       status: 'waiting',
-      message: '正在启动隔离的 OpenAI 官方浏览器登录…',
+      message: `正在通过 ${codexLaunch.source} 启动隔离的 OpenAI 官方浏览器登录…`,
       startedAt: new Date().toISOString(),
       label: String(body.label || body.email || '').trim(),
       routingEnabled: body.routingEnabled === true,
@@ -480,11 +631,13 @@ export async function handleChatgptLoginStart(req, res) {
       child: null,
       timer: null,
       loginId: null,
-      finalizing: false
+      finalizing: false,
+      codexSource: codexLaunch.source,
+      codexVersion: codexLaunch.version
     }
     loginSession = session
-    const child = spawn(process.execPath, [
-      codexJs,
+    const child = spawn(codexLaunch.command, [
+      ...codexLaunch.argsPrefix,
       '-c',
       'cli_auth_credentials_store=\"file\"',
       'app-server'
@@ -521,7 +674,7 @@ export async function handleChatgptLoginStart(req, res) {
       finishLoginSession(
         session,
         'error',
-        stderr.trim().split(/\r?\n/).pop() || `Codex app-server 提前退出 (code ${code})`
+        summarizeCodexLaunchFailure(stderr, `Codex app-server 提前退出 (code ${code})`)
       )
     })
     writeAppServerMessage(session, {

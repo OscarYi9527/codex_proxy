@@ -11,7 +11,7 @@ import { assertCircuitAvailable, getCircuitStates, recordCircuitResult, resetCir
 import { fetchWithRetry, proxyMetaHeaders, retryAfterMs } from '../src/server-utils.js'
 import { redactSecrets } from '../src/logger.js'
 import { createServer } from '../src/server.js'
-import { findDuplicateAccount, findPrivateBrowser, parseDeviceAuthOutput, privateBrowserArgs, publicProxyConfig } from '../src/admin.js'
+import { findDuplicateAccount, findPrivateBrowser, parseDeviceAuthOutput, privateBrowserArgs, publicProxyConfig, resolveCodexLaunch, summarizeCodexLaunchFailure } from '../src/admin.js'
 import { acquireActiveAccountWithRetry, refreshBelowReserveAccounts } from '../src/routes/chatgpt-sub.js'
 import { getRouteDecisions, recordRouteDecision, resetRouteDecisions } from '../src/route-decisions.js'
 import { decryptConfigSecrets, encryptConfigSecrets, isEncryptedSecret } from '../src/credential-store.js'
@@ -1062,6 +1062,38 @@ describe('原子配置写入和管理 API', () => {
 })
 
 describe('官方安全登录隔离', () => {
+  it('全局 npm Codex 损坏时回退到可用的原生 Codex', () => {
+    const candidates = [
+      { command: 'node.exe', argsPrefix: ['codex.js'], source: '全局 npm Codex CLI' },
+      { command: 'codex.exe', argsPrefix: [], source: 'VS Code Codex 扩展' }
+    ]
+    const launch = resolveCodexLaunch({
+      candidates,
+      probe: candidate => candidate.command === 'codex.exe'
+        ? { ok: true, version: 'codex-cli 0.144.0' }
+        : { ok: false, error: '缺少平台运行包' }
+    })
+
+    assert.strictEqual(launch.command, 'codex.exe')
+    assert.strictEqual(launch.source, 'VS Code Codex 扩展')
+    assert.strictEqual(launch.version, 'codex-cli 0.144.0')
+    assert.deepStrictEqual(launch.failures, ['全局 npm Codex CLI：缺少平台运行包'])
+  })
+
+  it('登录启动错误不会只显示 Node.js 版本号', () => {
+    const stderr = `Error: Missing optional dependency @openai/codex-win32-x64. Reinstall Codex
+    at findCodexExecutable (codex.js:105:9)
+Node.js v24.11.1`
+    assert.strictEqual(
+      summarizeCodexLaunchFailure(stderr),
+      '全局 Codex CLI 安装不完整，缺少 @openai/codex-win32-x64'
+    )
+    assert.strictEqual(
+      summarizeCodexLaunchFailure('Error: app-server failed\nNode.js v24.11.1'),
+      'app-server failed'
+    )
+  })
+
   it('解析设备授权地址和用户代码', () => {
     const parsed = parseDeviceAuthOutput(`
       Open \u001b[36mhttps://auth.openai.com/codex/device\u001b[0m in your browser

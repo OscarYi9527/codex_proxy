@@ -758,7 +758,8 @@ function loginStatusContent(d){
   const link=typeof d.verificationUrl==='string'&&d.verificationUrl.startsWith('https://')?`<a class="btn btn-sm btn-primary" href="${esc(d.verificationUrl)}" target="_blank" rel="noopener noreferrer">打开验证页（请确认私密模式）</a>`:''
   const code=d.userCode?`<code style="font-size:15px;font-weight:700;letter-spacing:1px">${esc(d.userCode)}</code><button class="btn btn-sm" onclick="copyDeviceCode('${esc(d.userCode)}')">复制验证码</button>`:''
   const cancel=d.status==='waiting'?button('取消','','cancelOfficialLogin()','btn-sm'):''
-  return `<span class="status ${state}"><i></i>${esc(d.message||'等待设备授权信息…')}</span>${code}${link}${cancel}`
+  const runtime=d.codexSource?`<span class="tag" title="${esc(d.codexVersion||'版本未知')}">${esc(d.codexSource)} · ${esc(d.codexVersion||'版本未知')}</span>`:''
+  return `<span class="status ${state}"><i></i>${esc(d.message||'等待设备授权信息…')}</span>${runtime}${code}${link}${cancel}`
 }
 async function copyDeviceCode(code){
   try{await navigator.clipboard.writeText(code);toast('设备验证码已复制')}catch{toast('复制失败，请手动复制验证码','error')}

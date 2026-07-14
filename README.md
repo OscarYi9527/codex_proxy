@@ -106,7 +106,7 @@ DeepSeek 路由执行以下转换：
 - Windows 10/11
 - PowerShell 5.1 或更高版本
 - Node.js 20 或更高版本
-- 已安装 Codex CLI，`codex.cmd` 可从 `PATH` 访问
+- 已安装可用的全局 Codex CLI，或已安装包含原生 `codex.exe` 的 OpenAI Codex VS Code 扩展
 - 使用 GPT 订阅模式时，已通过 Codex 完成 ChatGPT 登录
 - 使用 GPT `*-API` 模型时，有有效的 `OPENAI_API_KEY`
 - 使用 DeepSeek 时，有有效的 `DEEPSEEK_API_KEY`
@@ -344,7 +344,7 @@ powershell -ExecutionPolicy Bypass -File `
 
 功能：
 - 可视化编辑 API 地址、密钥、默认模型和中转节点
-- ChatGPT 官方隔离登录、账号仅保存/启用、拖拽优先级和 9 种路由策略
+- ChatGPT 官方隔离登录（全局 CLI 损坏时自动回退到 VS Code 内置 Codex）、账号仅保存/启用、拖拽优先级和 9 种路由策略
 - 账号改名、首次额度自动同步、独立账号备份以及只补回缺失账号的安全恢复
 - 5 小时/每周额度、趋势预测、1h/24h 成功率、P50/P95 延迟和双层冷却
 - 账号池简约/全面双视图、固定列对齐、额度重置时间和灰色停用状态
@@ -500,6 +500,21 @@ git diff --check
 自动化测试使用本地 mock，不会消耗真实模型额度。
 
 ## 常见问题
+
+### OpenAI 官方安全登录提示 `Node.js v...`
+
+这不是 Node.js 版本不兼容，而是全局 npm 安装的 Codex CLI 启动失败时，旧界面只截取了
+错误输出的最后一行。常见真实原因是缺少 `@openai/codex-win32-x64` 等平台运行包。
+
+当前版本会先验证每个 Codex 启动入口；全局 npm CLI 损坏时，自动回退到 OpenAI Codex
+VS Code 扩展内置的原生 `codex.exe`，并在登录状态中显示实际使用的来源和版本。若本机
+没有可用的回退版本，请重新安装全局 CLI：
+
+```powershell
+npm uninstall -g @openai/codex
+npm install -g @openai/codex@latest
+codex --version
+```
 
 ### HTTP 报错代码查找表
 

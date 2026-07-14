@@ -6,7 +6,7 @@ import { requestLog } from '../logger.js'
 import { sendJson, pipeResponsesUpstream, fetchWithRetry, setProxyMeta } from '../server-utils.js'
 import { recordUsage, recordAccountOutcome, saveStats } from '../stats.js'
 import { chinaFetch, withChinaDispatcher } from '../china-fetch.js'
-import { pickActiveAccount, ensureFreshToken, markAccountCooldown, markAccountAuthFailure, extractUsageFromHeaders, applyAccountUsage, accountSessionKey, noteAccountSuccess, reserveAccountRequest, renewAccountRequestLease, releaseAccountRequest, accountActiveRequestCount, accountConcurrencyLimit, accountRemainingPercent, noteAccountAdaptiveOutcome, refreshAccountUsage } from '../chatgpt-accounts.js'
+import { pickActiveAccount, ensureFreshToken, markAccountCooldown, markAccountAuthFailure, extractUsageFromHeaders, applyAccountUsage, accountSessionKey, noteAccountSuccess, reserveAccountRequest, renewAccountRequestLease, releaseAccountRequest, accountActiveRequestCount, accountConcurrencyLimit, accountRemainingPercent, accountPolicyState, noteAccountAdaptiveOutcome, refreshAccountUsage } from '../chatgpt-accounts.js'
 import { recordRouteDecision } from '../route-decisions.js'
 
 const RESPONSES_LITE_HEADER = 'x-openai-internal-codex-responses-lite'
@@ -399,6 +399,9 @@ export function poolAvailabilityDetails(model) {
     cooling: 0,
     model_cooling: 0,
     below_reserve: 0,
+    daily_limited: 0,
+    reserved_for_other_work: 0,
+    emergency_continue: 0,
     eligible: 0
   }
   for (const account of (proxyConfig.chatgptAccounts || [])) {
@@ -411,10 +414,16 @@ export function poolAvailabilityDetails(model) {
     else if (account.status === 'cooldown' && Number(account.cooldown_until) > now) details.cooling++
     else if (model && Number(account.model_cooldowns?.[model]) > now) details.model_cooling++
     else {
+      const policy = accountPolicyState(account, { model, globalReserve: threshold, now })
       const remaining = accountRemainingPercent(account)
-      if (remaining !== null && remaining <= threshold) details.below_reserve++
+      if (!policy.emergency && (policy.request_limited || policy.token_limited)) details.daily_limited++
+      else if (!policy.emergency && policy.reservation_blocked) details.reserved_for_other_work++
+      else if (!policy.emergency && remaining !== null && remaining <= policy.reserve) details.below_reserve++
       else if (accountActiveRequestCount(account.id) >= accountConcurrencyLimit(account.id)) details.busy++
-      else details.eligible++
+      else {
+        if (policy.emergency) details.emergency_continue++
+        details.eligible++
+      }
     }
   }
   return details

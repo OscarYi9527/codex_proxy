@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { resolveCodexModel, isChatGptSubModel, isOpenAIApiModel, isRelayModel, parseRelayModel, buildModelsResponse, getThreadId } from '../src/models.js'
 import { recordUsage, recordAccountOutcome, getStats, resetStats, saveStats, statsDayKey } from '../src/stats.js'
-import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurrencyLimit, accountRemainingPercent, accountUsageIsFresh, calculateUsageForecast, consumeAccountResetCredit, cooldownMsFromResponseText, ensureFreshToken, extractResetCredits, extractUsageFromBody, extractUsageFromHeaders, mergeAccountUsageWindows, normalizeAccountRoutingStrategy, noteAccountAdaptiveOutcome, noteAccountSuccess, pickActiveAccount, refreshAccountResetCredits, refreshAccountUsage, releaseAccountRequest, renewAccountRequestLease, reserveAccountRequest, resetAccountRequestCounts, resetAccountStickiness } from '../src/chatgpt-accounts.js'
+import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurrencyLimit, accountPolicyState, accountRemainingPercent, accountUsageIsFresh, calculateUsageForecast, consumeAccountResetCredit, cooldownMsFromResponseText, ensureFreshToken, extractResetCredits, extractUsageFromBody, extractUsageFromHeaders, mergeAccountUsageWindows, normalizeAccountRoutingStrategy, noteAccountAdaptiveOutcome, noteAccountSuccess, pickActiveAccount, refreshAccountResetCredits, refreshAccountUsage, releaseAccountRequest, renewAccountRequestLease, reserveAccountRequest, resetAccountRequestCounts, resetAccountStickiness } from '../src/chatgpt-accounts.js'
 import { proxyConfig, atomicWriteJson, configForSettingsSnapshot, mergeAccountBackup, mergeSettingsSnapshot, orderChatgptAccounts, renameChatgptAccountInList } from '../src/config.js'
 import { assertCircuitAvailable, getCircuitStates, recordCircuitResult, resetCircuits } from '../src/circuit-breaker.js'
 import { fetchWithRetry, proxyMetaHeaders, retryAfterMs } from '../src/server-utils.js'
@@ -637,6 +637,52 @@ describe('额度感知和会话粘性账号选择', () => {
     }
   })
 
+  it('每账号安全余量、每日上限和紧急继续策略独立生效', () => {
+    const original = proxyConfig.chatgptAccounts
+    resetStats()
+    proxyConfig.chatgptAccounts = [{
+      id: 'policy-account',
+      status: 'active',
+      routing_enabled: true,
+      low_quota_threshold: 20,
+      daily_request_limit: 1,
+      usage: { primary: { remaining_percent: 15 } }
+    }]
+    try {
+      assert.strictEqual(pickActiveAccount(null, { lowQuotaThreshold: 10 }), null)
+      recordAccountOutcome('policy-account', { status: 200, latencyMs: 10 })
+      const limited = accountPolicyState(proxyConfig.chatgptAccounts[0])
+      assert.strictEqual(limited.request_limited, true)
+      proxyConfig.chatgptAccounts[0].emergency_continue_until = new Date(Date.now() + 60_000).toISOString()
+      assert.strictEqual(pickActiveAccount(null, { lowQuotaThreshold: 10 }).id, 'policy-account')
+    } finally {
+      resetStats()
+      proxyConfig.chatgptAccounts = original
+    }
+  })
+
+  it('预留账号仅服务匹配的模型或会话并获得优先选择', () => {
+    const original = proxyConfig.chatgptAccounts
+    proxyConfig.chatgptAccounts = [
+      { id: 'general', status: 'active', routing_enabled: true, usage: { primary: { remaining_percent: 90 } } },
+      {
+        id: 'reserved',
+        status: 'active',
+        routing_enabled: true,
+        reserved_models: ['gpt-important'],
+        reserved_session_ids: ['vip-thread'],
+        usage: { primary: { remaining_percent: 30 } }
+      }
+    ]
+    try {
+      assert.strictEqual(pickActiveAccount(null, { model: 'gpt-normal' }).id, 'general')
+      assert.strictEqual(pickActiveAccount(null, { model: 'gpt-important' }).id, 'reserved')
+      assert.strictEqual(pickActiveAccount(null, { model: 'gpt-normal', sessionKey: 'vip-thread' }).id, 'reserved')
+    } finally {
+      proxyConfig.chatgptAccounts = original
+    }
+  })
+
   it('模型级 429 只跳过该账号上的对应模型', () => {
     const original = proxyConfig.chatgptAccounts
     proxyConfig.chatgptAccounts = [
@@ -1245,6 +1291,7 @@ describe('请求元数据、账号统计和日志脱敏', () => {
     assert.strictEqual(account.p95_latency_ms, 300)
     assert.strictEqual(account.windows['1h'].requests, 2)
     assert.strictEqual(account.windows['24h'].success_rate, 50)
+    assert.strictEqual(account.windows['7d'].p95_latency_ms, 300)
     resetStats()
   })
 

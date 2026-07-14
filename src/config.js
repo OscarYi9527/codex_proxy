@@ -480,15 +480,48 @@ export function renameChatgptAccount(accountId, label) {
   return newCfg
 }
 
-export function setChatgptAccountRouting(accountId, { weight, enabled } = {}) {
+export function setChatgptAccountRouting(accountId, {
+  weight,
+  enabled,
+  lowQuotaThreshold,
+  dailyRequestLimit,
+  dailyTokenLimit,
+  reservedModels,
+  reservedSessionIds,
+  emergencyContinueMinutes,
+  confirmedEmergencyRisk
+} = {}) {
   const accounts = (proxyConfig.chatgptAccounts || []).map(account => {
     if (account.id !== accountId) return account
+    const emergencyMinutes = Number(emergencyContinueMinutes)
+    if (emergencyMinutes > 0 && confirmedEmergencyRisk !== true) {
+      throw new Error('Emergency continuation requires explicit risk confirmation')
+    }
+    const normalizeList = value => Array.isArray(value)
+      ? [...new Set(value.map(item => String(item).trim()).filter(Boolean))].slice(0, 50)
+      : undefined
     return {
       ...account,
       ...(weight === undefined
         ? {}
         : { routing_weight: Math.max(1, Math.min(100, Number(weight) || 1)) }),
-      ...(enabled === undefined ? {} : { routing_enabled: Boolean(enabled) })
+      ...(enabled === undefined ? {} : { routing_enabled: Boolean(enabled) }),
+      ...(lowQuotaThreshold === undefined ? {} : {
+        low_quota_threshold: Math.max(0, Math.min(100, Number(lowQuotaThreshold) || 0))
+      }),
+      ...(dailyRequestLimit === undefined ? {} : {
+        daily_request_limit: Math.max(0, Math.floor(Number(dailyRequestLimit) || 0))
+      }),
+      ...(dailyTokenLimit === undefined ? {} : {
+        daily_token_limit: Math.max(0, Math.floor(Number(dailyTokenLimit) || 0))
+      }),
+      ...(reservedModels === undefined ? {} : { reserved_models: normalizeList(reservedModels) }),
+      ...(reservedSessionIds === undefined ? {} : { reserved_session_ids: normalizeList(reservedSessionIds) }),
+      ...(emergencyContinueMinutes === undefined ? {} : {
+        emergency_continue_until: emergencyMinutes > 0
+          ? new Date(Date.now() + Math.min(24 * 60, emergencyMinutes) * 60_000).toISOString()
+          : null
+      })
     }
   })
   if (!accounts.some(account => account.id === accountId)) throw new Error('Account not found')

@@ -191,10 +191,10 @@ export function recordAccountOutcome(accountId, {
     error_type: errorType || null,
     error_message: errorMessage ? String(errorMessage).slice(0, 300) : null
   })
-  const cutoff = Date.now() - 24 * 60 * 60 * 1000
+  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000
   account.recent_events = account.recent_events
     .filter(event => new Date(event.at).getTime() >= cutoff)
-    .slice(-2000)
+    .slice(-10000)
 
   const day = statsDayKey(account.last_request_at)
   const daily = ensureDaily(day)
@@ -233,7 +233,8 @@ export function getStats() {
   for (const account of Object.values(snapshot.accounts || {})) {
     account.windows = {
       '1h': recentWindow(account.recent_events, 60 * 60 * 1000, now),
-      '24h': recentWindow(account.recent_events, 24 * 60 * 60 * 1000, now)
+      '24h': recentWindow(account.recent_events, 24 * 60 * 60 * 1000, now),
+      '7d': recentWindow(account.recent_events, 7 * 24 * 60 * 60 * 1000, now)
     }
     delete account.recent_events
   }

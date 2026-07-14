@@ -9,7 +9,7 @@ import path from 'path'
 import { proxyConfig, upsertChatgptAccount as persistAccount, deleteChatgptAccount as removeAccount } from './config.js'
 import { id } from './server-utils.js'
 import { chinaFetch, withChinaDispatcher } from './china-fetch.js'
-import { getStats } from './stats.js'
+import { getStats, statsDayKey } from './stats.js'
 
 const OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 const OAUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token'
@@ -129,6 +129,49 @@ export function accountRemainingPercent(account) {
 export function accountUsageIsFresh(account, now = Date.now()) {
   const updatedAt = Date.parse(account?.usage_updated_at || '')
   return Number.isFinite(updatedAt) && now - updatedAt <= USAGE_FRESH_MS
+}
+
+export function accountPolicyState(account, {
+  model = null,
+  sessionKey = null,
+  globalReserve = proxyConfig.chatgptLowQuotaThreshold ?? LOW_QUOTA_THRESHOLD_PERCENT,
+  now = Date.now(),
+  statsSnapshot = null
+} = {}) {
+  const emergencyUntil = Date.parse(account?.emergency_continue_until || '')
+  const emergency = Number.isFinite(emergencyUntil) && emergencyUntil > now
+  const configuredReserve = Number(account?.low_quota_threshold)
+  const reserve = Number.isFinite(configuredReserve)
+    ? Math.max(0, Math.min(100, configuredReserve))
+    : Math.max(0, Math.min(100, Number(globalReserve) || 0))
+  const reservedModels = Array.isArray(account?.reserved_models) ? account.reserved_models.filter(Boolean) : []
+  const reservedSessions = Array.isArray(account?.reserved_session_ids) ? account.reserved_session_ids.filter(Boolean) : []
+  const hasReservation = reservedModels.length > 0 || reservedSessions.length > 0
+  const reservationMatch = hasReservation && Boolean(
+    (model && reservedModels.includes(model)) ||
+    (sessionKey && reservedSessions.includes(sessionKey))
+  )
+  const snapshot = statsSnapshot || getStats()
+  const daily = snapshot.daily?.[statsDayKey(now)]?.accounts?.[account?.id] || {}
+  const dailyRequests = Number(daily.requests || 0)
+  const dailyTokens = Number(daily.input_tokens || 0) + Number(daily.output_tokens || 0)
+  const requestLimit = Math.max(0, Number(account?.daily_request_limit) || 0)
+  const tokenLimit = Math.max(0, Number(account?.daily_token_limit) || 0)
+  const requestLimited = requestLimit > 0 && dailyRequests >= requestLimit
+  const tokenLimited = tokenLimit > 0 && dailyTokens >= tokenLimit
+  return {
+    emergency,
+    emergency_until: emergency ? new Date(emergencyUntil).toISOString() : null,
+    reserve,
+    has_reservation: hasReservation,
+    reservation_match: reservationMatch,
+    reservation_blocked: hasReservation && !reservationMatch,
+    request_limited: !emergency && requestLimited,
+    token_limited: !emergency && tokenLimited,
+    daily_requests: dailyRequests,
+    daily_tokens: dailyTokens,
+    eligible: emergency || (!requestLimited && !tokenLimited && (!hasReservation || reservationMatch))
+  }
 }
 
 function adaptiveState(accountId) {
@@ -328,8 +371,10 @@ export function pickActiveAccount(excludeIds = null, {
 } = {}) {
   const accounts = proxyConfig.chatgptAccounts || []
   const now = Date.now()
+  const statsSnapshot = getStats()
   cleanupStickyAccounts(now)
   const eligible = []
+  const reservationMatches = new Set()
   for (const account of accounts) {
     if (excludeIds && excludeIds.has(account.id)) continue
     if (
@@ -353,24 +398,50 @@ export function pickActiveAccount(excludeIds = null, {
       }
       if (changed) persistAccount(account)
     }
+    const policy = accountPolicyState(account, {
+      model,
+      sessionKey,
+      globalReserve: lowQuotaThreshold,
+      now,
+      statsSnapshot
+    })
     if (
       (account.status === 'active' || !account.status) &&
       account.routing_enabled !== false &&
+      policy.eligible &&
       (!model || !account.model_cooldowns?.[model]) &&
       accountActiveRequestCount(account.id) < accountConcurrencyLimit(account.id)
-    ) eligible.push(account)
+    ) {
+      eligible.push(account)
+      if (policy.reservation_match) reservationMatches.add(account.id)
+    }
   }
   if (!eligible.length) return null
+  const policyEligible = reservationMatches.size
+    ? eligible.filter(account => reservationMatches.has(account.id))
+    : eligible
 
-  const scored = eligible.map((account, index) => ({
-    account,
-    index,
-    remaining: accountRemainingPercent(account),
-    usageFresh: accountUsageIsFresh(account, now)
-  }))
+  const scored = policyEligible.map((account, index) => {
+    const policy = accountPolicyState(account, {
+      model,
+      sessionKey,
+      globalReserve: lowQuotaThreshold,
+      now,
+      statsSnapshot
+    })
+    return {
+      account,
+      index,
+      remaining: accountRemainingPercent(account),
+      usageFresh: accountUsageIsFresh(account, now),
+      reserve: policy.reserve,
+      emergency: policy.emergency
+    }
+  })
   const freshHealthy = scored.filter(item =>
-    item.usageFresh && item.remaining !== null && item.remaining > lowQuotaThreshold)
-  const healthy = scored.filter(item => item.remaining === null || item.remaining > lowQuotaThreshold)
+    item.emergency || (item.usageFresh && item.remaining !== null && item.remaining > item.reserve))
+  const healthy = scored.filter(item =>
+    item.emergency || item.remaining === null || item.remaining > item.reserve)
   // The configured threshold is a reserve, not merely a preference. Unknown
   // quota remains eligible, but a known account at/below the reserve does not.
   const candidates = freshHealthy.length ? freshHealthy : healthy

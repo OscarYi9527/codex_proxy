@@ -345,13 +345,13 @@ function renderAccountsLegacy(){
     const isActive=a.id===activeId
     const health=(statsData.accounts||{})[a.id]||{}
     const runtime=(diagnosticsData.accounts||[]).find(item=>item.id===a.id)||{}
-    const oneHour=health.windows&&health.windows['1h'],day=health.windows&&health.windows['24h']
-    const recentRates=oneHour&&day?`<div class="cell-sub">1h ${oneHour.success_rate==null?'-':oneHour.success_rate+'%'} · 24h ${day.success_rate==null?'-':day.success_rate+'%'}</div>`:''
+    const oneHour=health.windows&&health.windows['1h'],day=health.windows&&health.windows['24h'],week=health.windows&&health.windows['7d']
+    const recentRates=oneHour&&day?`<div class="cell-sub">1h ${oneHour.success_rate==null?'-':oneHour.success_rate+'%'} · 24h ${day.success_rate==null?'-':day.success_rate+'%'} · 7d ${week?.success_rate==null?'-':week.success_rate+'%'}</div>`:''
     const lastError=health.last_error_type?`<div class="cell-sub" title="${esc(health.last_error_message||health.last_error_type)}">最近错误：${esc(health.last_error_type)}${health.last_status?` (${health.last_status})`:''}</div>`:''
     const healthHtml=health.requests?`<div class="cell-main">${Number(health.success_rate||0).toFixed(1)}% 累计成功</div>${recentRates}<div class="cell-sub">${fmt(health.requests)} 次${health.rate_limited?` · ${health.rate_limited} 次 429`:''}</div>${lastError}`:'<span class="cell-sub">暂无请求</span>'
     const latencyHtml=health.requests?`<div class="cell-main">P95 ${fmt(health.p95_latency_ms)} ms</div><div class="cell-sub">P50 ${fmt(health.p50_latency_ms)} · 平均 ${fmt(health.average_latency_ms)} ms</div>`:'<span class="cell-sub">暂无数据</span>'
     const routeEnabled=a.routing_enabled!==false
-    const atReserve=remainingOf(a)!=null&&remainingOf(a)<=threshold
+    const accountReserve=Number(a.low_quota_threshold??threshold),atReserve=remainingOf(a)!=null&&remainingOf(a)<=accountReserve
     const usageStale=!a.usage_updated_at||(Date.now()-new Date(a.usage_updated_at).getTime()>30*60*1000)
     const modelCooldownCount=Object.values(a.model_cooldowns||{}).filter(until=>Number(until)>Date.now()).length
     const reset=a.reset_credits
@@ -389,13 +389,14 @@ function renderAccounts(){
     const isActive=a.id===activeId
     const routeEnabled=a.routing_enabled!==false
     const remaining=remainingOf(a)
-    const atReserve=remaining!=null&&remaining<=threshold
+    const accountReserve=Number(a.low_quota_threshold??threshold),atReserve=remaining!=null&&remaining<=accountReserve
     const usageStale=!a.usage_updated_at||(Date.now()-new Date(a.usage_updated_at).getTime()>30*60*1000)
     const modelCooldownCount=Object.values(a.model_cooldowns||{}).filter(until=>Number(until)>Date.now()).length
     const health=(statsData.accounts||{})[a.id]||{}
     const runtime=(diagnosticsData.accounts||[]).find(item=>item.id===a.id)||{}
     const oneHour=health.windows&&health.windows['1h']
     const day=health.windows&&health.windows['24h']
+    const week=health.windows&&health.windows['7d']
     const successRate=health.requests?`${Number(health.success_rate||0).toFixed(1)}%`:'—'
     const requestCount=health.requests?fmt(health.requests):'—'
     const p95=health.requests?`${fmt(health.p95_latency_ms)} ms`:'—'
@@ -445,7 +446,7 @@ function renderAccounts(){
             <div><small>P95 延迟</small><strong>${p95}</strong></div>
             <div><small>并发占用</small><strong>${concurrency}</strong></div>
           </div>
-          <div class="account-performance-note">${oneHour||day?`1h 成功率 ${oneHour?.success_rate==null?'—':oneHour.success_rate+'%'} · 24h ${day?.success_rate==null?'—':day.success_rate+'%'}`:'暂无分时健康数据'}${health.rate_limited?` · ${health.rate_limited} 次 429`:''}</div>
+          <div class="account-performance-note">${oneHour||day||week?`1h ${oneHour?.success_rate==null?'—':oneHour.success_rate+'%'} · 24h ${day?.success_rate==null?'—':day.success_rate+'%'} · 7d ${week?.success_rate==null?'—':week.success_rate+'%'}`:'暂无分时健康数据'}${health.rate_limited?` · ${health.rate_limited} 次 429`:''}</div>
         </section>
         <section class="account-card-section route-section">
           <div class="account-section-head"><div><span>调度设置</span><small>${isActive?'当前本机登录':'账号池托管账号'}</small></div></div>
@@ -472,6 +473,7 @@ function renderAccounts(){
       <footer class="account-profile-foot">
         <span>${a.usage_updated_at?`额度更新 ${esc(beijingTime(a.usage_updated_at))}`:'额度尚未同步'}</span>
         <div>
+          <button class="account-link" onclick="openAccountPolicy('${esc(a.id)}')">${svg('shield')}额度策略</button>
           <button class="account-link" onclick="openRenameAccount('${esc(a.id)}')">${svg('edit')}修改名称</button>
           <button class="account-link danger" onclick="removeAccount('${esc(a.id)}')">${svg('trash')}移除账号</button>
         </div>
@@ -484,7 +486,7 @@ function renderAccounts(){
     const isActive=a.id===activeId
     const routeEnabled=a.routing_enabled!==false
     const remaining=remainingOf(a)
-    const atReserve=remaining!=null&&remaining<=threshold
+    const accountReserve=Number(a.low_quota_threshold??threshold),atReserve=remaining!=null&&remaining<=accountReserve
     const runtime=(diagnosticsData.accounts||[]).find(item=>item.id===a.id)||{}
     const health=(statsData.accounts||{})[a.id]||{}
     const routeLabel=!routeEnabled?'仅保存':a.status==='cooldown'?'冷却中':a.status==='auth_error'?'登录失效':atReserve?'额度保护':'参与路由'
@@ -526,6 +528,7 @@ function renderAccounts(){
         ${!isActive?`<button title="切换为本机账号" onclick="switchAccount('${esc(a.id)}')">${svg('arrow')}</button>`:''}
         <button title="刷新额度" onclick="refreshAccountUsageOne('${esc(a.id)}')">${svg('refresh')}</button>
         <button title="查询重置次数" onclick="refreshAccountResetCreditsOne('${esc(a.id)}')">${svg('pulse')}</button>
+        <button title="额度与预留策略" onclick="openAccountPolicy('${esc(a.id)}')">${svg('shield')}</button>
         ${resetCount>0?`<button class="danger" title="高风险：消耗 1 次并重置额度（不可撤销）" onclick="openResetQuota('${esc(a.id)}')">${svg('refresh')}</button>`:''}
         <button title="${routeEnabled?'停用路由':'启用路由'}" onclick="toggleAccountRouting('${esc(a.id)}',${routeEnabled?'false':'true'})">${svg(routeEnabled?'x':'check')}</button>
       </div>
@@ -595,6 +598,7 @@ function errorGuideLookup(){
 }
 function renderHelp(){
   const quotaResetGuide=`<div class="help-manual"><div class="help-note" style="border-color:color-mix(in srgb,var(--red) 28%,var(--border));background:color-mix(in srgb,var(--red) 6%,var(--surface-2))"><b style="color:var(--red)">高风险：会消耗 1 次重置机会且无法撤销</b><p>只有账号确实有可用重置次数并且你明确需要立即恢复额度时才使用；不确定时不要操作。</p></div><ol><li><b>先查询重置次数。</b><span>进入账号池，点击目标账号的“查询次数”，确认可用次数和到期时间。</span></li><li><b>核对目标账号。</b><span>点击标有“高风险”的重置入口，检查弹窗中的账号名称，再完整输入该名称。</span></li><li><b>勾选两项风险确认。</b><span>分别确认目标账号正确，以及操作会消耗 1 次机会并且不可撤销。</span></li><li><b>完成最终系统确认。</b><span>只有三步全部完成后才会提交。提交期间不要关闭弹窗、刷新页面或重复点击，等待额度和剩余次数自动刷新。</span></li></ol></div>`
+  const quotaPolicyGuide=`<div class="help-manual"><ol><li><b>普通用户保持 10% 安全余量。</b><span>需要账号独立保护时，在账号卡片底部点击“额度策略”。</span></li><li><b>按需要设置每日上限。</b><span>请求数和输入/输出 Token 任一达到上限，该账号当天停止接收新请求；0 表示不限。</span></li><li><b>重要任务使用预留。</b><span>填写模型名或会话 ID 后，普通请求不会占用该账号，匹配任务会优先进入。</span></li><li><b>紧急继续只用于必要任务。</b><span>它会临时绕过安全线和每日上限，必须勾选风险并再次确认；最长 24 小时，到期自动恢复。</span></li><li><b>查看 1h / 24h / 7d。</b><span>近期成功率和 P95 延迟比累计数字更适合判断账号是否正在异常。</span></li></ol></div>`
   const accounts=cfg.chatgptAccounts||[]
   const enabled=accounts.filter(a=>a.routing_enabled!==false).length
   const hasProvider=Boolean(enabled||cfg.openaiApiKey||cfg.deepseekApiKey||(cfg.relays||[]).length)
@@ -614,7 +618,7 @@ function renderHelp(){
     card('这个系统是做什么的？','先理解用途，再开始操作',`<div class="card-body help-intro"><p><b>它是运行在你电脑上的本地模型网关。</b>Codex 把请求交给它，它再根据你选择的规则，从 ChatGPT 订阅账号、官方 API、DeepSeek 或中转节点中选择一个可用通道。</p><p>它主要解决三件事：<b>统一管理账号和服务、在额度不足时稳定切换、集中查看额度与健康状态。</b>管理后台仅用于本机配置，不会替你注册账号，也不会绕过官方限制。</p></div>`)+
     card('第一步：我应该选择哪种接入方式？','只需要选择一种，也可以以后再增加',chooser)+
     card('HTTP 报错代码查找表','支持按状态码和原因关键词搜索',errorGuideLookup())+
-    `<div class="grid"><div>${card('四步快速开始',`${accounts.length} 个账号 · ${enabled} 个参与路由`,`<div class="card-body help-steps">${steps}</div>`)}${card('ChatGPT 账号完整操作步骤','第一次使用建议逐条完成',exactGuide)}${card('额度重置怎么安全操作？','高风险功能 · 使用前逐项确认',quotaResetGuide)}${card('API 和中转节点怎么配置？','按你选择的接入方式阅读',otherGuides)}${card('常见问题和故障排查','从登录、额度到账号切换',faq)}</div><div>${card('左侧功能都有什么？','点击即可前往',`<div class="help-features">${helpFeature('overview','控制台概览','看服务是否正常、最近有没有调用','overview')}${helpFeature('providers','模型服务','配置官方 API 和 DeepSeek','providers')}${helpFeature('relays','中转节点','添加第三方兼容服务','relays')}${helpFeature('accounts','账号池','添加账号、查看额度和切换策略','accounts')}${helpFeature('analytics','用量分析','查看请求和 Token 用量','analytics')}${helpFeature('settings','系统设置','选择默认模型和显示偏好','settings')}</div>`)}${card('四个重要概念','先分清这些就不容易误操作',concepts)}${card('页面状态怎么看？','看到这些文字时该做什么',statusGuide)}${card('新手安全原则','避免误操作和凭据泄露',`<div class="card-body help-note"><p>① 只登录自己拥有的账号；② 只在 OpenAI 官方页面输入密码和验证码；③ 不上传 auth.json；④ 不频繁刷新额度或反复登录；⑤ 不确定时保持“仅保存”，不要切换本机账号。</p></div>`)}</div></div>`
+    `<div class="grid"><div>${card('四步快速开始',`${accounts.length} 个账号 · ${enabled} 个参与路由`,`<div class="card-body help-steps">${steps}</div>`)}${card('ChatGPT 账号完整操作步骤','第一次使用建议逐条完成',exactGuide)}${card('每账号额度与预留怎么设置？','安全余量、每日上限、预留和紧急继续',quotaPolicyGuide)}${card('额度重置怎么安全操作？','高风险功能 · 使用前逐项确认',quotaResetGuide)}${card('API 和中转节点怎么配置？','按你选择的接入方式阅读',otherGuides)}${card('常见问题和故障排查','从登录、额度到账号切换',faq)}</div><div>${card('左侧功能都有什么？','点击即可前往',`<div class="help-features">${helpFeature('overview','控制台概览','看服务是否正常、最近有没有调用','overview')}${helpFeature('providers','模型服务','配置官方 API 和 DeepSeek','providers')}${helpFeature('relays','中转节点','添加第三方兼容服务','relays')}${helpFeature('accounts','账号池','添加账号、查看额度和切换策略','accounts')}${helpFeature('analytics','用量分析','查看请求和 Token 用量','analytics')}${helpFeature('settings','系统设置','选择默认模型和显示偏好','settings')}</div>`)}${card('四个重要概念','先分清这些就不容易误操作',concepts)}${card('页面状态怎么看？','看到这些文字时该做什么',statusGuide)}${card('新手安全原则','避免误操作和凭据泄露',`<div class="card-body help-note"><p>① 只登录自己拥有的账号；② 只在 OpenAI 官方页面输入密码和验证码；③ 不上传 auth.json；④ 不频繁刷新额度或反复登录；⑤ 不确定时保持“仅保存”，不要切换本机账号。</p></div>`)}</div></div>`
 }
 async function copyProxyAddress(){
   const value=`${location.origin}/v1`
@@ -932,6 +936,44 @@ async function updateAccountWeight(id,weight){
     if(!r.ok)throw new Error(d.error?.message||'权重更新失败')
     cfg=d.config;render();toast('账号权重已更新')
   }catch(e){toast(e.message,'error');await load()}
+}
+function openAccountPolicy(id){
+  const account=(cfg.chatgptAccounts||[]).find(item=>item.id===id)
+  if(!account)return toast('账号不存在','error')
+  const globalReserve=Number(cfg.chatgptLowQuotaThreshold??10)
+  const emergencyUntil=Date.parse(account.emergency_continue_until||'')
+  const emergencyActive=Number.isFinite(emergencyUntil)&&emergencyUntil>Date.now()
+  showModal('账号额度与预留策略',`<div class="form-grid">
+    <div class="field"><label>安全余量 <span class="hint">账号独立阈值</span></label><input class="input" id="policy_reserve" type="number" min="0" max="100" value="${Number(account.low_quota_threshold??globalReserve)}"></div>
+    <div class="field"><label>每日请求上限 <span class="hint">0 为不限</span></label><input class="input" id="policy_requests" type="number" min="0" value="${Number(account.daily_request_limit||0)}"></div>
+    <div class="field full"><label>每日 Token 上限 <span class="hint">输入 + 输出，0 为不限</span></label><input class="input" id="policy_tokens" type="number" min="0" value="${Number(account.daily_token_limit||0)}"></div>
+    <div class="field full"><label>预留模型 <span class="hint">逗号分隔；设置后普通模型不能使用该账号</span></label><input class="input" id="policy_models" value="${esc((account.reserved_models||[]).join(', '))}" placeholder="gpt-important"></div>
+    <div class="field full"><label>预留会话 ID <span class="hint">逗号分隔；匹配 session-id / thread-id</span></label><input class="input" id="policy_sessions" value="${esc((account.reserved_session_ids||[]).join(', '))}" placeholder="重要会话 ID"></div>
+    <div class="field full"><div class="help-note"><b style="color:var(--red)">紧急继续使用</b><p>临时绕过安全余量和每日上限，最长 24 小时，到期自动恢复。可能耗尽当前额度，仅在重要任务中使用。</p>${emergencyActive?`<p>当前有效至 ${esc(new Date(emergencyUntil).toLocaleString('zh-CN'))}</p>`:''}</div></div>
+    <div class="field"><label>临时持续分钟 <span class="hint">留空保持，0 立即关闭</span></label><input class="input" id="policy_emergency_minutes" type="number" min="0" max="1440" placeholder="例如 60"></div>
+    <div class="field"><label style="display:flex;align-items:center;gap:8px"><input id="policy_emergency_confirm" type="checkbox"> 我确认可能耗尽额度</label></div>
+  </div>`,'保存策略',`saveAccountPolicy('${esc(id)}')`)
+}
+async function saveAccountPolicy(id){
+  const emergencyRaw=String(document.getElementById('policy_emergency_minutes')?.value||'').trim()
+  const emergencyMinutes=emergencyRaw===''?null:Math.max(0,Number(emergencyRaw)||0)
+  const confirmedEmergencyRisk=document.getElementById('policy_emergency_confirm')?.checked===true
+  if(emergencyMinutes>0&&!confirmedEmergencyRisk)return toast('启用紧急继续前必须勾选风险确认','error')
+  if(emergencyMinutes>0&&!confirm(`确定临时绕过额度保护 ${emergencyMinutes} 分钟吗？到期后会自动恢复。`))return
+  const split=id=>String(document.getElementById(id)?.value||'').split(',').map(value=>value.trim()).filter(Boolean)
+  const body={
+    lowQuotaThreshold:Number(document.getElementById('policy_reserve')?.value),
+    dailyRequestLimit:Number(document.getElementById('policy_requests')?.value),
+    dailyTokenLimit:Number(document.getElementById('policy_tokens')?.value),
+    reservedModels:split('policy_models'),
+    reservedSessionIds:split('policy_sessions'),
+    ...(emergencyMinutes===null?{}:{emergencyContinueMinutes:emergencyMinutes,confirmedEmergencyRisk})
+  }
+  try{
+    const r=await fetch(API+'/chatgpt-accounts/'+encodeURIComponent(id)+'/routing',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}),d=await r.json()
+    if(!r.ok)throw new Error(d.error?.message||'额度策略更新失败')
+    cfg=d.config;closeModal();render();toast(d.message||'账号额度策略已更新')
+  }catch(e){toast(e.message,'error')}
 }
 async function toggleAccountRouting(id,enabled){
   try{

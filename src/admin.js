@@ -845,12 +845,21 @@ export function handleChatgptAccountRouting(req, res, accountId, body) {
   try {
     const newCfg = setChatgptAccountRouting(accountId, {
       weight: body?.weight,
-      enabled: body?.enabled
+      enabled: body?.enabled,
+      lowQuotaThreshold: body?.lowQuotaThreshold,
+      dailyRequestLimit: body?.dailyRequestLimit,
+      dailyTokenLimit: body?.dailyTokenLimit,
+      reservedModels: body?.reservedModels,
+      reservedSessionIds: body?.reservedSessionIds,
+      emergencyContinueMinutes: body?.emergencyContinueMinutes,
+      confirmedEmergencyRisk: body?.confirmedEmergencyRisk
     })
     return sendJson(res, 200, {
       config: publicProxyConfig(newCfg),
-      message: body?.enabled === undefined
-        ? '账号路由权重已更新'
+      message: body?.emergencyContinueMinutes > 0
+        ? '已临时允许紧急继续使用；到期后自动恢复额度与每日上限保护'
+        : body?.enabled === undefined
+        ? '账号路由策略已更新'
         : (body.enabled ? '账号已启用路由' : '账号已设为仅保存')
     })
   } catch (error) {

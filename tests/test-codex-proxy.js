@@ -16,6 +16,7 @@ import { acquireActiveAccountWithRetry, refreshBelowReserveAccounts } from '../s
 import { getRouteDecisions, recordRouteDecision, resetRouteDecisions } from '../src/route-decisions.js'
 import { decryptConfigSecrets, encryptConfigSecrets, isEncryptedSecret } from '../src/credential-store.js'
 import { getProviderHealth, recordProviderOutcome, resetProviderHealth } from '../src/provider-health.js'
+import { attachHttpErrorGuide, getHttpErrorGuide, listHttpErrorGuides } from '../src/error-guide.js'
 
 describe('模型解析', () => {
   it('解析 body.model', () => {
@@ -167,6 +168,34 @@ describe('Provider 健康状态', () => {
     assert.strictEqual(health.state, 'healthy')
     assert.strictEqual(health.consecutive_failures, 0)
     assert.ok(health.last_success_at)
+  })
+})
+
+describe('HTTP 错误码查找表', () => {
+  it('解释 402 的计费含义和处理方向', () => {
+    const guide = getHttpErrorGuide(402)
+    assert.strictEqual(guide.status, 402)
+    assert.match(guide.title, /余额|计费/)
+    assert.ok(guide.causes.some(value => value.includes('ChatGPT 订阅不等于 API 余额')))
+    assert.ok(guide.actions.some(value => value.includes('Provider')))
+  })
+
+  it('为账号池耗尽的 503 返回更具体的原因和建议', () => {
+    const guide = getHttpErrorGuide(503, 'account_pool_exhausted')
+    assert.strictEqual(guide.status, 503)
+    assert.match(guide.title, /账号池/)
+    assert.ok(guide.causes.some(value => value.includes('并发已满')))
+    assert.ok(guide.actions.some(value => value.includes('账号池')))
+    assert.strictEqual(guide.help_path, '/admin#help')
+  })
+
+  it('给本地 JSON 错误附加机器可读指南但保留原错误', () => {
+    const source = { error: { type: 'authentication_error', message: 'invalid token' } }
+    const result = attachHttpErrorGuide(401, source)
+    assert.strictEqual(result.error.message, 'invalid token')
+    assert.strictEqual(result.error.guide.status, 401)
+    assert.strictEqual(source.error.guide, undefined)
+    assert.ok(listHttpErrorGuides().some(item => item.status === 503))
   })
 })
 
@@ -1005,6 +1034,14 @@ describe('原子配置写入和管理 API', () => {
         body: JSON.stringify({ weight: 5 })
       })
       assert.strictEqual(missingRouting.status, 404)
+      const missingRoutingError = await missingRouting.json()
+      assert.strictEqual(missingRoutingError.error.guide.status, 404)
+
+      const errorGuideResponse = await fetch(base + '/admin/api/error-guide')
+      const errorGuide = await errorGuideResponse.json()
+      assert.strictEqual(errorGuideResponse.status, 200)
+      assert.ok(errorGuide.codes.some(item => item.status === 402))
+      assert.ok(errorGuide.codes.some(item => item.status === 503))
 
       const statsResponse = await fetch(base + '/admin/api/stats')
       const stats = await statsResponse.json()

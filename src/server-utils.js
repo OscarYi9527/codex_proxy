@@ -3,6 +3,7 @@
 
 import { assertCircuitAvailable, recordCircuitResult } from './circuit-breaker.js'
 import { recordProviderOutcome } from './provider-health.js'
+import { attachHttpErrorGuide } from './error-guide.js'
 
 const MAX_BODY_BYTES = 16 * 1024 * 1024
 
@@ -37,7 +38,7 @@ export function proxyMetaHeaders(res, extra = {}) {
 }
 
 export function sendJson(res, status, data, headers = {}) {
-  const text = JSON.stringify(data)
+  const text = JSON.stringify(attachHttpErrorGuide(status, data))
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(text),

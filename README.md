@@ -298,6 +298,7 @@ powershell -ExecutionPolicy Bypass -File `
 | `PUT` | `/admin/api/config` | 保存配置并热重载 |
 | `GET` | `/admin/api/stats` | 获取 Provider、模型和账号健康统计 |
 | `GET` | `/admin/api/diagnostics` | 获取不含 Token/邮箱的本地诊断报告 |
+| `GET` | `/admin/api/error-guide` | 获取 HTTP 错误码原因与处理建议查找表 |
 | `GET` | `/admin/api/config-snapshots` | 列出最近配置快照 |
 | `POST` | `/admin/api/chatgpt-accounts/:id/reset-credits` | 查询指定账号的 Codex 重置次数 |
 | `POST` | `/admin/api/chatgpt-accounts/refresh-reset-credits-all` | 查询账号池全部账号的重置次数 |
@@ -386,6 +387,7 @@ API 端点：
 | GET | /admin/api/config | 获取当前配置（密钥已掩码） |
 | PUT | /admin/api/config | 保存配置到文件并热重载 |
 | GET | /admin/api/diagnostics | 获取队列、账号、熔断和凭据保护状态 |
+| GET | /admin/api/error-guide | 获取 HTTP 错误码原因与处理建议查找表 |
 | GET | /admin/api/config-snapshots | 获取设置快照列表 |
 | POST | /admin/api/config-rollback | 仅回滚设置，不回退账号 Token/API Key |
 | GET | /admin/api/account-backups | 获取账号备份列表 |
@@ -499,6 +501,30 @@ git diff --check
 
 ## 常见问题
 
+### HTTP 报错代码查找表
+
+管理后台左侧“新手使用教程”提供可搜索的完整查找表。状态码只是问题分类，还需要结合
+完整报错正文、Provider 和 `X-Codex-Proxy-Request-Id` 判断来源。同一个 503 既可能
+是本地账号池不可用，也可能是上游维护。
+
+| 状态码 | 通常表示 | 优先检查 |
+|---|---|---|
+| 400 | 请求参数或格式错误 | 报错指出的字段、模型名、接口兼容性 |
+| 401 | 密钥或登录凭据无效 | API Key、账号池“登录失效”状态 |
+| 402 | 余额、计费或套餐权益不可用 | 对应 Provider 的余额、账单和模型权限；ChatGPT 订阅不等于 API 余额 |
+| 403 | 已认证但权限不足 | 模型/项目权限、Organization、地区或本机管理权限 |
+| 404 | 路径、模型或资源不存在 | Base URL、模型列表和已删除的账号/节点 |
+| 408 / 504 | 客户端或上游超时 | 网络、Provider 延迟和长请求 |
+| 409 | 正在执行的操作发生冲突 | 登录/重置任务、最新次数或状态，避免重复提交 |
+| 422 | 内容合法但无法处理 | 工具、消息、多模态或参数组合是否受模型支持 |
+| 429 | 请求频率、并发或额度受限 | 额度、冷却、并发；停止连续重试 |
+| 500 | 本地代理内部异常 | Request ID、脱敏诊断报告和代理日志 |
+| 502 | 上游连接或响应异常 | 连通性检测、Base URL、网络和 Provider 状态 |
+| 503 | 当前没有安全可用通道或服务暂不可用 | 账号启用/额度/登录/冷却/并发，或 Provider 熔断与维护 |
+
+代理自身生成的 JSON 错误会在 `error.guide` 中附带相同的原因和处理建议；上游原样
+转发的错误可能只有服务商自己的正文，此时应先确认错误来自哪个 Provider。
+
 ### `X-OpenAI-Internal-Codex-Responses-Lite` 不支持
 
 确保运行的是包含 Lite 自适应重试逻辑的最新版代理，并重启旧进程。代理会先保留
@@ -518,7 +544,8 @@ Lite；仅在上游明确拒绝时改用标准 Responses：
 
 管理后台会区分账号忙碌、冷却、模型冷却、登录失效和达到安全余量。短时并发会进入
 公平等待队列；若所有账号都不可用，请启用一个有额度且属于你的账号，或等待冷却/
-额度窗口恢复。不要通过频繁登录、刷新或重试制造请求风暴。
+额度窗口恢复。报错 `No ChatGPT account became available before the local queue timeout`
+就是这一类本地账号池 503。不要通过频繁登录、刷新或重试制造请求风暴。
 
 ### GPT 提示缺少订阅鉴权头
 

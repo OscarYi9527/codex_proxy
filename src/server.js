@@ -18,6 +18,7 @@ import { handleRelay, handleRelayChatCompletions } from './routes/relay.js'
 import { handlePing, handlePingAll } from './routes/ping.js'
 import { saveStats } from './stats.js'
 import { initializeProviderHealth, saveProviderHealth } from './provider-health.js'
+import { listHttpErrorGuides } from './error-guide.js'
 import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountResetCreditsGet, handleChatgptAccountsRefreshResetCreditsAll, handleChatgptAccountResetQuota, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleAccountBackupsGet, handleConfigSnapshotsGet, handleAccountBackupRestore, handleConfigRollback, handleProviderHealthReset, handleRuntimeRepair, handleProxyRestart } from './admin.js'
 
 const PORT = Number(process.env.CODEX_PROXY_PORT || 47892)
@@ -253,6 +254,9 @@ export function createServer({ fetchImpl = fetch } = {}) {
       return res.end(getAdminHtml())
     }
 
+    if (req.method === 'GET' && url.pathname === '/admin/api/error-guide') {
+      return sendJson(res, 200, { codes: listHttpErrorGuides() })
+    }
     if (req.method === 'GET' && url.pathname === '/admin/api/config') return handleAdminConfigGet(req, res)
     if (req.method === 'PUT' && url.pathname === '/admin/api/config') return handleAdminConfigPut(req, res)
 

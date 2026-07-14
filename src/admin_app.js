@@ -1,6 +1,7 @@
 const API = '/admin/api'
 let cfg = {}, statsData = { providers: {} }, diagnosticsData = { accounts: [], queue: {}, config_snapshots: [], account_backups: [], recent_route_decisions: [], provider_health: {providers:{}}, credential_protection: {}, circuits: [] }, modelCatalog = [], activePage = location.hash.slice(1) || 'overview'
 let pingResults = {}, modal = null, loginPoll = null, accountsPoll = null, draggedAccountId = null, resetQuotaSubmitting = false
+let errorGuideData = []
 let accountViewMode = localStorage.getItem('codex-account-view') === 'compact' ? 'compact' : 'cards'
 let usageCalendarMonth = statsDateKey().slice(0,7)
 let animateNextRender = true
@@ -212,12 +213,13 @@ function setAccountViewMode(mode){
 async function load(showMessage=false,includeModels=true){
   const btn=document.getElementById('refreshButton'); btn.innerHTML=svg('refresh')
   try{
-    const [c,s,d,r,m]=await Promise.all([fetch(API+'/config'),fetch(API+'/stats'),fetch(API+'/diagnostics').catch(()=>null),fetch(API+'/resilience').catch(()=>null),includeModels?fetch('/v1/models').catch(()=>null):null])
+    const [c,s,d,r,m,e]=await Promise.all([fetch(API+'/config'),fetch(API+'/stats'),fetch(API+'/diagnostics').catch(()=>null),fetch(API+'/resilience').catch(()=>null),includeModels?fetch('/v1/models').catch(()=>null):null,fetch(API+'/error-guide').catch(()=>null)])
     if(!c.ok||!s.ok) throw new Error('服务响应异常')
     cfg=(await c.json()).config||{}; statsData=await s.json()
     if(d?.ok)diagnosticsData=await d.json()
     if(r?.ok)diagnosticsData.circuits=(await r.json()).circuits||[]
     if(m?.ok)modelCatalog=((await m.json()).data||[]).map(model=>({id:model.id,name:model.display_name||model.id}))
+    if(e?.ok)errorGuideData=(await e.json()).codes||[]
     document.getElementById('side-status').textContent='网关服务运行中'; render(); if(showMessage) toast('数据已刷新')
   }catch(e){ document.getElementById('side-status').textContent='网关服务离线'; document.querySelector('.dot').style.background='var(--red)'; document.getElementById('app').innerHTML=empty('server','无法连接网关服务',e.message) }
 }
@@ -557,6 +559,25 @@ function helpStep(number,title,desc,action='',done=false){
 function helpFeature(icon,title,desc,page){
   return `<button class="help-feature" onclick="switchPage('${page}')"><span>${svg(icon)}</span><div><strong>${title}</strong><small>${desc}</small></div>${svg('arrow')}</button>`
 }
+function errorGuideRowsHtml(query=''){
+  const term=String(query||'').trim().toLowerCase()
+  const guides=errorGuideData.filter(item=>!term||[
+    item.status,
+    item.title,
+    item.meaning,
+    ...(item.causes||[]),
+    ...(item.actions||[])
+  ].join(' ').toLowerCase().includes(term))
+  if(!guides.length)return empty('help','没有匹配的错误码','可输入 503、402、额度、认证、超时等关键词')
+  return `<div class="table-wrap"><table class="table"><thead><tr><th>状态码</th><th>表示什么</th><th>常见原因</th><th>建议处理</th></tr></thead><tbody>${guides.map(item=>`<tr><td><span class="badge" style="font-size:12px">${Number(item.status)}</span><div class="cell-sub">HTTP</div></td><td><div class="cell-main">${esc(item.title)}</div><div style="max-width:260px;margin-top:5px;color:var(--muted);font-size:10px;line-height:1.65">${esc(item.meaning)}</div></td><td><div style="min-width:220px;color:var(--muted);font-size:10px;line-height:1.7">${(item.causes||[]).map(value=>`• ${esc(value)}`).join('<br>')}</div></td><td><div style="min-width:220px;color:var(--muted);font-size:10px;line-height:1.7">${(item.actions||[]).map((value,index)=>`${index+1}. ${esc(value)}`).join('<br>')}</div></td></tr>`).join('')}</tbody></table></div>`
+}
+function filterErrorGuide(value){
+  const target=document.getElementById('error_guide_results')
+  if(target)target.innerHTML=errorGuideRowsHtml(value)
+}
+function errorGuideLookup(){
+  return `<div class="card-body" style="display:grid;gap:13px"><div class="help-note"><b>先看状态码，再看完整报错正文和来源</b><p>同一个状态码可能来自本地代理、ChatGPT、OpenAI API、DeepSeek 或中转节点。比如截图中的 503 明确写着账号池排队超时，应先检查账号池；402 通常表示对应上游的余额、计费或套餐权限不可用。</p></div><div class="field"><label>搜索错误码或关键词</label><input class="input" id="error_guide_query" inputmode="search" placeholder="例如：503、402、额度、登录、超时" oninput="filterErrorGuide(this.value)"><span class="hint">建议同时记录报错正文和 X-Codex-Proxy-Request-Id，便于进一步定位。</span></div></div><div id="error_guide_results">${errorGuideRowsHtml()}</div>`
+}
 function renderHelp(){
   const quotaResetGuide=`<div class="help-manual"><div class="help-note" style="border-color:color-mix(in srgb,var(--red) 28%,var(--border));background:color-mix(in srgb,var(--red) 6%,var(--surface-2))"><b style="color:var(--red)">高风险：会消耗 1 次重置机会且无法撤销</b><p>只有账号确实有可用重置次数并且你明确需要立即恢复额度时才使用；不确定时不要操作。</p></div><ol><li><b>先查询重置次数。</b><span>进入账号池，点击目标账号的“查询次数”，确认可用次数和到期时间。</span></li><li><b>核对目标账号。</b><span>点击标有“高风险”的重置入口，检查弹窗中的账号名称，再完整输入该名称。</span></li><li><b>勾选两项风险确认。</b><span>分别确认目标账号正确，以及操作会消耗 1 次机会并且不可撤销。</span></li><li><b>完成最终系统确认。</b><span>只有三步全部完成后才会提交。提交期间不要关闭弹窗、刷新页面或重复点击，等待额度和剩余次数自动刷新。</span></li></ol></div>`
   const accounts=cfg.chatgptAccounts||[]
@@ -577,6 +598,7 @@ function renderHelp(){
     `<div class="help-banner"><div><span class="badge">推荐配置</span><h2>最后成功路径 + 10% 安全余量</h2><p>优先保证稳定，不需要频繁切换账号，也不会等到额度完全用完。</p></div>${button('去账号池配置','arrow',"switchPage('accounts')",'btn-primary')}</div>`+
     card('这个系统是做什么的？','先理解用途，再开始操作',`<div class="card-body help-intro"><p><b>它是运行在你电脑上的本地模型网关。</b>Codex 把请求交给它，它再根据你选择的规则，从 ChatGPT 订阅账号、官方 API、DeepSeek 或中转节点中选择一个可用通道。</p><p>它主要解决三件事：<b>统一管理账号和服务、在额度不足时稳定切换、集中查看额度与健康状态。</b>管理后台仅用于本机配置，不会替你注册账号，也不会绕过官方限制。</p></div>`)+
     card('第一步：我应该选择哪种接入方式？','只需要选择一种，也可以以后再增加',chooser)+
+    card('HTTP 报错代码查找表','支持按状态码和原因关键词搜索',errorGuideLookup())+
     `<div class="grid"><div>${card('四步快速开始',`${accounts.length} 个账号 · ${enabled} 个参与路由`,`<div class="card-body help-steps">${steps}</div>`)}${card('ChatGPT 账号完整操作步骤','第一次使用建议逐条完成',exactGuide)}${card('额度重置怎么安全操作？','高风险功能 · 使用前逐项确认',quotaResetGuide)}${card('API 和中转节点怎么配置？','按你选择的接入方式阅读',otherGuides)}${card('常见问题和故障排查','从登录、额度到账号切换',faq)}</div><div>${card('左侧功能都有什么？','点击即可前往',`<div class="help-features">${helpFeature('overview','控制台概览','看服务是否正常、最近有没有调用','overview')}${helpFeature('providers','模型服务','配置官方 API 和 DeepSeek','providers')}${helpFeature('relays','中转节点','添加第三方兼容服务','relays')}${helpFeature('accounts','账号池','添加账号、查看额度和切换策略','accounts')}${helpFeature('analytics','用量分析','查看请求和 Token 用量','analytics')}${helpFeature('settings','系统设置','选择默认模型和显示偏好','settings')}</div>`)}${card('四个重要概念','先分清这些就不容易误操作',concepts)}${card('页面状态怎么看？','看到这些文字时该做什么',statusGuide)}${card('新手安全原则','避免误操作和凭据泄露',`<div class="card-body help-note"><p>① 只登录自己拥有的账号；② 只在 OpenAI 官方页面输入密码和验证码；③ 不上传 auth.json；④ 不频繁刷新额度或反复登录；⑤ 不确定时保持“仅保存”，不要切换本机账号。</p></div>`)}</div></div>`
 }
 async function copyProxyAddress(){

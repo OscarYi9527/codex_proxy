@@ -12,6 +12,7 @@ import { recordRouteDecision } from '../route-decisions.js'
 const RESPONSES_LITE_HEADER = 'x-openai-internal-codex-responses-lite'
 const responsesLiteUnsupportedModels = new Set()
 const MAX_ACCOUNT_ATTEMPTS_PER_REQUEST = 2
+const ACCOUNT_POOL_UNAVAILABLE_MESSAGE = 'No ChatGPT account became available before the local queue timeout. Check Admin > Account Pool: enable an account with quota, refresh expired login, or wait for cooldown/busy requests.'
 // When all enabled accounts are temporarily busy, wait rather than failing
 // fast. This avoids false 503s on short request overlap.
 const BUSY_ACCOUNT_RETRY_MS = 500
@@ -408,7 +409,7 @@ export async function handleChatGptSub(req, res, body, resolved) {
       return sendJson(res, 503, {
         error: {
           type: 'account_pool_exhausted',
-          message: 'No ChatGPT account became available before the local queue timeout',
+          message: ACCOUNT_POOL_UNAVAILABLE_MESSAGE,
           details
         }
       }, { 'retry-after': '3' })
@@ -487,7 +488,7 @@ export async function handleChatGptSubChatCompletions(req, res, body, resolved) 
       return sendJson(res, 503, {
         error: {
           type: 'account_pool_exhausted',
-          message: 'No ChatGPT account became available before the local queue timeout',
+          message: ACCOUNT_POOL_UNAVAILABLE_MESSAGE,
           details
         }
       }, { 'retry-after': '3' })

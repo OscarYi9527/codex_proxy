@@ -1,5 +1,87 @@
 # Codex Proxy 待办事项
 
+## P0：Gateway / Edge 协作迁移与仓库管理
+
+### 仓库和文件存放
+
+- [x] 明确 `codex_proxy-black` 是 Black（当前用户）的开发仓库，不是同事仓库。
+- [x] 约定两个项目统一放在 `F:\AI\codex-collaboration` 下的独立子目录中。
+- [ ] 将当前 `F:\AI\codex_proxy` 可控迁移为
+  `F:\AI\codex-collaboration\codex_proxy-black`，迁移前不得影响正在运行的 Proxy。
+- [x] 编写 `docs/COLLABORATION_WORKSPACE.md`，明确同事仓库、remote、worktree 和合并门禁。
+- [x] 已记录同事仓库 `OscarYi9527/My_Code`、分支 `codex/account-gateway-mvp`
+  和交付 commit `788f3921`。
+- [x] 已将同事仓库克隆到 `F:\AI\codex-collaboration\My_Code`，并确认工作区干净。
+- [x] 已确认 `My_Code` 与 `codex_proxy-black` 没有共同 Git 历史；禁止将两个根仓库
+  直接合并，后续通过 API 合同和端到端测试完成产品集成。
+- [ ] 基于 `origin/feature/custom-api-urls@e3ed1d6` 在
+  `F:\AI\codex-collaboration\worktrees\gateway-integration` 创建独立集成 worktree。
+- [ ] 合并前分别确认两个仓库工作区干净，并记录双方基线 commit。
+- [ ] 检查同事交付不包含数据库、`.env`、Token、API Key、日志、运行状态或 `node_modules`。
+- [ ] 禁止覆盖 `origin`、强制推送、嵌套 `.git` 和直接合并无共同历史的整个仓库根目录。
+
+### 阶段 0：现有能力审计
+
+- [x] 更新并验证 `feature/custom-api-urls`，运行 `npm test`、`npm run check` 和
+  `npm run release:check`。
+- [x] 对照 T001–T120 将现有能力分为：可直接复用、修改后复用、完全缺失、接口合同冲突。
+- [x] 新增 `docs/AI_EDITOR_GATEWAY_BASELINE_AUDIT.md`，记录模块、任务编号、复用结论、
+  修改项和测试证据。
+- [x] 确认 Gateway 稳定起点为 `feature/custom-api-urls@e3ed1d6`；新分支使用
+  `feature/ai-editor-account-gateway` 并注明堆叠依赖。
+- [ ] 不重复开发已经完成的额度、账号路由、诊断、成本和管理模块。
+
+### 阶段 1：Gateway / Edge 基础框架
+
+- [ ] 创建 Gateway 开发分支，并保留 `standalone`、`edge`、`gateway` 三种隔离运行模式。
+- [ ] 建立 TypeScript Gateway、React 管理页面、SQLite 数据层和 PostgreSQL 适配边界。
+- [ ] Gateway 使用 `127.0.0.1:47920`，Edge 使用 `127.0.0.1:47921`，不得读写共享 `47892`。
+- [ ] 提供 Gateway/Edge 独立启动、停止、单实例保护、隔离数据目录和 `/live`。
+- [ ] 保证 standalone 全部现有回归测试继续通过。
+
+### 阶段 2：先向 Oscar 提供 Mock 合同
+
+- [ ] 实现 `GET /ai-editor/status` 和状态重试、handoff、webview ticket、logout、models 最小接口。
+- [ ] Mock 支持 `ready`、`login_required`、`account_unavailable`、
+  `service_unavailable`、`password_change_required`。
+- [ ] 每次交付提供分支、SHA、启动命令、接口地址、Mock 切换方式、已实现和未实现接口。
+- [ ] Oscar 可以不依赖真实账号服务开发账户菜单、状态栏、Turn 门禁和管理 Webview。
+
+### 阶段 3–4：产品账号与 Edge
+
+- [ ] 实现一次性管理员临时密码、首次强制改密、邮箱、邀请码注册和最后一个一级管理员保护。
+- [ ] 实现浏览器登录、PKCE、随机 state、随机回调端口和一次性授权码。
+- [ ] Access Token 有效期 5 分钟；Refresh Token 滚动 30 天，并检测重放后撤销设备会话。
+- [ ] 未登录、禁用或到期账号不能发送新 Turn，但已接受 Turn 可以完成。
+- [ ] Edge 只保存产品账号 Refresh Token；Access Token 仅存内存，不保存任何中央上游凭据。
+- [ ] Windows 使用 DPAPI、macOS 使用 Keychain；退出后 `/v1` 返回未登录且 `/live` 可访问。
+
+### 阶段 5–6：组织、权限、积分和并发风险
+
+- [ ] 在 Gateway API 强制执行一级管理员、二级管理员、组织用户权限和跨组织 `403`。
+- [ ] 对角色提升、跨组织访问和管理员正文查看写安全审计。
+- [ ] 实现组织月度积分池、用户积分分配、月底清零和按实际 Token/模型倍率扣分。
+- [ ] 为每个 Turn 建立幂等风险记录；并发 Turn 不重复占用，同一 Turn 重试不重复扣费。
+- [ ] 超过风险限制只阻止新 Turn；缺少上游 Token 用量时使用保守估算并明确标记。
+
+### 阶段 7–9：Provider、管理页面和审计保留
+
+- [ ] 将现有 ChatGPT、OpenAI API、DeepSeek、Relay、模型目录、智能路由、熔断和诊断接入 Gateway。
+- [ ] Edge、普通用户和二级管理员不能获取中央凭据、成本、熔断或 Provider 路由诊断。
+- [ ] React 页面覆盖普通用户、二级管理员和一级管理员能力，且越权不能只靠隐藏菜单。
+- [ ] Token 不进入 URL 或 `localStorage`，管理页面可安全嵌入 Code Webview。
+- [ ] 仅保存用户提问、最终回复、时间、模型、Token 和扣分；禁止保存系统提示词、文件原文、
+  推理、工具输出、完整上游请求及 Refresh Token。
+- [ ] 正文默认保留 30 天，组织可配置 7–180 天；到期删除正文并保留匿名统计。
+
+### 阶段 10：测试和交付
+
+- [ ] 增加 Gateway 单元测试、API 合同测试、Edge 转发、Token 轮换/重放、组织越权、
+  并发积分结算、凭据泄露和 React 页面测试。
+- [ ] Gateway/admin 新增代码覆盖率不低于 80%。
+- [ ] 每次交付固定提供分支、SHA、启动命令、数据库迁移、接口变化、测试结果和已知问题。
+- [ ] 所有合并先在独立 integration worktree 完成备份、冲突审计、全量测试和回滚验证。
+
 ## P0：近期
 
 - [x] 在账号池中显示每个 ChatGPT 账号的 5 小时、每周剩余额度。

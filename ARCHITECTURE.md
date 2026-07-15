@@ -2,6 +2,22 @@
 
 本文描述默认监听 `127.0.0.1:47892` 的当前实现。主入口是 `src/server.js`。
 
+## AI Editor Gateway 隔离开发规则
+
+`feature/custom-api-urls@e3ed1d6` 是 Gateway/Edge 的 standalone 兼容基线。后续开发使用
+独立分支、端口和数据根：
+
+```text
+standalone：127.0.0.1:47892（共享稳定实例，禁止开发任务修改）
+gateway：   127.0.0.1:47920
+edge：      127.0.0.1:47921
+```
+
+Gateway/Edge 不得读取、复制或修改 standalone 的配置、ChatGPT 账号、API Key、统计、
+PID、日志或备份。开发启动器必须对端口、PID 和数据目录执行规范化与边界校验；测试使用
+临时数据根。AI Editor 的接口事实来源是独立 `My_Code` 仓库中的
+`specs/002-ai-editor-account-gateway/contracts/`，两个仓库不合并 Git 根历史。
+
 ## 组件
 
 ```mermaid

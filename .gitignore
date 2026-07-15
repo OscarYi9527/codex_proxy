@@ -41,6 +41,7 @@ models-test.json
 .credential-key.dpapi.json
 .config-backups/
 .account-backups/
+.migration-backups/
 
 # dependencies / local-only backups
 node_modules/

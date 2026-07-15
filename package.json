@@ -1,6 +1,6 @@
 {
   "name": "codex-proxy",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "type": "module",
   "description": "Multi-upstream model routing proxy for Codex — ChatGPT subscription, OpenAI API, and DeepSeek",
   "main": "index.js",
@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node src/server.js",
     "check": "node --check src/server.js && node --check index.js",
-    "test": "node --test tests/test-codex-proxy.js"
+    "test": "node --test tests/*.js tests/*.cjs",
+    "release:check": "node scripts/release-check.mjs"
   },
   "engines": {
     "node": ">=18.0.0"

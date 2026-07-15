@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { credentialStoreEnabled, decryptConfigSecrets, encryptConfigSecrets, initializeCredentialStore } from './credential-store.js'
+import { backupBeforeMigration, migrateConfigDocument } from './migrations.js'
 
 const PROXY_DIR = path.dirname(fileURLToPath(import.meta.url))
 const CONFIG_FILE = path.join(PROXY_DIR, '..', 'codex-proxy-config.json')
@@ -79,8 +80,16 @@ function writeCredentialJson(filePath, value) {
 function loadProxyConfig() {
   let fileCfg = {}
   try {
-    const parsed = readStoredJson(CONFIG_FILE)
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) fileCfg = parsed
+    const raw = fs.readFileSync(CONFIG_FILE, 'utf8')
+    const parsed = decryptConfigSecrets(JSON.parse(raw))
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const migration = migrateConfigDocument(parsed)
+      fileCfg = migration.document
+      if (migration.changed) {
+        backupBeforeMigration(CONFIG_FILE, raw, migration)
+        writeCredentialJson(CONFIG_FILE, fileCfg)
+      }
+    }
   } catch (error) {
     if (error.code !== 'ENOENT') console.error('[codex-proxy] failed to load config:', error.message)
   }
@@ -329,6 +338,7 @@ function saveProxyConfig(fields, { snapshot = false, reason = 'change' } = {}) {
   if (!existing || typeof existing !== 'object' || Array.isArray(existing)) existing = {}
 
   const map = {
+    schema_version: fields.schemaVersion,
     deepseek_api_key: fields.deepseekApiKey,
     openai_api_key: fields.openaiApiKey,
     openai_org_id: fields.openaiOrgId,
@@ -347,6 +357,7 @@ function saveProxyConfig(fields, { snapshot = false, reason = 'change' } = {}) {
     fallback_statuses: fields.fallbackStatuses,
     provider_budgets: fields.providerBudgets
   }
+  existing.schema_version ||= migrateConfigDocument(existing).to
 
   for (const [k, v] of Object.entries(map)) {
     if (v !== undefined) existing[k] = v

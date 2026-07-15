@@ -3,10 +3,11 @@ import fs from 'fs'
 import path from 'path'
 import { PROXY_DIR, atomicWriteJson } from './config.js'
 import { estimateRequestCost } from './pricing.js'
+import { backupBeforeMigration, CURRENT_STATS_SCHEMA, migrateStatsDocument } from './migrations.js'
 
 const STATS_FILE = path.join(PROXY_DIR, '..', 'codex-proxy-stats.json')
 const DAILY_RETENTION_DAYS = 370
-let stats = { updated: new Date().toISOString(), providers: {}, accounts: {}, daily: {}, operational_events: [] }
+let stats = { schema_version: CURRENT_STATS_SCHEMA, updated: new Date().toISOString(), providers: {}, accounts: {}, daily: {}, operational_events: [] }
 
 export function statsDayKey(value = Date.now()) {
   const date = value instanceof Date ? value : new Date(value)
@@ -33,7 +34,12 @@ function loadStats() {
     const raw = fs.readFileSync(STATS_FILE, 'utf8')
     const parsed = JSON.parse(raw)
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      stats = parsed
+      const migration = migrateStatsDocument(parsed)
+      stats = migration.document
+      if (migration.changed) {
+        backupBeforeMigration(STATS_FILE, raw, migration)
+        atomicWriteJson(STATS_FILE, stats)
+      }
       stats.updated = stats.updated || new Date().toISOString()
       stats.providers ||= {}
       stats.accounts ||= {}
@@ -43,7 +49,7 @@ function loadStats() {
       return
     }
   } catch {}
-  stats = { updated: new Date().toISOString(), providers: {}, accounts: {}, daily: {}, operational_events: [] }
+  stats = { schema_version: CURRENT_STATS_SCHEMA, updated: new Date().toISOString(), providers: {}, accounts: {}, daily: {}, operational_events: [] }
 }
 loadStats()
 
@@ -308,7 +314,7 @@ export function getStats() {
 }
 
 export function resetStats() {
-  stats = { updated: new Date().toISOString(), providers: {}, accounts: {}, daily: {}, operational_events: [] }
+  stats = { schema_version: CURRENT_STATS_SCHEMA, updated: new Date().toISOString(), providers: {}, accounts: {}, daily: {}, operational_events: [] }
   saveStats()
   return stats
 }

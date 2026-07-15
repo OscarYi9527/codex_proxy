@@ -4,7 +4,7 @@ Windows 上的 Codex CLI / VS Code 多上游路由代理。它在保留原生 Re
 工具调用和流式输出的同时，统一接入 ChatGPT 订阅账号池、OpenAI API、DeepSeek
 和 OpenAI 兼容中转节点，并提供本地管理后台、稳定性保护与可观测性。
 
-当前版本：**2.4.0**
+当前版本：**2.4.1**
 
 ## 主要能力
 
@@ -609,10 +609,16 @@ Invoke-RestMethod http://127.0.0.1:47892/admin/api/chatgpt-login/preflight
 ```powershell
 npm test
 npm run check
+npm run release:check
 git diff --check
 ```
 
 自动化测试使用本地 mock，不会消耗真实模型额度。
+
+`npm run release:check` 会核对 package/lock/README/CHANGELOG 版本、运行文件
+清单、JavaScript 与 PowerShell 语法，并执行全量测试和空白错误检查。旧配置或
+统计首次加载时会自动补齐当前 schema；仅在确有变化时写回，并先把原始文件保存到
+`.migration-backups/`。
 
 ## 常见问题
 
@@ -720,7 +726,9 @@ VS Code 兼容层会把 `chatgpt.cliExecutable` 指向 `codex-vscode-launcher.ex
 - `src/server.js`：HTTP 服务、模型路由和管理 API 入口。
 - `src/chatgpt-accounts.js`：账号池、额度、Token、并发租约和冷却。
 - `src/routes/`：ChatGPT、OpenAI API、DeepSeek 和中转节点处理器。
-- `src/admin.html` / `src/admin_app.js`：本地管理后台和新手教程。
+- `src/admin.html` / `src/admin_app.js` / `src/admin_modules/`：本地管理后台、账号池、分析、设置和新手教程。
+- `src/admin/`：按登录、账号、诊断和运维拆分的管理接口。
+- `src/migrations.js`：配置与统计文档的幂等版本迁移和迁移前备份。
 - `codex-models.json`：Codex 模型目录。
 - `codex-safe.ps1`：安全启动、模式隔离、监控和故障转移。
 - `codex-mode.ps1`：三种路由模式的简化入口。

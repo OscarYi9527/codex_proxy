@@ -29,6 +29,7 @@ flowchart LR
 | `src/routes/deepseek.js` | Responses 与 Anthropic Messages 双向转换 |
 | `src/routes/relay.js` | OpenAI 兼容中转节点 |
 | `src/config.js` | 配置加载、原子写入、快照和回滚 |
+| `src/migrations.js` | 配置/统计 schema 迁移、未知字段保留和迁移前备份 |
 | `src/credential-store.js` | Windows DPAPI 密钥封装与 AES-256-GCM 凭据加密 |
 | `src/route-decisions.js` | 最近路由决策的内存环形记录 |
 | `src/provider-health.js` | Provider 最近结果、错误和延迟的轻量持久化 |
@@ -40,8 +41,14 @@ flowchart LR
 | `src/pricing.js` | 本地可更新模型价格目录与单请求成本估算 |
 | `src/cost-governance.js` | Provider 日/月成本汇总和预算门禁 |
 | `src/runtime-info.js` | 运行路径、版本、Commit 和工作区/安装副本一致性 |
-| `src/admin.js` | 本机管理 API、隔离登录、诊断和运维操作 |
-| `src/admin_app.js` | 管理后台交互与零基础教程 |
+| `src/admin.js` | 管理静态资源、基础配置接口与分域接口聚合 |
+| `src/admin/login.js` | Codex 来源探测、隔离 OAuth 登录与登录预检 |
+| `src/admin/accounts.js` | 账号导入、策略、额度刷新、切换与额度重置 |
+| `src/admin/diagnostics.js` | 统计、诊断、价格目录与成本报告 |
+| `src/admin/operations.js` | 部署、备份恢复、运行修复和优雅重启 |
+| `src/admin_app.js` | 管理后台共享状态、路由和通用交互 |
+| `src/admin_modules/` | 账号池、教程、分析和设置页面模块 |
+| `src/admin_ui_behaviors.cjs` | 浏览器与 Node DOM 测试共用的交互状态机 |
 
 ## 请求路由
 

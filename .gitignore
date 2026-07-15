@@ -46,3 +46,17 @@ models-test.json
 # dependencies / local-only backups
 node_modules/
 .archive/
+
+# AI Editor Gateway/Edge isolated development state
+.ai-editor-dev/
+gateway/dist/
+gateway/coverage/
+gateway/*.sqlite
+gateway/*.sqlite-*
+gateway/admin-web/dist/
+gateway/admin-web/coverage/
+gateway/admin-web/.vite/
+gateway/admin-web/*.tsbuildinfo
+*.gateway-secret
+*.edge-secret
+*.handoff-secret

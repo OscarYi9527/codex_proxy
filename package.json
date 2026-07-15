@@ -5,16 +5,30 @@
   "description": "Multi-upstream model routing proxy for Codex — ChatGPT subscription, OpenAI API, and DeepSeek",
   "main": "index.js",
   "bin": {
-    "codex-proxy": "src/server.js"
+    "codex-proxy": "src/launcher.js"
   },
+  "workspaces": [
+    "gateway",
+    "gateway/admin-web"
+  ],
   "scripts": {
-    "start": "node src/server.js",
-    "check": "node --check src/server.js && node --check index.js",
+    "start": "node src/launcher.js",
+    "start:standalone": "node src/launcher.js --mode standalone",
+    "start:edge": "node src/launcher.js --mode edge",
+    "gateway:dev": "npm run dev --workspace @ai-editor/gateway",
+    "gateway:build": "npm run build --workspace @ai-editor/gateway",
+    "gateway:test": "npm run test --workspace @ai-editor/gateway",
+    "admin:dev": "npm run dev --workspace @ai-editor/admin-web",
+    "admin:build": "npm run build --workspace @ai-editor/admin-web",
+    "admin:test": "npm run test --workspace @ai-editor/admin-web",
+    "check": "node --check src/server.js && node --check src/launcher.js && node --check src/mode.js && node --check src/edge/edge-config.js && node --check src/edge/edge-server.js && node --check index.js && npm run check --workspace @ai-editor/gateway && npm run check --workspace @ai-editor/admin-web",
     "test": "node --test tests/*.js tests/*.cjs",
+    "test:gateway-stack": "npm run gateway:test && npm run admin:test",
+    "test:dev-scripts": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test-dev-scripts.ps1",
     "release:check": "node scripts/release-check.mjs"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.19.0"
   },
   "keywords": [
     "codex",
@@ -27,5 +41,9 @@
   "license": "MIT",
   "dependencies": {
     "undici": "^8.7.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "5.1.1",
+    "vite": "7.3.6"
   }
 }

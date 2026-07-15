@@ -1,0 +1,43 @@
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  color: #172033;
+  background: #f5f7fb;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  width: min(760px, calc(100% - 48px));
+  margin: 72px auto;
+  padding: 36px;
+  border: 1px solid #dce3ef;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 18px 48px rgb(31 52 83 / 8%);
+}
+
+.eyebrow {
+  color: #1769e0;
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: .14em;
+}
+
+h1 {
+  margin: 8px 0 12px;
+}
+
+section {
+  display: grid;
+  gap: 6px;
+  margin-top: 28px;
+  padding: 18px;
+  border-radius: 12px;
+  background: #eef5ff;
+}
+
+section span {
+  color: #5f6b7d;
+}

@@ -21,6 +21,7 @@ import { initializeProviderHealth, saveProviderHealth } from './provider-health.
 import { listHttpErrorGuides } from './error-guide.js'
 import { executeRoutingPlan, VIRTUAL_MODELS } from './smart-routing.js'
 import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginPreflight, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountResetCreditsGet, handleChatgptAccountsRefreshResetCreditsAll, handleChatgptAccountResetQuota, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleAutomaticDiagnosisGet, handlePriceCatalogGet, handlePriceCatalogPut, handleCostReportGet, handleRuntimeInfoGet, handleDeployUpdate, handleAccountBackupsGet, handleConfigSnapshotsGet, handleAccountBackupRestore, handleConfigRollback, handleProviderHealthReset, handleRuntimeRepair, handleProxyRestart } from './admin.js'
+import { parseProxyMode } from './mode.js'
 
 const PORT = Number(process.env.CODEX_PROXY_PORT || 47892)
 const HOST = process.env.CODEX_PROXY_HOST || '127.0.0.1'
@@ -386,7 +387,10 @@ export function createServer({ fetchImpl = fetch } = {}) {
 const isMain = process.argv[1]
   ? path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))
   : false
-if (isMain) {
+export function startStandaloneServer() {
+  if (parseProxyMode() !== 'standalone') {
+    throw new Error('src/server.js only starts standalone mode; use src/launcher.js for edge or gateway')
+  }
   const credentialProtection = initializeCredentialProtection()
   initializeProviderHealth(path.join(PROXY_DIR, '..'))
   console.log('[codex-proxy] credential protection:', credentialProtection.enabled ? 'Windows DPAPI + AES-256-GCM' : 'disabled')
@@ -417,4 +421,9 @@ if (isMain) {
     console.log('[codex-proxy] listening on http://' + HOST + ':' + PORT)
     console.log('[codex-proxy] channels: gpt-* | openai-api-* | relay-* | * -> DeepSeek')
   })
+  return server
+}
+
+if (isMain) {
+  startStandaloneServer()
 }

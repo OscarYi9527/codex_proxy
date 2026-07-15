@@ -73,10 +73,22 @@ for (const file of files.filter(file => file.endsWith('.ps1'))) {
 }
 
 const npmCli = process.env.npm_execpath
-if (npmCli) {
-  if (!run(process.execPath, [npmCli, 'test'], 'automated tests')) process.exit(1)
-} else if (!run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['test'], 'automated tests')) {
-  process.exit(1)
+function runNpm(args, label) {
+  return npmCli
+    ? run(process.execPath, [npmCli, ...args], label)
+    : run(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, label)
+}
+
+for (const [script, label] of [
+  ['test', 'standalone and Edge tests'],
+  ['gateway:test', 'Gateway tests'],
+  ['admin:test', 'admin-web tests'],
+  ['test:dev-scripts', 'isolated development script tests'],
+  ['check', 'workspace type and syntax checks'],
+  ['gateway:build', 'Gateway production build'],
+  ['admin:build', 'admin-web production build']
+]) {
+  if (!runNpm(['run', script], label)) process.exit(1)
 }
 if (!run('git', ['diff', '--check'], 'whitespace check')) process.exit(1)
 

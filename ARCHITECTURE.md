@@ -37,11 +37,13 @@ flowchart LR
 `tools/start-ai-editor-dev.ps1` 只允许 loopback、拒绝 `47892`，并在
 `.ai-editor-dev/` 下创建随机 Edge nonce、PID 元数据和独立数据目录。停止脚本会再次验证
 PID 命令行属于当前仓库，再按子进程到父进程的顺序停止；重置脚本要求规范化路径完全一致、
-`-Force` 和数据根标记同时成立。
+`-Force` 和数据根标记同时成立。启动脚本内建 `/live` 模式校验，只有服务健康后才返回；
+超时或进程提前退出时，会回滚本次已经启动的 Gateway/Edge。
 
 Gateway 使用 Fastify、Kysely 和版本化迁移。SQLite 开启 WAL、外键与 busy timeout；
 PostgreSQL 通过 `pg.Pool` 接入，同一 repository contract 在两个方言执行。迁移模块统一
-把 Windows 路径转换成 `file://` URL，避免 Node 24 将盘符误判为 URL scheme。
+把 Windows 路径转换成 `file://` URL，避免 Node 24 将盘符误判为 URL scheme。服务层通过
+统一 `inTransaction` API 获取 Kysely transaction，避免业务代码绕过事务边界。
 
 ## 组件
 

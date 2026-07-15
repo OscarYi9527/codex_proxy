@@ -371,7 +371,8 @@ Gateway Mock Bearer Token 为 `mock-access-token`、`mock-level2-token` 和
 `mock-level1-token`。Edge 本机 nonce 每次启动随机生成在隔离数据根的
 `edge-local-nonce.secret`，请求 `/ai-editor/*` 时通过 `X-AI-Editor-Local-Nonce`
 发送；nonce、ticket 和 handoff 凭据不得提交或写入日志。开发脚本会拒绝共享端口
-`47892`、公开监听地址和仓库根数据目录。
+`47892`、公开监听地址和仓库根数据目录。启动命令只有在两个服务的 `/live` 均返回
+预期模式后才成功；任一服务启动失败时会按相反顺序停止本次已启动的进程。
 
 第一轮 Mock 覆盖：
 
@@ -393,7 +394,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
 
 Gateway 默认使用 SQLite（WAL、外键和 5 秒 busy timeout），生产适配边界支持
 PostgreSQL。切换 PostgreSQL 时设置 `AI_EDITOR_GATEWAY_DB_DIALECT=postgres` 与
-`AI_EDITOR_GATEWAY_POSTGRES_URL`。当前数据库迁移只是基础 schema，不包含真实生产账号。
+`AI_EDITOR_GATEWAY_POSTGRES_URL`。两个方言通过同一个 `inTransaction` 边界执行原子
+业务操作。当前数据库迁移只是基础 schema，不包含真实生产账号。
 
 ## HTTP 接口
 

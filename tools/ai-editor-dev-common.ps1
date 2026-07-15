@@ -36,6 +36,31 @@ function Test-AiEditorPortAvailable {
     return $null -eq $listener
 }
 
+function Assert-AiEditorProcessSlotAvailable {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('gateway', 'edge')][string]$Mode,
+        [Parameter(Mandatory = $true)][string]$DataRoot
+    )
+
+    $pidFile = Join-Path $DataRoot "$Mode.pid.json"
+    if (-not (Test-Path -LiteralPath $pidFile)) {
+        return
+    }
+    try {
+        $metadata = Get-Content -LiteralPath $pidFile -Raw -Encoding utf8 | ConvertFrom-Json
+        $recordedProcessId = [int]$metadata.pid
+    } catch {
+        throw "Refusing to overwrite malformed $Mode PID metadata: $pidFile"
+    }
+    $process = Get-CimInstance Win32_Process `
+        -Filter "ProcessId=$recordedProcessId" `
+        -ErrorAction SilentlyContinue
+    if ($null -ne $process) {
+        throw "Refusing to start ${Mode}: recorded PID $recordedProcessId is still running"
+    }
+    Remove-Item -LiteralPath $pidFile -Force
+}
+
 function Initialize-AiEditorDataRoot {
     param([Parameter(Mandatory = $true)][string]$DataRoot)
     New-Item -ItemType Directory -Force -Path $DataRoot | Out-Null
@@ -44,6 +69,36 @@ function Initialize-AiEditorDataRoot {
         "isolated-ai-editor-development`n",
         (New-Object Text.UTF8Encoding($false))
     )
+}
+
+function Wait-AiEditorServiceHealthy {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('gateway', 'edge')][string]$Mode,
+        [Parameter(Mandatory = $true)][int]$Port,
+        [Parameter(Mandatory = $true)][int]$ProcessId,
+        [Parameter(Mandatory = $true)][string]$DataRoot,
+        [int]$TimeoutSeconds = 20
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $lastError = $null
+    do {
+        if ($null -eq (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
+            $stderr = Join-Path $DataRoot "$Mode.stderr.log"
+            throw "$Mode exited before /live became healthy; inspect the isolated log at $stderr"
+        }
+        try {
+            $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/live" -TimeoutSec 2
+            if ($health.status -eq 'ok' -and $health.mode -eq $Mode) {
+                return
+            }
+            $lastError = "unexpected /live response"
+        } catch {
+            $lastError = $_.Exception.Message
+        }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "$Mode did not pass /live within $TimeoutSeconds seconds: $lastError"
 }
 
 function Start-AiEditorProcess {

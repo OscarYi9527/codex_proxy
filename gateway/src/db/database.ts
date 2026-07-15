@@ -1,4 +1,10 @@
-import { Kysely, Migrator, type Migration, type MigrationProvider } from 'kysely'
+import {
+  Kysely,
+  Migrator,
+  type Migration,
+  type MigrationProvider,
+  type Transaction
+} from 'kysely'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -9,6 +15,9 @@ import type { GatewayDatabase } from './schema.js'
 
 export interface DatabaseHandle {
   readonly db: Kysely<GatewayDatabase>
+  inTransaction<T>(
+    callback: (transaction: Transaction<GatewayDatabase>) => Promise<T>
+  ): Promise<T>
   migrateToLatest(): Promise<void>
   close(): Promise<void>
 }
@@ -46,6 +55,11 @@ export function createGatewayDatabase(config: GatewayConfig): DatabaseHandle {
 export function databaseHandle(db: Kysely<GatewayDatabase>): DatabaseHandle {
   return {
     db,
+    async inTransaction<T>(
+      callback: (transaction: Transaction<GatewayDatabase>) => Promise<T>
+    ): Promise<T> {
+      return db.transaction().execute(callback)
+    },
     async migrateToLatest() {
       const migrationFolder = path.join(path.dirname(fileURLToPath(import.meta.url)), 'migrations')
       const migrator = new Migrator({

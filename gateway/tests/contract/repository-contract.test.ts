@@ -39,20 +39,28 @@ describe.each(factories)('%s repository contract', (_dialect, factory) => {
 
   it('migrates every declared entity table', async () => {
     const required = [
+      'gateway_meta',
       'accounts',
+      'password_credentials',
       'organizations',
       'invitations',
       'device_sessions',
       'refresh_tokens',
       'authorization_codes',
       'webview_tickets',
+      'webview_sessions',
+      'model_rates',
       'organization_credit_periods',
+      'user_credit_allocations',
+      'risk_policies',
       'turn_risks',
       'usage_records',
       'conversation_audits',
+      'admin_audit_events',
       'providers',
       'provider_credentials',
-      'model_routes'
+      'model_routes',
+      'mock_states'
     ]
     for (const table of required) {
       await expect(handle.db.selectFrom(table as 'accounts').selectAll().limit(0).execute())
@@ -67,5 +75,27 @@ describe.each(factories)('%s repository contract', (_dialect, factory) => {
     await repository.set('contract', 'v2', '2026-07-16T00:01:00.000Z')
     expect(await repository.get('contract')).toBe('v2')
     expect(await repository.get('missing')).toBeNull()
+  })
+
+  it('commits and rolls back through the shared transaction boundary', async () => {
+    await handle.inTransaction(async transaction => {
+      const repository = new GatewayMetaRepository(transaction)
+      await repository.set('committed', 'yes', '2026-07-16T00:02:00.000Z')
+    })
+    expect(await new GatewayMetaRepository(handle.db).get('committed')).toBe('yes')
+
+    const rollback = new Error('intentional contract rollback')
+    await expect(handle.inTransaction(async transaction => {
+      const repository = new GatewayMetaRepository(transaction)
+      await repository.set('rolled-back', 'no', '2026-07-16T00:03:00.000Z')
+      throw rollback
+    })).rejects.toBe(rollback)
+    // SQLite verifies rollback state end-to-end. pg-mem accepts BEGIN/ROLLBACK
+    // but intentionally does not implement transaction isolation/rollback;
+    // the PostgreSQL branch still verifies Kysely's transaction boundary and
+    // exception propagation without pretending pg-mem proves server semantics.
+    if (_dialect === 'sqlite') {
+      expect(await new GatewayMetaRepository(handle.db).get('rolled-back')).toBeNull()
+    }
   })
 })

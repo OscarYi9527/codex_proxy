@@ -4,6 +4,7 @@ $start = Join-Path $repo 'tools\start-ai-editor-dev.ps1'
 $stop = Join-Path $repo 'tools\stop-ai-editor-dev.ps1'
 $reset = Join-Path $repo 'tools\reset-ai-editor-dev.ps1'
 $testRoot = Join-Path $repo '.ai-editor-dev\script-contract-test'
+$pidGuardRoot = Join-Path $repo '.ai-editor-dev\script-pid-guard-test'
 $lifecycleRoot = Join-Path $repo '.ai-editor-dev\script-lifecycle-test'
 
 function Assert-Throws {
@@ -68,6 +69,21 @@ try {
         throw 'Confirmed reset did not remove the isolated target'
     }
 
+    New-Item -ItemType Directory -Force -Path $pidGuardRoot | Out-Null
+    Set-Content -LiteralPath (Join-Path $pidGuardRoot '.ai-editor-dev-root') -Value 'test'
+    @{
+        pid = $PID
+        mode = 'gateway'
+        repository = $repo
+        data_root = $pidGuardRoot
+        started_at = [DateTimeOffset]::UtcNow.ToString('o')
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $pidGuardRoot 'gateway.pid.json')
+    Assert-Throws -Message 'Live recorded PID metadata must block startup' -Action {
+        & $start -Mode gateway -DataRoot $pidGuardRoot -GatewayPort 47920
+    }
+    Remove-Item -LiteralPath (Join-Path $pidGuardRoot 'gateway.pid.json') -Force
+    & $reset -DataRoot $pidGuardRoot -ConfirmDataRoot $pidGuardRoot -Force
+
     foreach ($port in @(47920, 47921)) {
         if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
             throw "Lifecycle test requires unused development port $port"
@@ -76,6 +92,9 @@ try {
     $sharedBefore = Get-NetTCPConnection -LocalPort 47892 -State Listen -ErrorAction SilentlyContinue |
         Select-Object -First 1
     & $start -Mode all -DataRoot $lifecycleRoot -GatewayPort 47920 -EdgePort 47921
+    Assert-Throws -Message 'A second start must not overwrite live PID metadata' -Action {
+        & $start -Mode all -DataRoot $lifecycleRoot -GatewayPort 47920 -EdgePort 47921
+    }
     $gatewayLive = Wait-HttpReady -Uri 'http://127.0.0.1:47920/live'
     $edgeLive = Wait-HttpReady -Uri 'http://127.0.0.1:47921/live'
     if ($gatewayLive.mode -ne 'gateway' -or $edgeLive.mode -ne 'edge') {
@@ -106,6 +125,19 @@ try {
     & $reset -DataRoot $lifecycleRoot -ConfirmDataRoot $lifecycleRoot -Force
     Write-Host 'AI Editor development script contract tests passed'
 } finally {
+    if (Test-Path -LiteralPath $pidGuardRoot) {
+        $pidFile = Join-Path $pidGuardRoot 'gateway.pid.json'
+        if (Test-Path -LiteralPath $pidFile) {
+            Remove-Item -LiteralPath $pidFile -Force
+        }
+        if (Test-Path -LiteralPath (Join-Path $pidGuardRoot '.ai-editor-dev-root')) {
+            try {
+                & $reset -DataRoot $pidGuardRoot -ConfirmDataRoot $pidGuardRoot -Force
+            } catch {
+                Write-Warning "PID guard cleanup could not reset its isolated root: $($_.Exception.Message)"
+            }
+        }
+    }
     if (Test-Path -LiteralPath $lifecycleRoot) {
         try {
             & $stop -Mode all -DataRoot $lifecycleRoot

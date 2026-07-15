@@ -90,7 +90,8 @@ export function recordCircuitResult(name, {
   circuit.lastFailure = {
     at: new Date().toISOString(),
     status: Number(status) || null,
-    message: error?.message || null
+    message: error?.message || null,
+    cause: error?.cause?.code || error?.cause?.message || null
   }
   circuit.halfOpenProbeActive = false
   circuit.halfOpenProbeStartedAt = null

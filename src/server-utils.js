@@ -120,7 +120,6 @@ export async function fetchWithRetry(fetchImpl, url, options, maxAttempts = 5) {
     const attemptStartedAt = Date.now()
     try {
       const response = await fetchImpl(url, { ...fetchOptions, signal: attemptAbort.signal })
-      recordCircuitResult(circuitKey, { status: response.status })
       recordProviderOutcome(circuitKey, {
         status: response.status,
         latencyMs: Date.now() - attemptStartedAt,
@@ -133,6 +132,11 @@ export async function fetchWithRetry(fetchImpl, url, options, maxAttempts = 5) {
         lastError = new Error(`Upstream returned HTTP ${response.status} (attempt ${attempt + 1}/${maxAttempts}): ${body.slice(0, 200)}`)
         console.error('[codex-proxy]', lastError.message)
       } else {
+        // Only the request's final outcome (after all internal retries) counts
+        // toward the circuit breaker, so a request that succeeds on a retry, or
+        // that exhausts retries, tallies as exactly one breaker event - not one
+        // per attempt.
+        recordCircuitResult(circuitKey, { status: response.status })
         // The signal must remain active while a streaming response body is
         // consumed. Its unref'ed timer cleans itself up after the deadline.
         preserveSignalForResponseBody = true
@@ -141,7 +145,6 @@ export async function fetchWithRetry(fetchImpl, url, options, maxAttempts = 5) {
     } catch (error) {
       lastError = error
       const callerAborted = fetchOptions.signal?.aborted === true
-      if (error.code !== 'CIRCUIT_OPEN' && !callerAborted) recordCircuitResult(circuitKey, { error })
       if (error.code !== 'CIRCUIT_OPEN' && !callerAborted) {
         recordProviderOutcome(circuitKey, {
           latencyMs: Date.now() - attemptStartedAt,
@@ -151,8 +154,10 @@ export async function fetchWithRetry(fetchImpl, url, options, maxAttempts = 5) {
       }
       if (callerAborted) throw error
       if (attempt < maxAttempts - 1 && isRetryableError(error)) {
-        console.error('[codex-proxy] fetch error (attempt %d/%d): %s', attempt + 1, maxAttempts, error.message)
+        console.error('[codex-proxy] fetch error (attempt %d/%d): %s cause=%s',
+          attempt + 1, maxAttempts, error.message, error.cause?.code || error.cause?.message || '-')
       } else {
+        if (error.code !== 'CIRCUIT_OPEN') recordCircuitResult(circuitKey, { error })
         throw error
       }
     } finally {

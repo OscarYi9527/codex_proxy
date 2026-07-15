@@ -287,7 +287,9 @@ export async function sendWithAccountRotation(
         headers: buildAccountPoolHeaders(req, account, { includeResponsesLite }),
         body: upstreamBody,
         signal: upstreamSignalFor(req),
-        circuitKey: 'chatgpt-sub',
+        // Isolated per account so one account's network trouble can't trip
+        // the breaker for every other account sharing the pool.
+        circuitKey: `chatgpt-sub:${account.id}`,
         // Let account rotation handle quota responses immediately rather than
         // retrying a known-limited account.
         retryStatuses: [502, 503, 504]
@@ -361,16 +363,18 @@ export async function sendWithAccountRotation(
       const errorType = error.code === 'CIRCUIT_OPEN'
         ? 'circuit_open'
         : (error.code?.startsWith('TOKEN_REFRESH_') ? 'token_refresh' : 'network')
+      const errorCause = error.cause?.code || error.cause?.message || null
+      const errorMessage = errorCause ? `${error.message} (cause=${errorCause})` : error.message
       recordAccountOutcome(account.id, {
         latencyMs: Date.now() - attemptStartedAt,
         errorType,
-        errorMessage: error.message
+        errorMessage
       })
       noteAccountAdaptiveOutcome(account.id, {
         errorType: error.retryable === false ? 'authentication' : 'network',
         latencyMs: Date.now() - attemptStartedAt
       })
-      requestLog(req, `chatgpt-account=${account.id} network_error=${error.message} rotate`)
+      requestLog(req, `chatgpt-account=${account.id} network_error=${errorMessage} rotate`)
       const previousAccountId = account.id
       account = await acquireAccount(req, model, tried, sessionKey, chatGptFetch)
       if (account) recordOperationalEvent('account_switch', {
@@ -526,7 +530,9 @@ export async function handleChatGptSub(req, res, body, resolved, {
       headers: chatGptHeaders(req, { includeResponsesLite: tryResponsesLite }),
       body: upstreamBody,
       signal: upstreamSignalFor(req),
-      circuitKey: 'chatgpt-sub'
+      // Direct-login path has no account pool to isolate against, so it gets
+      // its own breaker key distinct from the per-account pool keys.
+      circuitKey: 'chatgpt-sub:direct'
     })
 
     upstream = await fetchWithRetry(chatGptFetch, proxyConfig.chatgptResponsesUrl, upstreamOptions)
@@ -605,7 +611,7 @@ export async function handleChatGptSubChatCompletions(req, res, body, resolved) 
       headers: chatGptHeaders(req, { includeResponsesLite: false }),
       body: upstreamBody,
       signal: upstreamSignalFor(req),
-      circuitKey: 'chatgpt-sub'
+      circuitKey: 'chatgpt-sub:direct'
     })
     upstream = await fetchWithRetry(chatGptFetch, proxyConfig.chatgptResponsesUrl, upstreamOptions)
   }

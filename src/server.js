@@ -5,7 +5,7 @@ import os from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
-import { PROXY_DIR, initializeCredentialProtection, proxyConfig } from './config.js'
+import { PROXY_DATA_DIR, initializeCredentialProtection, proxyConfig } from './config.js'
 import { requestLog } from './logger.js'
 import { sendJson, readJson, id, setProxyMeta } from './server-utils.js'
 import { getCodeTurnRequestState, markCodeTurnRequest, readCodeTurnMetadata } from './request-state.js'
@@ -23,7 +23,11 @@ import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet,
 
 const PORT = Number(process.env.CODEX_PROXY_PORT || 47892)
 const HOST = process.env.CODEX_PROXY_HOST || '127.0.0.1'
-const INSTANCE_FILE = path.join(os.homedir(), '.codex-proxy-instance.json')
+const INSTANCE_FILE = process.env.CODEX_PROXY_INSTANCE_FILE || (
+  process.env.CODEX_PROXY_DATA_DIR
+    ? path.join(PROXY_DATA_DIR, `.codex-proxy-instance-${PORT}.json`)
+    : path.join(os.homedir(), '.codex-proxy-instance.json')
+)
 
 const BASE_INSTRUCTIONS = 'You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user\u0027s workspace. Preserve unrelated changes and report completed work concisely.'
 
@@ -170,7 +174,7 @@ export function createServer({ fetchImpl = fetch } = {}) {
     if (req.method === 'GET' && url.pathname.endsWith('/models')) {
       let localModels = []
       try {
-        localModels = JSON.parse(fs.readFileSync(path.join(PROXY_DIR, '..', 'codex-models.json'), 'utf8')).models || []
+        localModels = JSON.parse(fs.readFileSync(path.join(PROXY_DATA_DIR, 'codex-models.json'), 'utf8')).models || []
       } catch {}
 
       const relayModels = []
@@ -393,7 +397,7 @@ const isMain = process.argv[1]
   : false
 if (isMain) {
   const credentialProtection = initializeCredentialProtection()
-  initializeProviderHealth(path.join(PROXY_DIR, '..'))
+  initializeProviderHealth(PROXY_DATA_DIR)
   console.log('[codex-proxy] credential protection:', credentialProtection.enabled ? 'Windows DPAPI + AES-256-GCM' : 'disabled')
   acquireInstanceLock()
   const server = createServer()

@@ -3,9 +3,9 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const PROXY_DIR = path.join(__dirname, '..')
-const MODELS_FILE = path.join(PROXY_DIR, 'codex-models.json')
-const CONFIG_FILE = path.join(PROXY_DIR, 'codex-proxy-config.json')
+const PROXY_DATA_DIR = path.resolve(process.env.CODEX_PROXY_DATA_DIR || path.join(__dirname, '..'))
+const MODELS_FILE = path.join(PROXY_DATA_DIR, 'codex-models.json')
+const CONFIG_FILE = path.join(PROXY_DATA_DIR, 'codex-proxy-config.json')
 
 function syncRelayModels() {
   let config

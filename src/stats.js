@@ -1,9 +1,9 @@
 // Usage statistics accumulator
 import fs from 'fs'
 import path from 'path'
-import { PROXY_DIR, atomicWriteJson } from './config.js'
+import { PROXY_DATA_DIR, atomicWriteJson } from './config.js'
 
-const STATS_FILE = path.join(PROXY_DIR, '..', 'codex-proxy-stats.json')
+const STATS_FILE = path.join(PROXY_DATA_DIR, 'codex-proxy-stats.json')
 const DAILY_RETENTION_DAYS = 370
 let stats = { updated: new Date().toISOString(), providers: {}, accounts: {}, daily: {} }
 

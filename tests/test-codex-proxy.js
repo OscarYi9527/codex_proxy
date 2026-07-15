@@ -3,6 +3,8 @@ import assert from 'node:assert'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
+import { createServer as createNetServer } from 'node:net'
 import { resolveCodexModel, isChatGptSubModel, isOpenAIApiModel, isRelayModel, parseRelayModel, buildModelsResponse, getThreadId } from '../src/models.js'
 import { recordUsage, recordAccountOutcome, getStats, resetStats, saveStats, statsDayKey } from '../src/stats.js'
 import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurrencyLimit, accountRemainingPercent, accountUsageIsFresh, calculateUsageForecast, consumeAccountResetCredit, cooldownMsFromResponseText, ensureFreshToken, extractResetCredits, extractUsageFromBody, extractUsageFromHeaders, mergeAccountUsageWindows, normalizeAccountRoutingStrategy, noteAccountAdaptiveOutcome, noteAccountSuccess, pickActiveAccount, refreshAccountResetCredits, refreshAccountUsage, releaseAccountRequest, renewAccountRequestLease, reserveAccountRequest, resetAccountRequestCounts, resetAccountStickiness } from '../src/chatgpt-accounts.js'
@@ -647,6 +649,56 @@ describe('Provider 熔断器', () => {
     assert.throws(() => assertCircuitAvailable(first), /circuit/)
     assert.doesNotThrow(() => assertCircuitAvailable(second))
     resetCircuits()
+  })
+})
+
+describe('可分发 Proxy 运行时', () => {
+  it('运行时目录只读时可将数据写入独立目录并使用端口级实例锁', async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-proxy-data-'))
+    const port = await new Promise((resolve, reject) => {
+      const reservation = createNetServer()
+      reservation.once('error', reject)
+      reservation.listen(0, '127.0.0.1', () => {
+        const address = reservation.address()
+        reservation.close(error => error ? reject(error) : resolve(address.port))
+      })
+    })
+    const child = spawn(process.execPath, [path.resolve('src/server.js')], {
+      cwd: path.resolve('.'),
+      env: {
+        ...process.env,
+        CODEX_PROXY_DATA_DIR: dataDir,
+        CODEX_PROXY_HOST: '127.0.0.1',
+        CODEX_PROXY_PORT: String(port)
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true
+    })
+    let stderr = ''
+    child.stderr.on('data', chunk => stderr += chunk)
+    try {
+      const deadline = Date.now() + 10_000
+      let response
+      while (Date.now() < deadline) {
+        try {
+          response = await fetch(`http://127.0.0.1:${port}/live`)
+          if (response.ok) break
+        } catch {}
+        await new Promise(resolve => setTimeout(resolve, 100))
+      }
+      assert.strictEqual(response?.status, 200, stderr)
+      assert.ok(fs.existsSync(path.join(dataDir, `.codex-proxy-instance-${port}.json`)))
+      if (process.platform === 'win32') {
+        assert.ok(fs.existsSync(path.join(dataDir, '.credential-key.dpapi.json')))
+      }
+    } finally {
+      child.kill()
+      await Promise.race([
+        new Promise(resolve => child.once('exit', resolve)),
+        new Promise(resolve => setTimeout(resolve, 5_000))
+      ])
+      fs.rmSync(dataDir, { recursive: true, force: true })
+    }
   })
 })
 

@@ -1,9 +1,9 @@
 // Request logging
 import fs from 'fs'
-import os from 'os'
 import path from 'path'
+import { PROXY_DATA_DIR } from './config.js'
 
-const REQUEST_LOG = path.join(os.homedir(), '.claude', 'proxy', 'codex-proxy-requests.log')
+const REQUEST_LOG = path.join(PROXY_DATA_DIR, 'codex-proxy-requests.log')
 const MAX_LOG_BYTES = 10 * 1024 * 1024
 let writesSinceSizeCheck = 100
 

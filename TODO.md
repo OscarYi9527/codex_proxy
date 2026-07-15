@@ -33,7 +33,9 @@
 
 ### 阶段 1：Gateway / Edge 基础框架
 
-- [ ] 创建 Gateway 开发分支，并保留 `standalone`、`edge`、`gateway` 三种隔离运行模式。
+- [x] 从 `feature/custom-api-urls@e3ed1d6` 创建并推送堆叠分支
+  `feature/ai-editor-account-gateway`。
+- [ ] 增加 `standalone`、`edge`、`gateway` 三种隔离运行模式，并保持 standalone 为默认。
 - [ ] 建立 TypeScript Gateway、React 管理页面、SQLite 数据层和 PostgreSQL 适配边界。
 - [ ] Gateway 使用 `127.0.0.1:47920`，Edge 使用 `127.0.0.1:47921`，不得读写共享 `47892`。
 - [ ] 提供 Gateway/Edge 独立启动、停止、单实例保护、隔离数据目录和 `/live`。

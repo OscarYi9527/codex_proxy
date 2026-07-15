@@ -19,7 +19,7 @@ import { handlePing, handlePingAll } from './routes/ping.js'
 import { saveStats } from './stats.js'
 import { initializeProviderHealth, saveProviderHealth } from './provider-health.js'
 import { listHttpErrorGuides } from './error-guide.js'
-import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginPreflight, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountResetCreditsGet, handleChatgptAccountsRefreshResetCreditsAll, handleChatgptAccountResetQuota, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleRuntimeInfoGet, handleDeployUpdate, handleAccountBackupsGet, handleConfigSnapshotsGet, handleAccountBackupRestore, handleConfigRollback, handleProviderHealthReset, handleRuntimeRepair, handleProxyRestart } from './admin.js'
+import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginPreflight, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountResetCreditsGet, handleChatgptAccountsRefreshResetCreditsAll, handleChatgptAccountResetQuota, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleAutomaticDiagnosisGet, handleRuntimeInfoGet, handleDeployUpdate, handleAccountBackupsGet, handleConfigSnapshotsGet, handleAccountBackupRestore, handleConfigRollback, handleProviderHealthReset, handleRuntimeRepair, handleProxyRestart } from './admin.js'
 
 const PORT = Number(process.env.CODEX_PROXY_PORT || 47892)
 const HOST = process.env.CODEX_PROXY_HOST || '127.0.0.1'
@@ -333,6 +333,9 @@ export function createServer({ fetchImpl = fetch } = {}) {
     if (req.method === 'GET' && url.pathname === '/admin/api/stats') return handleStatsGet(req, res)
     if (req.method === 'DELETE' && url.pathname === '/admin/api/stats') return handleStatsDelete(req, res)
     if (req.method === 'GET' && url.pathname === '/admin/api/diagnostics') return handleDiagnosticsGet(req, res)
+    if (req.method === 'GET' && url.pathname === '/admin/api/diagnosis') {
+      return handleAutomaticDiagnosisGet(req, res, Object.fromEntries(url.searchParams))
+    }
     if (req.method === 'GET' && url.pathname === '/admin/api/config-snapshots') return handleConfigSnapshotsGet(req, res)
     if (req.method === 'GET' && url.pathname === '/admin/api/account-backups') return handleAccountBackupsGet(req, res)
     if (req.method === 'POST' && url.pathname === '/admin/api/account-backups/restore') {

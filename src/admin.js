@@ -13,6 +13,7 @@ import { chinaFetch } from './china-fetch.js'
 import { getRouteDecisions } from './route-decisions.js'
 import { getProviderHealth, resetProviderHealth } from './provider-health.js'
 import { getRuntimeDeploymentInfo } from './runtime-info.js'
+import { buildAutomaticDiagnosis } from './diagnostics.js'
 
 function maskChatgptAccounts(accounts) {
   if (!accounts) return accounts
@@ -978,9 +979,19 @@ export function handleDiagnosticsGet(req, res) {
     accounts: getAccountRuntimeDiagnostics(),
     recent_route_decisions: getRouteDecisions(30),
     provider_health: getProviderHealth(),
+    automatic_diagnosis: buildAutomaticDiagnosis(),
     config_snapshots: listConfigSnapshots(),
     account_backups: listAccountBackups()
   })
+}
+
+export function handleAutomaticDiagnosisGet(req, res, query = {}) {
+  return sendJson(res, 200, buildAutomaticDiagnosis({
+    status: query.status,
+    errorType: query.error_type || query.type,
+    provider: query.provider,
+    model: query.model
+  }))
 }
 
 export function handleConfigSnapshotsGet(req, res) {

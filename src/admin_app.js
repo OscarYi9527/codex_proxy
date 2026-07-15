@@ -4,6 +4,7 @@ let pingResults = {}, modal = null, loginPoll = null, accountsPoll = null, dragg
 let errorGuideData = []
 let loginPreflightData = null
 let accountViewMode = localStorage.getItem('codex-account-view') === 'compact' ? 'compact' : 'cards'
+let healthRange = ['1h','24h','7d'].includes(localStorage.getItem('codex-health-range')) ? localStorage.getItem('codex-health-range') : '24h'
 let usageCalendarMonth = statsDateKey().slice(0,7)
 let animateNextRender = true
 
@@ -210,6 +211,12 @@ function setAccountViewMode(mode){
   localStorage.setItem('codex-account-view',accountViewMode)
   render()
 }
+function setHealthRange(range){
+  if(!['1h','24h','7d'].includes(range))return
+  healthRange=range
+  localStorage.setItem('codex-health-range',range)
+  render()
+}
 
 async function load(showMessage=false,includeModels=true){
   const btn=document.getElementById('refreshButton'); btn.innerHTML=svg('refresh')
@@ -248,8 +255,10 @@ function providerRows(){
     const statusClass=status==='正常'?'':status==='已配置'||status==='受限'||status==='未知'?'warn':'off'
     const latency=result?.latency??persisted?.last_latency_ms
     const checked=result?'刚刚检测':persisted?.last_checked_at?`最近 ${new Date(persisted.last_checked_at).toLocaleString('zh-CN')}`:'尚无健康记录'
+    const trend=persisted?.windows?.[healthRange]
+    const trendText=trend?.requests?`${healthRange} ${trend.success_rate??'-'}% · P95 ${fmt(trend.p95_latency_ms)} ms · 429 ${trend.rate_limited}`:checked
     const healthTitle=persisted?.last_error?` title="${esc(persisted.last_error)}"`:''
-    return `<div class="provider-row"><div class="provider-name"><span class="provider-logo ${logo}">${logo==='chatgpt'?'G':logo==='openai'?'AI':logo==='deepseek'?'D':'R'}</span><div><strong>${name}</strong><small>${sub}</small></div></div><div class="latency-cell"${healthTitle}><span class="status ${statusClass}"><i></i>${status}</span><div class="cell-sub">${latency!=null?`${fmt(latency)} ms · `:''}${checked}</div></div><div class="usage-cell"><span class="cell-sub">${fmt(p.requests)} 次请求</span><div class="mini-bar"><i style="width:${Math.min(100,(p.requests||0)/Math.max(1,totals().requests)*100)}%"></i></div></div><button class="btn btn-sm" onclick="pingChannel('${key}')">${svg('pulse')}检测</button></div>`
+    return `<div class="provider-row"><div class="provider-name"><span class="provider-logo ${logo}">${logo==='chatgpt'?'G':logo==='openai'?'AI':logo==='deepseek'?'D':'R'}</span><div><strong>${name}</strong><small>${sub}</small></div></div><div class="latency-cell"${healthTitle}><span class="status ${statusClass}"><i></i>${status}</span><div class="cell-sub">${trendText}</div>${persisted?.trend_warning?`<div class="cell-sub" style="color:var(--red)">${esc(persisted.trend_warning.message)}</div>`:''}</div><div class="usage-cell"><span class="cell-sub">${fmt(p.requests)} 次请求</span><div class="mini-bar"><i style="width:${Math.min(100,(p.requests||0)/Math.max(1,totals().requests)*100)}%"></i></div></div><button class="btn btn-sm" onclick="pingChannel('${key}')">${svg('pulse')}检测</button></div>`
   }).join('')
 }
 function deploymentBanner(){
@@ -265,6 +274,19 @@ function deploymentBanner(){
   const action=deployment.can_deploy?button('备份并部署更新','refresh','deployWorkspaceUpdate()','btn-danger'):''
   return `<div class="help-note" style="margin-bottom:18px;border-color:color-mix(in srgb,var(--red) 32%,var(--border));background:color-mix(in srgb,var(--red) 6%,var(--surface))"><div style="display:flex;align-items:center;justify-content:space-between;gap:14px"><div><b style="color:var(--red)">运行版本不一致</b><p>${esc(message)}<br>工作区：${esc(source)}<br>安装目录：${esc(installation)}</p></div>${action}</div></div>`
 }
+function diagnosisCenter(){
+  const diagnosis=diagnosticsData.automatic_diagnosis
+  if(!diagnosis)return ''
+  const issues=diagnosis.issues||[]
+  const tone=diagnosis.summary?.level==='critical'?'off':diagnosis.summary?.level==='warning'?'warn':''
+  const body=issues.length?issues.slice(0,8).map(issue=>{
+    const actions=(issue.actions||[]).map(item=>`<button class="btn btn-sm" onclick="runDiagnosisAction('${esc(item.id)}','${esc(item.target||'')}')">${esc(item.label)}</button>`).join('')
+    return `<div class="provider-row" style="grid-template-columns:minmax(0,1fr) auto"><div><span class="status ${issue.level==='critical'?'off':'warn'}"><i></i><b>${esc(issue.title)}</b></span><div class="cell-sub" style="margin-top:5px">${esc(issue.conclusion)}</div></div><div class="card-actions">${actions}</div></div>`
+  }).join(''):`<div class="help-note"><span class="status ${tone}"><i></i>${esc(diagnosis.summary?.conclusion||'未发现明显异常')}</span></div>`
+  const pool=diagnosis.account_pool||{},ops=diagnosis.trends?.operational||{}
+  const summary=`可用 ${Number(pool.eligible)||0} · 仅保存 ${Number(pool.stored_only)||0} · 冷却 ${Number(pool.cooling||0)+Number(pool.model_cooling||0)} · 额度不足 ${Number(pool.below_reserve)||0} · 并发满 ${Number(pool.busy)||0} · 24h 切换 ${Number(ops['24h']?.account_switches)||0} / 熔断 ${Number(ops['24h']?.circuit_opens)||0}`
+  return card('自动诊断中心',summary,`<div class="card-body">${body}</div>`,button('重新分析','pulse','refreshDiagnosis()','btn-sm'))
+}
 function renderOverview(){
   const t=totals()
   const today=normalizedDaily(1)[0]
@@ -273,6 +295,7 @@ function renderOverview(){
   return pageHead('控制台概览','统一查看模型网关、账号池和节点状态',button('检测全部通道','pulse','pingAll()','btn-primary'))+
     deploymentBanner()+
     `<div class="metrics">${metric('今日请求',fmt(today.requests),'pulse',`累计完成 ${fmt(t.requests)} 次`)}${metric('今日 Token',fmt(dailyTokens(today)),'analytics',`输入 ${fmt(today.input_tokens)} · 输出 ${fmt(today.output_tokens)}`)}${metric('连续活跃',`${activeStreak()} 天`,'server','以每天产生请求或 Token 记录计算')}${metric('账号池',String((cfg.chatgptAccounts||[]).length),'users',`今日 ${fmt(today.account_attempts)} 次账号路由尝试`)}</div>`+
+    diagnosisCenter()+
     `<div class="grid overview-grid">${card('AI 使用日历','按月查看 · 默认显示当前月份 · 数据仅保存在本机',`<div class="card-body usage-calendar-body">${usageHeatmap()}</div>`)}${card('最近调用','按模型请求量排序',`<div class="card-body">${activity}</div>`)}${card('服务状态','上游通道与实时连通性',`<div class="card-body">${providerRows()}</div>`,button('管理服务','',"switchPage('providers')",'btn-sm'))}${card('运行信息','当前网关环境',`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">默认模型</span><b>${esc(cfg.defaultModel||'-')}</b></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">统计更新时间</span><b>${statsData.updated?new Date(statsData.updated).toLocaleTimeString('zh-CN'):'-'}</b></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">部署模式</span><span class="badge">Local</span></div></div>`)}</div>`
 }
 function field(name,label,type='text',hint='',full=false){
@@ -336,7 +359,13 @@ function renderAccountsLegacy(){
     const values=[a.usage&&a.usage.primary,a.usage&&a.usage.secondary].filter(Boolean).map(w=>w.remaining_percent==null?(w.used_percent==null?null:100-Number(w.used_percent)):Number(w.remaining_percent)).filter(Number.isFinite)
     return values.length?Math.min(...values):null
   }
-  const available=accounts.filter(a=>(a.status==='active'||!a.status)&&a.routing_enabled!==false&&(remainingOf(a)==null||remainingOf(a)>threshold)).length
+  const diagnosedAvailable=diagnosticsData.automatic_diagnosis?.account_pool?.eligible
+  const available=Number.isFinite(Number(diagnosedAvailable))
+    ? Number(diagnosedAvailable)
+    : accounts.filter(a=>{
+      const reserve=Number(a.low_quota_threshold??threshold)
+      return (a.status==='active'||!a.status)&&a.routing_enabled!==false&&(remainingOf(a)==null||remainingOf(a)>reserve)
+    }).length
   const activeId=cfg.activeChatgptAccountId
   const activeLabel=accounts.find(a=>a.id===activeId)
   const resetTotal=accounts.reduce((sum,a)=>sum+Number(a.reset_credits?.available_count||0),0)
@@ -397,9 +426,10 @@ function renderAccounts(){
     const oneHour=health.windows&&health.windows['1h']
     const day=health.windows&&health.windows['24h']
     const week=health.windows&&health.windows['7d']
-    const successRate=health.requests?`${Number(health.success_rate||0).toFixed(1)}%`:'—'
-    const requestCount=health.requests?fmt(health.requests):'—'
-    const p95=health.requests?`${fmt(health.p95_latency_ms)} ms`:'—'
+    const rangeHealth=health.windows?.[healthRange]||health
+    const successRate=rangeHealth.requests?`${Number(rangeHealth.success_rate||0).toFixed(1)}%`:'—'
+    const requestCount=rangeHealth.requests?fmt(rangeHealth.requests):'—'
+    const p95=rangeHealth.requests?`${fmt(rangeHealth.p95_latency_ms)} ms`:'—'
     const concurrency=`${runtime.active_requests||0}/${runtime.concurrency_limit||3}`
     const routeLabel=!routeEnabled?'仅保存':a.status==='cooldown'?'冷却中':a.status==='auth_error'?'登录失效':atReserve?'额度保护':'参与路由'
     const routeTone=!routeEnabled||a.status==='auth_error'?'off':a.status==='cooldown'||atReserve?'warn':'ok'
@@ -439,7 +469,7 @@ function renderAccounts(){
           </div>
         </section>
         <section class="account-card-section performance-section">
-          <div class="account-section-head"><div><span>运行表现</span><small>${health.requests?'基于真实请求':'等待请求样本'}</small></div></div>
+          <div class="account-section-head"><div><span>运行表现</span><small>${rangeHealth.requests?`${healthRange} 真实请求`:'等待请求样本'}</small></div></div>
           <div class="account-kpi-grid">
             <div><small>成功率</small><strong>${successRate}</strong></div>
             <div><small>请求数</small><strong>${requestCount}</strong></div>
@@ -447,6 +477,7 @@ function renderAccounts(){
             <div><small>并发占用</small><strong>${concurrency}</strong></div>
           </div>
           <div class="account-performance-note">${oneHour||day||week?`1h ${oneHour?.success_rate==null?'—':oneHour.success_rate+'%'} · 24h ${day?.success_rate==null?'—':day.success_rate+'%'} · 7d ${week?.success_rate==null?'—':week.success_rate+'%'}`:'暂无分时健康数据'}${health.rate_limited?` · ${health.rate_limited} 次 429`:''}</div>
+          ${health.trend_warning?`<div class="account-alert error">${esc(health.trend_warning.message)}</div>`:''}
         </section>
         <section class="account-card-section route-section">
           <div class="account-section-head"><div><span>调度设置</span><small>${isActive?'当前本机登录':'账号池托管账号'}</small></div></div>
@@ -489,6 +520,7 @@ function renderAccounts(){
     const accountReserve=Number(a.low_quota_threshold??threshold),atReserve=remaining!=null&&remaining<=accountReserve
     const runtime=(diagnosticsData.accounts||[]).find(item=>item.id===a.id)||{}
     const health=(statsData.accounts||{})[a.id]||{}
+    const rangeHealth=health.windows?.[healthRange]||health
     const routeLabel=!routeEnabled?'仅保存':a.status==='cooldown'?'冷却中':a.status==='auth_error'?'登录失效':atReserve?'额度保护':'参与路由'
     const routeTone=!routeEnabled||a.status==='auth_error'?'off':a.status==='cooldown'||atReserve?'warn':'ok'
     const resetCount=a.reset_credits?Number(a.reset_credits.available_count||0):null
@@ -516,8 +548,8 @@ function renderAccounts(){
       </div>
       <div class="compact-quota-group">${quotaBar('5 小时',a.usage&&a.usage.primary)}${quotaBar('1 周',a.usage&&a.usage.secondary)}</div>
       <div class="compact-health">
-        <div><small>成功率</small><strong>${health.requests?Number(health.success_rate||0).toFixed(1)+'%':'—'}</strong></div>
-        <div><small>P95 延迟</small><strong>${health.requests?fmt(health.p95_latency_ms)+' ms':'—'}</strong></div>
+        <div><small>${healthRange} 成功率</small><strong>${rangeHealth.requests?Number(rangeHealth.success_rate||0).toFixed(1)+'%':'—'}</strong></div>
+        <div><small>P95 延迟</small><strong>${rangeHealth.requests?fmt(rangeHealth.p95_latency_ms)+' ms':'—'}</strong></div>
         <div><small>并发</small><strong>${runtime.active_requests||0}/${runtime.concurrency_limit||3}</strong></div>
       </div>
       <div class="compact-status">
@@ -536,8 +568,9 @@ function renderAccounts(){
   }).join('')
   const compactHeader=`<div class="account-compact-header" aria-hidden="true"><span>账号 / 优先级</span><span class="compact-header-quota"><b>额度状态</b><small><i>5 小时周期</i><i>1 周周期</i></small></span><span class="compact-col-health">运行表现</span><span>路由 / 重置次数</span><span>快捷操作</span></div>`
   const viewSwitch=`<div class="account-view-switch" role="group" aria-label="账号展示方式"><button class="${accountViewMode==='compact'?'active':''}" onclick="setAccountViewMode('compact')" title="条状简约型">${svg('list')}<span>简约</span></button><button class="${accountViewMode==='cards'?'active':''}" onclick="setAccountViewMode('cards')" title="卡片全面型">${svg('cards')}<span>全面</span></button></div>`
+  const rangeSwitch=`<div class="account-view-switch" role="group" aria-label="健康时间范围">${['1h','24h','7d'].map(range=>`<button class="${healthRange===range?'active':''}" onclick="setHealthRange('${range}')"><span>${range}</span></button>`).join('')}</div>`
   const accountBoard=accounts.length
-    ? `<section class="account-board"><div class="account-board-head"><div><span class="eyebrow">ACCOUNT POOL</span><h2>${accountViewMode==='compact'?'账号快速总览':'账号运行面板'}</h2><p>${accountViewMode==='compact'?'按列对齐比较额度、重置时间、性能和路由状态。':'拖拽左上角序号调整优先级；额度、健康度和高风险操作按功能分区。'}</p></div><div class="account-board-tools"><div class="account-board-legend"><span><i class="ok"></i>正常</span><span><i class="warn"></i>受限</span><span><i class="off"></i>停用</span></div>${viewSwitch}</div></div>${accountViewMode==='compact'?`<div class="account-compact-list">${compactHeader}${compactRows}</div>`:`<div class="account-card-grid">${cards}</div>`}</section>`
+    ? `<section class="account-board"><div class="account-board-head"><div><span class="eyebrow">ACCOUNT POOL</span><h2>${accountViewMode==='compact'?'账号快速总览':'账号运行面板'}</h2><p>${accountViewMode==='compact'?'按列对齐比较额度、重置时间、性能和路由状态。':'拖拽左上角序号调整优先级；额度、健康度和高风险操作按功能分区。'}</p></div><div class="account-board-tools"><div class="account-board-legend"><span><i class="ok"></i>正常</span><span><i class="warn"></i>受限</span><span><i class="off"></i>停用</span></div>${rangeSwitch}${viewSwitch}</div></div>${accountViewMode==='compact'?`<div class="account-compact-list">${compactHeader}${compactRows}</div>`:`<div class="account-card-grid">${cards}</div>`}</section>`
     : card('账号池', '尚未添加订阅账号', empty('accounts','账号池为空','通过官方登录或导入 auth.json 即可启用自动轮换',button('官方安全登录','shield','openOfficialLogin()','btn-primary')))
   const actions=button('官方安全登录','shield','openOfficialLogin()','btn-primary')+button('导入 auth.json','plus','openAccount()')+button('刷新全部用量','refresh','refreshAllUsage()')+button('查询全部重置次数','pulse','refreshAllResetCredits()')+button('重启 Codex','refresh','restartCodex()')
   const strategyOptions=Object.entries(accountStrategyLabels).map(([value,label])=>`<option value="${value}" ${cfg.chatgptAccountStrategy===value?'selected':''}>${label}</option>`).join('')
@@ -618,6 +651,7 @@ function renderHelp(){
     card('这个系统是做什么的？','先理解用途，再开始操作',`<div class="card-body help-intro"><p><b>它是运行在你电脑上的本地模型网关。</b>Codex 把请求交给它，它再根据你选择的规则，从 ChatGPT 订阅账号、官方 API、DeepSeek 或中转节点中选择一个可用通道。</p><p>它主要解决三件事：<b>统一管理账号和服务、在额度不足时稳定切换、集中查看额度与健康状态。</b>管理后台仅用于本机配置，不会替你注册账号，也不会绕过官方限制。</p></div>`)+
     card('第一步：我应该选择哪种接入方式？','只需要选择一种，也可以以后再增加',chooser)+
     card('HTTP 报错代码查找表','支持按状态码和原因关键词搜索',errorGuideLookup())+
+    card('自动诊断中心怎么用？','在概览页把错误码与实时运行状态合并分析',`<div class="card-body help-note"><p>出现 401、402、429、502 或 503 时先回到“控制台概览”。诊断中心会列出仅保存、登录失效、冷却、额度不足、每日上限、预留、并发占满和 Provider 熔断数量。优先点击结论旁的“刷新额度”“重新登录”或“检测 Provider”，不要连续盲目重试。1h、24h、7d 健康范围可在账号池切换；近期预警比累计数据更适合判断当前故障。</p></div>`)+
     `<div class="grid"><div>${card('四步快速开始',`${accounts.length} 个账号 · ${enabled} 个参与路由`,`<div class="card-body help-steps">${steps}</div>`)}${card('ChatGPT 账号完整操作步骤','第一次使用建议逐条完成',exactGuide)}${card('每账号额度与预留怎么设置？','安全余量、每日上限、预留和紧急继续',quotaPolicyGuide)}${card('额度重置怎么安全操作？','高风险功能 · 使用前逐项确认',quotaResetGuide)}${card('API 和中转节点怎么配置？','按你选择的接入方式阅读',otherGuides)}${card('常见问题和故障排查','从登录、额度到账号切换',faq)}</div><div>${card('左侧功能都有什么？','点击即可前往',`<div class="help-features">${helpFeature('overview','控制台概览','看服务是否正常、最近有没有调用','overview')}${helpFeature('providers','模型服务','配置官方 API 和 DeepSeek','providers')}${helpFeature('relays','中转节点','添加第三方兼容服务','relays')}${helpFeature('accounts','账号池','添加账号、查看额度和切换策略','accounts')}${helpFeature('analytics','用量分析','查看请求和 Token 用量','analytics')}${helpFeature('settings','系统设置','选择默认模型和显示偏好','settings')}</div>`)}${card('四个重要概念','先分清这些就不容易误操作',concepts)}${card('页面状态怎么看？','看到这些文字时该做什么',statusGuide)}${card('新手安全原则','避免误操作和凭据泄露',`<div class="card-body help-note"><p>① 只登录自己拥有的账号；② 只在 OpenAI 官方页面输入密码和验证码；③ 不上传 auth.json；④ 不频繁刷新额度或反复登录；⑤ 不确定时保持“仅保存”，不要切换本机账号。</p></div>`)}</div></div>`
 }
 async function copyProxyAddress(){
@@ -669,6 +703,31 @@ async function pingChannel(type,relayId){
 async function pingAll(){
   toast('正在检测全部通道…')
   try{ const r=await fetch(API+'/ping-all',{method:'POST'}),d=await r.json(); Object.entries(d.results||{}).forEach(([k,v])=>pingResults[k]=v); render(); toast(d.allOk?'全部通道连接正常':'部分通道检测失败',d.allOk?'success':'error') }catch(e){toast(e.message,'error')}
+}
+async function refreshDiagnosis(){
+  try{
+    const response=await fetch(API+'/diagnosis',{cache:'no-store'}),data=await response.json()
+    if(!response.ok)throw new Error(data.error?.message||'诊断失败')
+    diagnosticsData.automatic_diagnosis=data
+    render()
+    toast(data.summary?.conclusion||'诊断已更新')
+  }catch(error){toast(error.message,'error')}
+}
+async function runDiagnosisAction(id,target){
+  if(id==='refresh_quota'){
+    await refreshAllUsage()
+    return refreshDiagnosis()
+  }
+  if(id==='ping_providers'){
+    switchPage('providers')
+    await pingAll()
+    return refreshDiagnosis()
+  }
+  if(id==='official_login'){
+    switchPage('accounts')
+    return openOfficialLogin()
+  }
+  if(target?.startsWith('#'))switchPage(target.slice(1))
 }
 function showModal(title,body,saveText,saveFn){
   closeModal(); const el=document.createElement('div'); el.className='modal-overlay'; el.onclick=e=>{if(e.target===el)closeModal()}

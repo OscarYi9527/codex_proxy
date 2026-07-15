@@ -14,6 +14,7 @@
     "src/route-decisions.js",
     "src/provider-health.js",
     "src/error-guide.js",
+    "src/diagnostics.js",
     "src/runtime-info.js",
     "src/server.js",
     "src/stats.js",

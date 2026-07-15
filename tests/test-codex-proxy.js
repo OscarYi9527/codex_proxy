@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { resolveCodexModel, isChatGptSubModel, isOpenAIApiModel, isRelayModel, parseRelayModel, buildModelsResponse, getThreadId } from '../src/models.js'
-import { recordUsage, recordAccountOutcome, getStats, resetStats, saveStats, statsDayKey } from '../src/stats.js'
+import { recordUsage, recordAccountOutcome, recordOperationalEvent, getStats, resetStats, saveStats, statsDayKey } from '../src/stats.js'
 import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurrencyLimit, accountPolicyState, accountRemainingPercent, accountUsageIsFresh, calculateUsageForecast, consumeAccountResetCredit, cooldownMsFromResponseText, ensureFreshToken, extractResetCredits, extractUsageFromBody, extractUsageFromHeaders, mergeAccountUsageWindows, normalizeAccountRoutingStrategy, noteAccountAdaptiveOutcome, noteAccountSuccess, pickActiveAccount, refreshAccountResetCredits, refreshAccountUsage, releaseAccountRequest, renewAccountRequestLease, reserveAccountRequest, resetAccountRequestCounts, resetAccountStickiness } from '../src/chatgpt-accounts.js'
 import { proxyConfig, atomicWriteJson, configForSettingsSnapshot, mergeAccountBackup, mergeSettingsSnapshot, orderChatgptAccounts, renameChatgptAccountInList } from '../src/config.js'
 import { assertCircuitAvailable, getCircuitStates, recordCircuitResult, resetCircuits } from '../src/circuit-breaker.js'
@@ -19,6 +19,7 @@ import { decryptConfigSecrets, encryptConfigSecrets, isEncryptedSecret } from '.
 import { getProviderHealth, recordProviderOutcome, resetProviderHealth } from '../src/provider-health.js'
 import { attachHttpErrorGuide, getHttpErrorGuide, listHttpErrorGuides } from '../src/error-guide.js'
 import { compareRuntimeTrees } from '../src/runtime-info.js'
+import { accountPoolDiagnosis, buildAutomaticDiagnosis } from '../src/diagnostics.js'
 
 describe('模型解析', () => {
   it('解析 body.model', () => {
@@ -191,6 +192,8 @@ describe('Provider 健康状态', () => {
     assert.strictEqual(health.state, 'unhealthy')
     assert.strictEqual(health.consecutive_failures, 1)
     assert.strictEqual(health.last_error, 'network failed')
+    assert.strictEqual(health.windows['1h'].requests, 4)
+    assert.strictEqual(health.windows['7d'].rate_limited, 1)
   })
 
   it('后续成功会清零连续失败次数', () => {
@@ -199,6 +202,48 @@ describe('Provider 健康状态', () => {
     assert.strictEqual(health.state, 'healthy')
     assert.strictEqual(health.consecutive_failures, 0)
     assert.ok(health.last_success_at)
+  })
+})
+
+describe('自动诊断中心', () => {
+  it('分类账号池不可用原因并生成对应的一键动作', () => {
+    const original = proxyConfig.chatgptAccounts
+    resetStats()
+    proxyConfig.chatgptAccounts = [
+      { id: 'stored', routing_enabled: false },
+      { id: 'auth', routing_enabled: true, status: 'auth_error' },
+      { id: 'cool', routing_enabled: true, status: 'cooldown', cooldown_until: Date.now() + 60_000 },
+      { id: 'reserve', routing_enabled: true, status: 'active', usage: { primary: { remaining_percent: 5 } } },
+      { id: 'busy', routing_enabled: true, status: 'active' }
+    ]
+    resetAccountRequestCounts()
+    try {
+      reserveAccountRequest('busy', 'diagnosis-1')
+      reserveAccountRequest('busy', 'diagnosis-2')
+      reserveAccountRequest('busy', 'diagnosis-3')
+      const pool = accountPoolDiagnosis({ model: 'gpt-test' })
+      assert.strictEqual(pool.stored_only, 1)
+      assert.strictEqual(pool.auth_error, 1)
+      assert.strictEqual(pool.cooling, 1)
+      assert.strictEqual(pool.below_reserve, 1)
+      assert.strictEqual(pool.busy, 1)
+      const diagnosis = buildAutomaticDiagnosis({ status: 503, errorType: 'account_pool_exhausted' })
+      assert.strictEqual(diagnosis.summary.level, 'critical')
+      assert.ok(diagnosis.issues.some(issue => issue.actions.some(item => item.id === 'refresh_quota')))
+      assert.ok(diagnosis.issues.some(issue => issue.actions.some(item => item.id === 'official_login')))
+    } finally {
+      resetAccountRequestCounts()
+      proxyConfig.chatgptAccounts = original
+      resetStats()
+    }
+  })
+
+  it('402 明确指向计费而不是盲目重试', () => {
+    const diagnosis = buildAutomaticDiagnosis({ status: 402, provider: 'openai-api' })
+    const billing = diagnosis.issues.find(issue => issue.id === 'billing')
+    assert.ok(billing)
+    assert.match(billing.conclusion, /订阅和 API 余额相互独立/)
+    assert.ok(!billing.actions.some(item => /重试/.test(item.label)))
   })
 })
 
@@ -1292,6 +1337,10 @@ describe('请求元数据、账号统计和日志脱敏', () => {
     assert.strictEqual(account.windows['1h'].requests, 2)
     assert.strictEqual(account.windows['24h'].success_rate, 50)
     assert.strictEqual(account.windows['7d'].p95_latency_ms, 300)
+    recordOperationalEvent('account_switch', { provider: 'chatgpt-sub', fromAccountId: 'a', toAccountId: 'b', reason: '429' })
+    recordOperationalEvent('circuit_open', { provider: 'deepseek', reason: 'HTTP 503' })
+    assert.strictEqual(getStats().operational_windows['1h'].account_switches, 1)
+    assert.strictEqual(getStats().operational_windows['7d'].circuit_opens, 1)
     resetStats()
   })
 
@@ -1387,6 +1436,13 @@ describe('原子配置写入和管理 API', () => {
       assert.ok(Array.isArray(diagnostics.accounts))
       assert.ok(Number.isFinite(diagnostics.queue.depth))
       assert.strictEqual(typeof diagnostics.process.tls_verification, 'boolean')
+      assert.ok(diagnostics.automatic_diagnosis?.summary)
+
+      const diagnosisResponse = await fetch(base + '/admin/api/diagnosis?status=503&type=account_pool_exhausted')
+      const diagnosis = await diagnosisResponse.json()
+      assert.strictEqual(diagnosisResponse.status, 200)
+      assert.strictEqual(diagnosis.request.status, 503)
+      assert.ok(Array.isArray(diagnosis.issues))
     } finally {
       await new Promise(resolve => server.close(resolve))
     }

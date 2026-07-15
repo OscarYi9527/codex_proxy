@@ -2,6 +2,8 @@
 // Account/model quota errors are intentionally excluded: this breaker only
 // reacts to provider-level timeouts, network errors and 5xx responses.
 
+import { recordOperationalEvent } from './stats.js'
+
 const DEFAULT_FAILURE_THRESHOLD = 3
 const DEFAULT_RESET_TIMEOUT_MS = 30_000
 // A half-open probe normally resolves in seconds. If the caller disconnects
@@ -21,7 +23,8 @@ function stateFor(name) {
       openedAt: null,
       lastFailure: null,
       halfOpenProbeActive: false,
-      halfOpenProbeStartedAt: null
+      halfOpenProbeStartedAt: null,
+      openedCount: 0
     })
   }
   return circuits.get(name)
@@ -93,8 +96,13 @@ export function recordCircuitResult(name, {
   circuit.halfOpenProbeStartedAt = null
 
   if (circuit.state === 'half-open' || circuit.failures >= failureThreshold) {
+    const wasOpen = circuit.state === 'open'
     circuit.state = 'open'
     circuit.openedAt = Date.now()
+    if (!wasOpen) {
+      circuit.openedCount = Number(circuit.openedCount || 0) + 1
+      recordOperationalEvent('circuit_open', { provider: name, reason: error?.message || `HTTP ${status}` })
+    }
   }
 }
 

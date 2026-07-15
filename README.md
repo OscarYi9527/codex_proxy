@@ -4,7 +4,7 @@ Windows 上的 Codex CLI / VS Code 多上游路由代理。它在保留原生 Re
 工具调用和流式输出的同时，统一接入 ChatGPT 订阅账号池、OpenAI API、DeepSeek
 和 OpenAI 兼容中转节点，并提供本地管理后台、稳定性保护与可观测性。
 
-当前版本：**2.3.0**
+当前版本：**2.3.1**
 
 ## 主要能力
 
@@ -35,6 +35,9 @@ Windows 上的 Codex CLI / VS Code 多上游路由代理。它在保留原生 Re
 - 上游重试遵循 `Retry-After` 并加入抖动；客户端断开会取消 ChatGPT、OpenAI、Relay 和 DeepSeek 请求。
 - 响应附带 `X-Codex-Proxy-Request-Id`、Provider、Account、Model、Latency 和 Fallback 元数据。
 - 管理后台健康矩阵展示每账号剩余额度、1h/24h/7d 成功率、请求数、429、最近状态以及 P50/P95/平均延迟。
+- 自动诊断中心把 401、402、429、502、503 等错误与账号池实时分类合并，直接列出仅保存、登录失效、冷却、额度不足、每日上限、预留和并发占满数量。
+- 诊断结论提供“刷新额度”“重新登录”“等待冷却”“检测 Provider”等上下文操作。
+- 账号和 Provider 健康支持 1h/24h/7d 切换，并统计熔断及账号切换次数，对近期成功率、429 或 P95 异常给出趋势预警。
 - 控制台提供按月切换的 AI 使用日历，默认展示当前月份，并汇总今日请求、今日 Token 和连续活跃天数。
 - 用量分析提供最近 30 天 Token 折线趋势、逐账号每日请求趋势及每日账号明细。
 - 管理后台采用精密运维控制台视觉系统，支持明暗主题、工程网格背景、状态色指标和两列等高概览布局。
@@ -326,6 +329,7 @@ powershell -ExecutionPolicy Bypass -File `
 | `PUT` | `/admin/api/config` | 保存配置并热重载 |
 | `GET` | `/admin/api/stats` | 获取 Provider、模型和账号健康统计 |
 | `GET` | `/admin/api/diagnostics` | 获取不含 Token/邮箱的本地诊断报告 |
+| `GET` | `/admin/api/diagnosis` | 获取实时自动诊断；可传 status、type、provider、model |
 | `GET` | `/admin/api/error-guide` | 获取 HTTP 错误码原因与处理建议查找表 |
 | `GET` | `/admin/api/runtime-info` | 获取实际运行版本、路径及部署一致性 |
 | `POST` | `/admin/api/deploy-update` | 从本机启动备份、部署、重启、健康检查和自动回滚 |
@@ -421,6 +425,7 @@ API 端点：
 | GET | /admin/api/config | 获取当前配置（密钥已掩码） |
 | PUT | /admin/api/config | 保存配置到文件并热重载 |
 | GET | /admin/api/diagnostics | 获取队列、账号、熔断和凭据保护状态 |
+| GET | /admin/api/diagnosis | 获取实时问题结论、账号分类、趋势和一键动作描述 |
 | GET | /admin/api/error-guide | 获取 HTTP 错误码原因与处理建议查找表 |
 | GET | /admin/api/runtime-info | 获取实际运行位置、版本、Commit 和安装一致性 |
 | POST | /admin/api/deploy-update | 启动安全部署、重启、健康检查和失败回滚 |

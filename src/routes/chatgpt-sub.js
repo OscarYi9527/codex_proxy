@@ -4,7 +4,7 @@
 import { proxyConfig } from '../config.js'
 import { requestLog } from '../logger.js'
 import { sendJson, pipeResponsesUpstream, fetchWithRetry, setProxyMeta } from '../server-utils.js'
-import { recordUsage, recordAccountOutcome, saveStats } from '../stats.js'
+import { recordUsage, recordAccountOutcome, recordOperationalEvent, saveStats } from '../stats.js'
 import { chinaFetch, withChinaDispatcher } from '../china-fetch.js'
 import { pickActiveAccount, ensureFreshToken, markAccountCooldown, markAccountAuthFailure, extractUsageFromHeaders, applyAccountUsage, accountSessionKey, noteAccountSuccess, reserveAccountRequest, renewAccountRequestLease, releaseAccountRequest, accountActiveRequestCount, accountConcurrencyLimit, accountRemainingPercent, accountPolicyState, noteAccountAdaptiveOutcome, refreshAccountUsage } from '../chatgpt-accounts.js'
 import { recordRouteDecision } from '../route-decisions.js'
@@ -320,13 +320,27 @@ export async function sendWithAccountRotation(
         requestLog(req, `chatgpt-account=${account.id} status=429 cooldown_scope=${scope} rotate`)
         await markCooldown(account.id, upstream.clone(), { model, scope })
         releaseAccount(account.id, req.accountLeaseId)
+        const previousAccountId = account.id
         account = await acquireAccount(req, model, tried, sessionKey, chatGptFetch)
+        if (account) recordOperationalEvent('account_switch', {
+          provider: 'chatgpt-sub',
+          fromAccountId: previousAccountId,
+          toAccountId: account.id,
+          reason: '429'
+        })
         continue
       }
       if (upstream.status === 401 || upstream.status === 403) {
         markAuthFailure(account.id, upstream.status)
         releaseAccount(account.id, req.accountLeaseId)
+        const previousAccountId = account.id
         account = await acquireAccount(req, model, tried, sessionKey, chatGptFetch)
+        if (account) recordOperationalEvent('account_switch', {
+          provider: 'chatgpt-sub',
+          fromAccountId: previousAccountId,
+          toAccountId: account.id,
+          reason: String(upstream.status)
+        })
         continue
       }
 
@@ -357,7 +371,14 @@ export async function sendWithAccountRotation(
         latencyMs: Date.now() - attemptStartedAt
       })
       requestLog(req, `chatgpt-account=${account.id} network_error=${error.message} rotate`)
+      const previousAccountId = account.id
       account = await acquireAccount(req, model, tried, sessionKey, chatGptFetch)
+      if (account) recordOperationalEvent('account_switch', {
+        provider: 'chatgpt-sub',
+        fromAccountId: previousAccountId,
+        toAccountId: account.id,
+        reason: errorType
+      })
     }
   }
 

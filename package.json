@@ -1,6 +1,6 @@
 {
   "name": "codex-proxy",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "type": "module",
   "description": "Multi-upstream model routing proxy for Codex — ChatGPT subscription, OpenAI API, and DeepSeek",
   "main": "index.js",

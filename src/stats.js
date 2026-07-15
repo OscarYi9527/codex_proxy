@@ -5,7 +5,7 @@ import { PROXY_DIR, atomicWriteJson } from './config.js'
 
 const STATS_FILE = path.join(PROXY_DIR, '..', 'codex-proxy-stats.json')
 const DAILY_RETENTION_DAYS = 370
-let stats = { updated: new Date().toISOString(), providers: {}, accounts: {}, daily: {} }
+let stats = { updated: new Date().toISOString(), providers: {}, accounts: {}, daily: {}, operational_events: [] }
 
 export function statsDayKey(value = Date.now()) {
   const date = value instanceof Date ? value : new Date(value)
@@ -37,11 +37,12 @@ function loadStats() {
       stats.providers ||= {}
       stats.accounts ||= {}
       stats.daily ||= {}
+      stats.operational_events ||= []
       pruneDaily()
       return
     }
   } catch {}
-  stats = { updated: new Date().toISOString(), providers: {}, accounts: {}, daily: {} }
+  stats = { updated: new Date().toISOString(), providers: {}, accounts: {}, daily: {}, operational_events: [] }
 }
 loadStats()
 
@@ -74,6 +75,8 @@ function ensureDaily(day = statsDayKey()) {
     stats.daily[day] = {
       requests: 0,
       account_attempts: 0,
+      account_switches: 0,
+      circuit_opens: 0,
       input_tokens: 0,
       output_tokens: 0,
       providers: {},
@@ -206,6 +209,32 @@ export function recordAccountOutcome(accountId, {
   if (code === 429) dailyAccount.rate_limited++
 }
 
+export function recordOperationalEvent(type, {
+  provider = null,
+  fromAccountId = null,
+  toAccountId = null,
+  reason = null
+} = {}) {
+  if (!['account_switch', 'circuit_open'].includes(type)) return
+  const event = {
+    at: new Date().toISOString(),
+    type,
+    provider: provider ? String(provider) : null,
+    from_account_id: fromAccountId ? String(fromAccountId) : null,
+    to_account_id: toAccountId ? String(toAccountId) : null,
+    reason: reason ? String(reason).slice(0, 100) : null
+  }
+  stats.operational_events ||= []
+  stats.operational_events.push(event)
+  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000
+  stats.operational_events = stats.operational_events
+    .filter(item => Date.parse(item.at) >= cutoff)
+    .slice(-10000)
+  const daily = ensureDaily(statsDayKey(event.at))
+  if (type === 'account_switch') daily.account_switches = Number(daily.account_switches || 0) + 1
+  if (type === 'circuit_open') daily.circuit_opens = Number(daily.circuit_opens || 0) + 1
+}
+
 function recentWindow(events, durationMs, now) {
   const cutoff = now - durationMs
   const selected = (events || []).filter(event => new Date(event.at).getTime() >= cutoff)
@@ -236,13 +265,38 @@ export function getStats() {
       '24h': recentWindow(account.recent_events, 24 * 60 * 60 * 1000, now),
       '7d': recentWindow(account.recent_events, 7 * 24 * 60 * 60 * 1000, now)
     }
+    const hour = account.windows['1h']
+    const day = account.windows['24h']
+    account.trend_warning = hour.requests >= 3 && (
+      Number(hour.success_rate) < 70 ||
+      hour.rate_limited >= 3 ||
+      (day.p95_latency_ms > 0 && hour.p95_latency_ms > day.p95_latency_ms * 1.8)
+    ) ? {
+      level: Number(hour.success_rate) < 50 ? 'critical' : 'warning',
+      message: Number(hour.success_rate) < 70
+        ? `最近 1 小时成功率降至 ${hour.success_rate}%`
+        : (hour.rate_limited >= 3 ? `最近 1 小时出现 ${hour.rate_limited} 次 429` : '最近 1 小时 P95 延迟明显升高')
+    } : null
     delete account.recent_events
   }
+  const operationalWindow = durationMs => {
+    const events = (snapshot.operational_events || []).filter(event => now - Date.parse(event.at) <= durationMs)
+    return {
+      account_switches: events.filter(event => event.type === 'account_switch').length,
+      circuit_opens: events.filter(event => event.type === 'circuit_open').length
+    }
+  }
+  snapshot.operational_windows = {
+    '1h': operationalWindow(60 * 60 * 1000),
+    '24h': operationalWindow(24 * 60 * 60 * 1000),
+    '7d': operationalWindow(7 * 24 * 60 * 60 * 1000)
+  }
+  delete snapshot.operational_events
   return snapshot
 }
 
 export function resetStats() {
-  stats = { updated: new Date().toISOString(), providers: {}, accounts: {}, daily: {} }
+  stats = { updated: new Date().toISOString(), providers: {}, accounts: {}, daily: {}, operational_events: [] }
   saveStats()
   return stats
 }

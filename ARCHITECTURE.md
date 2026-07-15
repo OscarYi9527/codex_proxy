@@ -35,6 +35,7 @@ flowchart LR
 | `src/stats.js` | Provider/模型/账号健康统计与近期窗口 |
 | `src/circuit-breaker.js` | Provider 级熔断和半开恢复 |
 | `src/error-guide.js` | HTTP 错误分类、原因和处理建议查找表 |
+| `src/diagnostics.js` | 账号池/Provider/熔断联合诊断、结论与上下文操作 |
 | `src/runtime-info.js` | 运行路径、版本、Commit 和工作区/安装副本一致性 |
 | `src/admin.js` | 本机管理 API、隔离登录、诊断和运维操作 |
 | `src/admin_app.js` | 管理后台交互与零基础教程 |
@@ -97,6 +98,8 @@ flowchart TD
 - 冷却最长 7 天，明显异常或过期状态会自动修复。
 - 429 不计入 Provider 熔断；网络错误、408 和 5xx 由 Provider 熔断器处理。
 - 实际请求与手动 ping 都更新 Provider 健康记录；客户端主动取消不会计为上游故障。
+- Provider 与账号事件保留 7 天，按 1h/24h/7d 计算成功率、429 和 P95；熔断开启与账号切换使用独立运维事件统计。
+- 自动诊断把账号状态、每日策略、Provider 健康、熔断和 HTTP 错误指南合并为可执行结论。
 
 ## 持久化与安全
 
@@ -137,6 +140,7 @@ flowchart TD
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `GET` | `/admin/api/diagnostics` | 脱敏运行诊断 |
+| `GET` | `/admin/api/diagnosis` | 实时自动诊断、趋势和上下文操作 |
 | `GET` | `/admin/api/runtime-info` | 运行版本、路径和部署一致性 |
 | `POST` | `/admin/api/deploy-update` | 启动本机安全部署流程 |
 | `GET` | `/admin/api/chatgpt-login/preflight` | CLI、OAuth app-server 与浏览器预检 |

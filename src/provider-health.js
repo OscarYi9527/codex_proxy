@@ -1,7 +1,8 @@
 import fs from 'fs'
 import path from 'path'
 
-const MAX_EVENTS_PER_PROVIDER = 100
+const MAX_EVENTS_PER_PROVIDER = 10000
+const EVENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 let healthFile = null
 let saveTimer = null
 let state = { updated_at: null, providers: {} }
@@ -84,14 +85,57 @@ export function recordProviderOutcome(provider, {
     error: health.last_error,
     source
   })
-  health.recent_events = health.recent_events.slice(-MAX_EVENTS_PER_PROVIDER)
+  const cutoff = Date.now() - EVENT_RETENTION_MS
+  health.recent_events = health.recent_events
+    .filter(event => Date.parse(event.at) >= cutoff)
+    .slice(-MAX_EVENTS_PER_PROVIDER)
   state.updated_at = now
   scheduleSave()
   return structuredClone(health)
 }
 
+function trendWindow(events, durationMs, now) {
+  const selected = (events || []).filter(event => now - Date.parse(event.at) <= durationMs)
+  const successes = selected.filter(event => event.state === 'healthy').length
+  const rateLimited = selected.filter(event => Number(event.status) === 429).length
+  const latencies = selected.map(event => Number(event.latency_ms) || 0).sort((a, b) => a - b)
+  const percentile = value => latencies.length
+    ? Math.round(latencies[Math.max(0, Math.ceil(value * latencies.length) - 1)])
+    : 0
+  return {
+    requests: selected.length,
+    successes,
+    failures: selected.length - successes,
+    rate_limited: rateLimited,
+    success_rate: selected.length ? Number((successes / selected.length * 100).toFixed(1)) : null,
+    p95_latency_ms: percentile(0.95)
+  }
+}
+
 export function getProviderHealth() {
-  return structuredClone(state)
+  const snapshot = structuredClone(state)
+  const now = Date.now()
+  for (const provider of Object.values(snapshot.providers || {})) {
+    provider.windows = {
+      '1h': trendWindow(provider.recent_events, 60 * 60 * 1000, now),
+      '24h': trendWindow(provider.recent_events, 24 * 60 * 60 * 1000, now),
+      '7d': trendWindow(provider.recent_events, 7 * 24 * 60 * 60 * 1000, now)
+    }
+    const hour = provider.windows['1h']
+    const day = provider.windows['24h']
+    provider.trend_warning = hour.requests >= 3 && (
+      Number(hour.success_rate) < 70 ||
+      hour.rate_limited >= 3 ||
+      (day.p95_latency_ms > 0 && hour.p95_latency_ms > day.p95_latency_ms * 1.8)
+    ) ? {
+      level: Number(hour.success_rate) < 50 ? 'critical' : 'warning',
+      message: Number(hour.success_rate) < 70
+        ? `1h success rate dropped to ${hour.success_rate}%`
+        : (hour.rate_limited >= 3 ? `${hour.rate_limited} rate limits in 1h` : '1h P95 latency increased')
+    } : null
+    delete provider.recent_events
+  }
+  return snapshot
 }
 
 export function resetProviderHealth() {

@@ -809,6 +809,7 @@ VS Code 兼容层会把 `chatgpt.cliExecutable` 指向 `codex-vscode-launcher.ex
 - [架构说明](ARCHITECTURE.md)
 - [安全说明](SECURITY.md)
 - [后续计划](TODO.md)
+- [Oscar 第一轮 Gateway/Edge Mock 联调交接](docs/AI_EDITOR_GATEWAY_OSCAR_HANDOFF.md)
 
 ## 安全说明
 

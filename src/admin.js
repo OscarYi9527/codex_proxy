@@ -133,6 +133,19 @@ export function privateBrowserArgs(kind, url) {
 }
 
 function defaultBrowserKind() {
+  if (process.platform === 'darwin') {
+    try {
+      const result = spawnSync('osascript', [
+        '-e',
+        'id of application (path to default application for URL "https://auth.openai.com")'
+      ], { encoding: 'utf8', timeout: 3000 })
+      const output = `${result.stdout || ''}\n${result.stderr || ''}`.toLowerCase()
+      if (output.includes('com.google.chrome')) return 'chrome'
+      if (output.includes('com.microsoft.edgemac')) return 'edge'
+      if (output.includes('org.mozilla.firefox')) return 'firefox'
+    } catch {}
+    return null
+  }
   if (process.platform !== 'win32') return null
   try {
     const result = spawnSync('reg.exe', [
@@ -149,36 +162,61 @@ function defaultBrowserKind() {
   return null
 }
 
-function browserCandidates(preferredKind = null) {
+function browserCandidates(preferredKind = null, {
+  platform = process.platform,
+  environment = process.env,
+  homeDirectory = os.homedir()
+} = {}) {
   const at = (base, ...parts) => base ? path.join(base, ...parts) : null
-  const locations = {
-    chrome: [
-      at(process.env.PROGRAMFILES, 'Google', 'Chrome', 'Application', 'chrome.exe'),
-      at(process.env['PROGRAMFILES(X86)'], 'Google', 'Chrome', 'Application', 'chrome.exe'),
-      at(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe')
-    ],
-    edge: [
-      at(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-      at(process.env.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe')
-    ],
-    firefox: [
-      at(process.env.PROGRAMFILES, 'Mozilla Firefox', 'firefox.exe'),
-      at(process.env['PROGRAMFILES(X86)'], 'Mozilla Firefox', 'firefox.exe')
-    ]
-  }
-  const order = [...new Set([preferredKind, 'chrome', 'edge', 'firefox'].filter(Boolean))]
+  const locations = platform === 'darwin'
+    ? {
+        chrome: [
+          '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+          at(homeDirectory, 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome')
+        ],
+        edge: [
+          '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+          at(homeDirectory, 'Applications', 'Microsoft Edge.app', 'Contents', 'MacOS', 'Microsoft Edge')
+        ],
+        firefox: [
+          '/Applications/Firefox.app/Contents/MacOS/firefox',
+          at(homeDirectory, 'Applications', 'Firefox.app', 'Contents', 'MacOS', 'firefox')
+        ]
+      }
+    : platform === 'win32'
+      ? {
+          chrome: [
+            at(environment.PROGRAMFILES, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+            at(environment['PROGRAMFILES(X86)'], 'Google', 'Chrome', 'Application', 'chrome.exe'),
+            at(environment.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe')
+          ],
+          edge: [
+            at(environment['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+            at(environment.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe')
+          ],
+          firefox: [
+            at(environment.PROGRAMFILES, 'Mozilla Firefox', 'firefox.exe'),
+            at(environment['PROGRAMFILES(X86)'], 'Mozilla Firefox', 'firefox.exe')
+          ]
+        }
+      : { chrome: [], edge: [], firefox: [] }
+  const order = [...new Set([preferredKind, 'chrome', 'edge', 'firefox'].filter(kind => kind && locations[kind]))]
   return order.flatMap(kind => locations[kind].map(executable => ({ kind, executable })))
 }
 
 export function findPrivateBrowser({
   preferredKind = defaultBrowserKind(),
-  exists = fs.existsSync
+  exists = fs.existsSync,
+  platform = process.platform,
+  environment = process.env,
+  homeDirectory = os.homedir()
 } = {}) {
-  return browserCandidates(preferredKind).find(candidate => candidate.executable && exists(candidate.executable)) || null
+  return browserCandidates(preferredKind, { platform, environment, homeDirectory })
+    .find(candidate => candidate.executable && exists(candidate.executable)) || null
 }
 
 function openPrivateBrowser(url) {
-  if (process.platform !== 'win32' || !String(url).startsWith('https://')) return null
+  if (!['win32', 'darwin'].includes(process.platform) || !String(url).startsWith('https://')) return null
   const browser = findPrivateBrowser()
   const args = browser && privateBrowserArgs(browser.kind, url)
   if (!browser || !args) return null

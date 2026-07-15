@@ -1063,9 +1063,26 @@ describe('官方安全登录隔离', () => {
   it('优先选择用户默认浏览器的已安装实例', () => {
     const browser = findPrivateBrowser({
       preferredKind: 'edge',
+      platform: 'win32',
+      environment: {
+        PROGRAMFILES: 'C:\\Program Files',
+        'PROGRAMFILES(X86)': 'C:\\Program Files (x86)',
+        LOCALAPPDATA: 'C:\\Users\\Tester\\AppData\\Local'
+      },
       exists: executable => executable?.toLowerCase().endsWith('msedge.exe')
     })
     assert.strictEqual(browser.kind, 'edge')
     assert.match(browser.executable, /msedge\.exe$/i)
+  })
+
+  it('在 macOS 使用应用包内的私密浏览器可执行文件', () => {
+    const browser = findPrivateBrowser({
+      preferredKind: 'chrome',
+      platform: 'darwin',
+      homeDirectory: '/Users/tester',
+      exists: executable => executable === '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+    })
+    assert.strictEqual(browser.kind, 'chrome')
+    assert.strictEqual(browser.executable, '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')
   })
 })

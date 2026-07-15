@@ -3,7 +3,7 @@
 
 import { parseRelayModel } from '../models.js'
 import { requestLog } from '../logger.js'
-import { sendJson, fetchWithRetry, setProxyMeta, proxyMetaHeaders } from '../server-utils.js'
+import { sendJson, fetchWithRetry, pipeResponsesUpstream, setProxyMeta } from '../server-utils.js'
 import { recordUsage, saveStats } from '../stats.js'
 import { responsesToChatCompletions, chatCompletionToResponse } from '../convert/chat-completions.js'
 import { streamChatCompletionToResponses } from '../convert/stream.js'
@@ -51,7 +51,7 @@ export async function handleRelay(req, res, body, resolved) {
   }
 
   if (isStream) {
-    return streamChatCompletionToResponses(upstream, res, { ...body, model: resolved.model })
+    return streamChatCompletionToResponses(upstream, res, { ...body, model: resolved.model }, { provider: `relay:${relay.id}` })
   }
 
   const result = await upstream.json()
@@ -95,34 +95,12 @@ export async function handleRelayChatCompletions(req, res, body, resolved) {
 
   requestLog(req, `relay=${relay.id} chat-completions status=${upstream.status}`)
 
-  // pipe through
-  const headers = {}
-  for (const name of ['content-type', 'cache-control', 'x-request-id']) {
-    const value = upstream.headers.get(name)
-    if (value) headers[name] = value
-  }
-  Object.assign(headers, proxyMetaHeaders(res))
-  res.writeHead(upstream.status, headers)
-  let bodyText = ''
-  if (upstream.body) {
-    for await (const chunk of upstream.body) {
-      const buf = Buffer.from(chunk)
-      bodyText += buf.toString('utf8')
-      res.write(buf)
+  return pipeResponsesUpstream(upstream, res, {
+    onBody: usage => {
+      recordUsage(resolved.model, `relay:${relay.id}`,
+        usage.prompt_tokens ?? usage.input_tokens,
+        usage.completion_tokens ?? usage.output_tokens)
+      saveStats()
     }
-  }
-  res.end()
-
-  // Record usage if possible
-  if (bodyText) {
-    try {
-      const data = JSON.parse(bodyText)
-      if (data.usage) {
-        recordUsage(resolved.model, `relay:${relay.id}`,
-          data.usage.prompt_tokens || 0,
-          data.usage.completion_tokens || 0)
-        saveStats()
-      }
-    } catch {}
-  }
+  })
 }

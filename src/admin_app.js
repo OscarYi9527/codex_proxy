@@ -3,6 +3,7 @@ let cfg = {}, statsData = { providers: {} }, diagnosticsData = { accounts: [], q
 let pingResults = {}, modal = null, loginPoll = null, accountsPoll = null, draggedAccountId = null, resetQuotaSubmitting = false
 let errorGuideData = []
 let loginPreflightData = null
+let priceCatalogData = { prices: {} }, costReportData = { providers: {} }
 let accountViewMode = localStorage.getItem('codex-account-view') === 'compact' ? 'compact' : 'cards'
 let healthRange = ['1h','24h','7d'].includes(localStorage.getItem('codex-health-range')) ? localStorage.getItem('codex-health-range') : '24h'
 let usageCalendarMonth = statsDateKey().slice(0,7)
@@ -221,13 +222,15 @@ function setHealthRange(range){
 async function load(showMessage=false,includeModels=true){
   const btn=document.getElementById('refreshButton'); btn.innerHTML=svg('refresh')
   try{
-    const [c,s,d,r,m,e]=await Promise.all([fetch(API+'/config'),fetch(API+'/stats'),fetch(API+'/diagnostics').catch(()=>null),fetch(API+'/resilience').catch(()=>null),includeModels?fetch('/v1/models').catch(()=>null):null,fetch(API+'/error-guide').catch(()=>null)])
+    const [c,s,d,r,m,e,p,cost]=await Promise.all([fetch(API+'/config'),fetch(API+'/stats'),fetch(API+'/diagnostics').catch(()=>null),fetch(API+'/resilience').catch(()=>null),includeModels?fetch('/v1/models').catch(()=>null):null,fetch(API+'/error-guide').catch(()=>null),fetch(API+'/prices').catch(()=>null),fetch(API+'/costs').catch(()=>null)])
     if(!c.ok||!s.ok) throw new Error('服务响应异常')
     cfg=(await c.json()).config||{}; statsData=await s.json()
     if(d?.ok)diagnosticsData=await d.json()
     if(r?.ok)diagnosticsData.circuits=(await r.json()).circuits||[]
     if(m?.ok)modelCatalog=((await m.json()).data||[]).map(model=>({id:model.id,name:model.display_name||model.id}))
     if(e?.ok)errorGuideData=(await e.json()).codes||[]
+    if(p?.ok)priceCatalogData=await p.json()
+    if(cost?.ok)costReportData=await cost.json()
     document.getElementById('side-status').textContent='网关服务运行中'; render(); if(showMessage) toast('数据已刷新')
   }catch(e){ document.getElementById('side-status').textContent='网关服务离线'; document.querySelector('.dot').style.background='var(--red)'; document.getElementById('app').innerHTML=empty('server','无法连接网关服务',e.message) }
 }
@@ -652,6 +655,7 @@ function renderHelp(){
     card('第一步：我应该选择哪种接入方式？','只需要选择一种，也可以以后再增加',chooser)+
     card('HTTP 报错代码查找表','支持按状态码和原因关键词搜索',errorGuideLookup())+
     card('自动诊断中心怎么用？','在概览页把错误码与实时运行状态合并分析',`<div class="card-body help-note"><p>出现 401、402、429、502 或 503 时先回到“控制台概览”。诊断中心会列出仅保存、登录失效、冷却、额度不足、每日上限、预留、并发占满和 Provider 熔断数量。优先点击结论旁的“刷新额度”“重新登录”或“检测 Provider”，不要连续盲目重试。1h、24h、7d 健康范围可在账号池切换；近期预警比累计数据更适合判断当前故障。</p></div>`)+
+    card('智能路由与预算怎么用？','进阶功能默认关闭，不确定时保持默认',`<div class="card-body help-manual"><ol><li><b>普通模型默认不跨供应商。</b><span>只有在系统设置明确开启回退，或主动选择 auto 系列模型时才会跨 Provider。</span></li><li><b>先配置准确的回退链。</b><span>每行填写 provider | model；401、402、403 和参数错误不会进入下一线路。</span></li><li><b>按目标选择虚拟模型。</b><span>auto 综合、auto-fast 低延迟、auto-cheap 低成本、auto-reliable 高成功率与充足额度。</span></li><li><b>核对价格目录。</b><span>初始价格只是本地估算，设置预算前请对照服务商最新价格。</span></li><li><b>选择预算动作。</b><span>fallback 会切到计划中的免费/后备线路；stop 会在请求上游前返回 402。</span></li></ol></div>`)+
     `<div class="grid"><div>${card('四步快速开始',`${accounts.length} 个账号 · ${enabled} 个参与路由`,`<div class="card-body help-steps">${steps}</div>`)}${card('ChatGPT 账号完整操作步骤','第一次使用建议逐条完成',exactGuide)}${card('每账号额度与预留怎么设置？','安全余量、每日上限、预留和紧急继续',quotaPolicyGuide)}${card('额度重置怎么安全操作？','高风险功能 · 使用前逐项确认',quotaResetGuide)}${card('API 和中转节点怎么配置？','按你选择的接入方式阅读',otherGuides)}${card('常见问题和故障排查','从登录、额度到账号切换',faq)}</div><div>${card('左侧功能都有什么？','点击即可前往',`<div class="help-features">${helpFeature('overview','控制台概览','看服务是否正常、最近有没有调用','overview')}${helpFeature('providers','模型服务','配置官方 API 和 DeepSeek','providers')}${helpFeature('relays','中转节点','添加第三方兼容服务','relays')}${helpFeature('accounts','账号池','添加账号、查看额度和切换策略','accounts')}${helpFeature('analytics','用量分析','查看请求和 Token 用量','analytics')}${helpFeature('settings','系统设置','选择默认模型和显示偏好','settings')}</div>`)}${card('四个重要概念','先分清这些就不容易误操作',concepts)}${card('页面状态怎么看？','看到这些文字时该做什么',statusGuide)}${card('新手安全原则','避免误操作和凭据泄露',`<div class="card-body help-note"><p>① 只登录自己拥有的账号；② 只在 OpenAI 官方页面输入密码和验证码；③ 不上传 auth.json；④ 不频繁刷新额度或反复登录；⑤ 不确定时保持“仅保存”，不要切换本机账号。</p></div>`)}</div></div>`
 }
 async function copyProxyAddress(){
@@ -678,7 +682,15 @@ function renderSettings(){
   const circuits=diagnosticsData.circuits||[]
   const openCircuits=circuits.filter(item=>item.state!=='closed')
   const circuitBody=`<div class="card-body">${circuits.length?circuits.map(item=>{const remaining=item.state==='open'?Math.max(0,30-Math.floor((Date.now()-Number(item.openedAt||0))/1000)):0;return `<div class="provider-row" style="grid-template-columns:1fr auto"><div><b>${esc(item.name)}</b><div class="cell-sub">${item.lastFailure?.message?esc(item.lastFailure.message):'暂无最近错误'}</div></div><span class="status ${item.state==='closed'?'':item.state==='half-open'?'warn':'off'}"><i></i>${item.state==='closed'?'正常':item.state==='half-open'?'正在探测':`熔断中 · 约 ${remaining} 秒后探测`}</span></div>`}).join(''):'<span class="cell-sub">尚无 Provider 熔断记录</span>'}</div><div class="form-footer">${button('重置熔断状态','refresh','resetCircuits()',openCircuits.length?'btn-danger':'')}</div>`
-  return pageHead('系统设置','配置全局路由行为与管理控制台偏好')+`<div class="grid"><div>${card('路由偏好','应用于未指定模型或上游的请求',body)}${card('配置快照与回滚','只恢复设置，不回退账号 Token 和 API Key',rollback)}${card('账号备份与恢复','安全合并，不覆盖当前有效凭据',accountRestore)}${card('外观','保存在当前浏览器',`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>深色显示模式</b><div class="cell-sub">切换控制台配色，不影响网关服务</div></div>${button('切换主题','moon','toggleTheme()')}</div></div>`)}</div><div>${card('系统信息','当前运行环境',info)}${card('Provider 熔断状态',openCircuits.length?`${openCircuits.length} 个通道暂不可用`:'所有已记录通道正常',circuitBody)}${card('运维与安全','普通使用无需操作',operations)}</div></div>`
+  const fallbackChain=(cfg.fallbackChain||[]).map(item=>`${item.provider} | ${item.model}`).join('\n')
+  const smartRouting=`<div class="card-body"><div class="form-grid"><div class="field full"><label style="display:flex;align-items:center;gap:8px"><input id="f_crossProviderFallbackEnabled" type="checkbox" ${cfg.crossProviderFallbackEnabled?'checked':''}> 显式启用跨 Provider 回退</label><span class="hint">默认关闭。401、402、403 和请求格式错误永不跨供应商盲目重试。</span></div><div class="field full"><label>回退链 <span class="hint">每行 provider | model</span></label><textarea id="f_fallbackChain" spellcheck="false">${esc(fallbackChain)}</textarea></div><div class="field full"><label>允许回退的 HTTP 状态</label><input class="input" id="f_fallbackStatuses" value="${esc((cfg.fallbackStatuses||[429,502,503,504]).join(', '))}"></div><div class="field full"><div class="help-note"><b>虚拟模型</b><p><code>auto</code> 综合质量与可用性；<code>auto-fast</code> 优先低延迟；<code>auto-cheap</code> 优先免费/低价；<code>auto-reliable</code> 优先成功率与账号余量。选择这些模型本身即表示明确允许跨 Provider。</p></div></div></div></div><div class="form-footer">${button('保存智能路由','check','saveConfig()','btn-primary')}</div>`
+  const budgetJson=JSON.stringify(cfg.providerBudgets||{},null,2)
+  const priceJson=JSON.stringify(priceCatalogData.prices||{},null,2)
+  const costProviders=Object.entries(costReportData.providers||{}).filter(([,value])=>value.total_usd||value.daily_usd||value.budget?.configured)
+  const costRows=costProviders.length?costProviders.map(([provider,value])=>`<div class="provider-row" style="grid-template-columns:1fr auto"><div><b>${esc(provider)}</b><div class="cell-sub">今日 $${Number(value.daily_usd||0).toFixed(4)} · 本月 $${Number(value.monthly_usd||0).toFixed(4)} · 累计 $${Number(value.total_usd||0).toFixed(4)}</div></div><span class="status ${value.budget?.exceeded?'off':value.budget?.configured?'warn':''}"><i></i>${value.budget?.exceeded?'预算已满':value.budget?.configured?'预算监控中':'未设预算'}</span></div>`).join(''):'<span class="cell-sub">尚无付费线路成本记录</span>'
+  const costBody=`<div class="card-body"><div class="metrics" style="grid-template-columns:repeat(2,minmax(0,1fr));margin-bottom:14px">${metric('今日估算',`$${Number(costReportData.today_usd||0).toFixed(4)}`,'analytics','按本地价格目录计算')}${metric('累计估算',`$${Number(costReportData.total_usd||0).toFixed(4)}`,'analytics','仅供预算治理参考')}</div>${costRows}<div class="field full" style="margin-top:14px"><label>Provider 预算 JSON <span class="hint">daily_usd / monthly_usd / action: fallback|stop</span></label><textarea id="f_providerBudgets" spellcheck="false">${esc(budgetJson)}</textarea></div></div><div class="form-footer">${button('保存预算','check','saveConfig()','btn-primary')}</div>`
+  const priceBody=`<div class="card-body"><div class="help-note"><p>${esc(priceCatalogData.notice||'价格为本地估算，请自行核对服务商价格。')} · 更新于 ${priceCatalogData.updated_at?esc(new Date(priceCatalogData.updated_at).toLocaleString('zh-CN')):'未知'}</p></div><div class="field full" style="margin-top:12px"><label>每百万 Token 价格 JSON</label><textarea id="price_catalog_json" spellcheck="false" style="min-height:220px">${esc(priceJson)}</textarea></div></div><div class="form-footer">${button('更新价格目录','check','savePriceCatalog()','btn-primary')}</div>`
+  return pageHead('系统设置','配置全局路由行为与管理控制台偏好')+`<div class="grid"><div>${card('路由偏好','应用于未指定模型或上游的请求',body)}${card('智能路由与显式回退','默认不跨供应商；必须主动开启或选择 auto 模型',smartRouting)}${card('成本与预算','请求、今日、月度成本估算及线路门禁',costBody)}${card('模型价格目录','本地可更新，不会自动修改真实账单',priceBody)}${card('配置快照与回滚','只恢复设置，不回退账号 Token 和 API Key',rollback)}${card('账号备份与恢复','安全合并，不覆盖当前有效凭据',accountRestore)}${card('外观','保存在当前浏览器',`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>深色显示模式</b><div class="cell-sub">切换控制台配色，不影响网关服务</div></div>${button('切换主题','moon','toggleTheme()')}</div></div>`)}</div><div>${card('系统信息','当前运行环境',info)}${card('Provider 熔断状态',openCircuits.length?`${openCircuits.length} 个通道暂不可用`:'所有已记录通道正常',circuitBody)}${card('运维与安全','普通使用无需操作',operations)}</div></div>`
 }
 function render(){
   const fn={overview:renderOverview,providers:renderProviders,relays:renderRelays,accounts:renderAccounts,analytics:renderAnalytics,settings:renderSettings,help:renderHelp}[activePage]
@@ -691,10 +703,33 @@ function render(){
 
 function collectConfig(){
   const keys=['deepseekApiKey','openaiApiKey','openaiOrgId','openaiProjectId','upstreamUrl','chatgptResponsesUrl','openaiApiBaseUrl','openaiApiResponsesUrl','openaiApiChatCompletionsUrl','openaiApiUpstream','defaultModel','chatgptAccountStrategy','chatgptLowQuotaThreshold']
-  const data={}; keys.forEach(k=>{ const el=document.getElementById('f_'+k); if(el)data[k]=el.value.trim() }); return data
+  const data={}; keys.forEach(k=>{ const el=document.getElementById('f_'+k); if(el)data[k]=el.value.trim() })
+  const fallbackEnabled=document.getElementById('f_crossProviderFallbackEnabled')
+  if(fallbackEnabled)data.crossProviderFallbackEnabled=fallbackEnabled.checked===true
+  const chain=document.getElementById('f_fallbackChain')
+  if(chain)data.fallbackChain=chain.value.split(/\r?\n/).map(line=>{
+    const [provider,...modelParts]=line.split('|')
+    return {provider:provider?.trim(),model:modelParts.join('|').trim()}
+  }).filter(item=>item.provider&&item.model)
+  const statuses=document.getElementById('f_fallbackStatuses')
+  if(statuses)data.fallbackStatuses=statuses.value.split(',').map(Number).filter(code=>Number.isInteger(code)&&code>=400&&code<=599)
+  const budgets=document.getElementById('f_providerBudgets')
+  if(budgets)data.providerBudgets=JSON.parse(budgets.value||'{}')
+  return data
 }
 async function saveConfig(){
   try{ const r=await fetch(API+'/config',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(collectConfig())}); const d=await r.json(); if(!r.ok)throw new Error(d.error?.message||'保存失败'); cfg={...cfg,...d.config}; render(); toast('配置已保存并热重载') }catch(e){toast(e.message,'error')}
+}
+async function savePriceCatalog(){
+  try{
+    const prices=JSON.parse(document.getElementById('price_catalog_json')?.value||'{}')
+    const response=await fetch(API+'/prices',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({notice:priceCatalogData.notice,prices})})
+    const data=await response.json()
+    if(!response.ok)throw new Error(data.error?.message||'价格目录更新失败')
+    priceCatalogData=data.catalog
+    await load(false,false)
+    toast(data.message||'价格目录已更新')
+  }catch(error){toast(error.message,'error')}
 }
 async function pingChannel(type,relayId){
   toast('正在检测通道…')

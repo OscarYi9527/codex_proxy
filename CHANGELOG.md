@@ -2,6 +2,21 @@
 
 本项目遵循语义化版本。日期使用北京时间。
 
+## [2.4.0] - 2026-07-15
+
+### Added
+
+- 默认关闭、需用户显式开启的请求级跨 Provider 回退链；401/402/403 和参数错误禁止盲目回退。
+- `auto`、`auto-fast`、`auto-cheap`、`auto-reliable` 四个虚拟模型。
+- 可更新的本地模型价格目录，以及请求、今日、月度和累计成本估算。
+- API 与中转线路日/月预算门禁，支持达到预算后回退或停止。
+- `GET/PUT /admin/api/prices` 与 `GET /admin/api/costs` 管理接口。
+
+### Fixed
+
+- OpenAI API 由中转节点承载时，流式与非流式用量现在归入实际 Relay Provider。
+- DeepSeek Chat Completions 流式请求现在记录 Token 与成本。
+
 ## [2.3.1] - 2026-07-15
 
 ### Added

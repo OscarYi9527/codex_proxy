@@ -14,6 +14,8 @@ import { getRouteDecisions } from './route-decisions.js'
 import { getProviderHealth, resetProviderHealth } from './provider-health.js'
 import { getRuntimeDeploymentInfo } from './runtime-info.js'
 import { buildAutomaticDiagnosis } from './diagnostics.js'
+import { getPriceCatalog, updatePriceCatalog } from './pricing.js'
+import { getCostReport } from './cost-governance.js'
 
 function maskChatgptAccounts(accounts) {
   if (!accounts) return accounts
@@ -992,6 +994,26 @@ export function handleAutomaticDiagnosisGet(req, res, query = {}) {
     provider: query.provider,
     model: query.model
   }))
+}
+
+export function handlePriceCatalogGet(req, res) {
+  return sendJson(res, 200, getPriceCatalog())
+}
+
+export async function handlePriceCatalogPut(req, res) {
+  try {
+    const body = await readJson(req)
+    return sendJson(res, 200, {
+      catalog: updatePriceCatalog(body),
+      message: '模型价格目录已更新；后续完成请求将按新价格估算'
+    })
+  } catch (error) {
+    return sendJson(res, 400, { error: { type: 'invalid_request_error', message: error.message } })
+  }
+}
+
+export function handleCostReportGet(req, res) {
+  return sendJson(res, 200, getCostReport())
 }
 
 export function handleConfigSnapshotsGet(req, res) {

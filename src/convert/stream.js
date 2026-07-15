@@ -330,7 +330,7 @@ export function onChatCompletionChunk(res, state, chunk) {
   }
 }
 
-export async function streamChatCompletionToResponses(upstream, res, body) {
+export async function streamChatCompletionToResponses(upstream, res, body, { provider = 'openai-api' } = {}) {
   res.writeHead(200, {
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache',
@@ -363,7 +363,7 @@ export async function streamChatCompletionToResponses(upstream, res, body) {
   }
   if (!res.writableEnded) {
     if (usage) {
-      recordUsage(body.model || 'unknown', 'openai-api', usage.prompt_tokens || 0, usage.completion_tokens || 0)
+      recordUsage(body.model || 'unknown', provider, usage.prompt_tokens || 0, usage.completion_tokens || 0)
       saveStats()
     }
     res.end('data: [DONE]\n\n')

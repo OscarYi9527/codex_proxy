@@ -2,6 +2,7 @@
 import fs from 'fs'
 import path from 'path'
 import { PROXY_DIR, atomicWriteJson } from './config.js'
+import { estimateRequestCost } from './pricing.js'
 
 const STATS_FILE = path.join(PROXY_DIR, '..', 'codex-proxy-stats.json')
 const DAILY_RETENTION_DAYS = 370
@@ -59,13 +60,15 @@ export function saveStats() {
 }
 
 function ensureProvider(p) {
-  if (!stats.providers[p]) stats.providers[p] = { requests: 0, input_tokens: 0, output_tokens: 0, models: {} }
+  if (!stats.providers[p]) stats.providers[p] = { requests: 0, input_tokens: 0, output_tokens: 0, estimated_cost_usd: 0, models: {} }
+  stats.providers[p].estimated_cost_usd ||= 0
   return stats.providers[p]
 }
 
 function ensureModel(p, m) {
   const pr = ensureProvider(p)
-  if (!pr.models[m]) pr.models[m] = { requests: 0, input_tokens: 0, output_tokens: 0 }
+  if (!pr.models[m]) pr.models[m] = { requests: 0, input_tokens: 0, output_tokens: 0, estimated_cost_usd: 0 }
+  pr.models[m].estimated_cost_usd ||= 0
   return pr.models[m]
 }
 
@@ -79,6 +82,7 @@ function ensureDaily(day = statsDayKey()) {
       circuit_opens: 0,
       input_tokens: 0,
       output_tokens: 0,
+      estimated_cost_usd: 0,
       providers: {},
       accounts: {}
     }
@@ -91,7 +95,9 @@ function ensureDaily(day = statsDayKey()) {
 
 function ensureDailyProvider(day, provider) {
   const daily = ensureDaily(day)
-  return daily.providers[provider] ||= { requests: 0, input_tokens: 0, output_tokens: 0 }
+  const value = daily.providers[provider] ||= { requests: 0, input_tokens: 0, output_tokens: 0, estimated_cost_usd: 0 }
+  value.estimated_cost_usd ||= 0
+  return value
 }
 
 function ensureDailyAccount(day, accountId) {
@@ -113,12 +119,16 @@ export function recordUsage(model, provider, inputTokens, outputTokens, accountI
   const o = Math.max(0, Number(outputTokens) || 0)
   const pr = ensureProvider(provider)
   const md = ensureModel(provider, model)
+  const estimate = estimateRequestCost(provider, model, i, o).estimated_cost_usd
+  const cost = Math.max(0, Number(estimate) || 0)
   pr.requests++
   pr.input_tokens += i
   pr.output_tokens += o
   md.requests++
   md.input_tokens += i
   md.output_tokens += o
+  pr.estimated_cost_usd = Number((Number(pr.estimated_cost_usd || 0) + cost).toFixed(8))
+  md.estimated_cost_usd = Number((Number(md.estimated_cost_usd || 0) + cost).toFixed(8))
 
   const day = statsDayKey()
   const daily = ensureDaily(day)
@@ -126,9 +136,11 @@ export function recordUsage(model, provider, inputTokens, outputTokens, accountI
   daily.requests++
   daily.input_tokens += i
   daily.output_tokens += o
+  daily.estimated_cost_usd = Number((Number(daily.estimated_cost_usd || 0) + cost).toFixed(8))
   dailyProvider.requests++
   dailyProvider.input_tokens += i
   dailyProvider.output_tokens += o
+  dailyProvider.estimated_cost_usd = Number((Number(dailyProvider.estimated_cost_usd || 0) + cost).toFixed(8))
   if (accountId) {
     const dailyAccount = ensureDailyAccount(day, accountId)
     dailyAccount.completed_requests++

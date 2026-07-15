@@ -19,7 +19,8 @@ import { handlePing, handlePingAll } from './routes/ping.js'
 import { saveStats } from './stats.js'
 import { initializeProviderHealth, saveProviderHealth } from './provider-health.js'
 import { listHttpErrorGuides } from './error-guide.js'
-import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginPreflight, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountResetCreditsGet, handleChatgptAccountsRefreshResetCreditsAll, handleChatgptAccountResetQuota, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleAutomaticDiagnosisGet, handleRuntimeInfoGet, handleDeployUpdate, handleAccountBackupsGet, handleConfigSnapshotsGet, handleAccountBackupRestore, handleConfigRollback, handleProviderHealthReset, handleRuntimeRepair, handleProxyRestart } from './admin.js'
+import { executeRoutingPlan, VIRTUAL_MODELS } from './smart-routing.js'
+import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginPreflight, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountResetCreditsGet, handleChatgptAccountsRefreshResetCreditsAll, handleChatgptAccountResetQuota, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleAutomaticDiagnosisGet, handlePriceCatalogGet, handlePriceCatalogPut, handleCostReportGet, handleRuntimeInfoGet, handleDeployUpdate, handleAccountBackupsGet, handleConfigSnapshotsGet, handleAccountBackupRestore, handleConfigRollback, handleProviderHealthReset, handleRuntimeRepair, handleProxyRestart } from './admin.js'
 
 const PORT = Number(process.env.CODEX_PROXY_PORT || 47892)
 const HOST = process.env.CODEX_PROXY_HOST || '127.0.0.1'
@@ -91,6 +92,20 @@ function makeRelayModel(slug, display, desc) {
     input_modalities: ['text', 'image'],
     base_instructions: BASE_INSTRUCTIONS
   }
+}
+
+function dispatchResponsesTarget(target, req, res, body, resolved) {
+  if (target.provider.startsWith('relay:')) return handleRelay(req, res, body, resolved)
+  if (target.provider === 'openai-api') return handleOpenAIApi(req, res, body, resolved)
+  if (target.provider === 'chatgpt-sub') return handleChatGptSub(req, res, body, resolved)
+  return handleDeepSeek(req, res, body, resolved)
+}
+
+function dispatchChatCompletionsTarget(target, req, res, body, resolved) {
+  if (target.provider.startsWith('relay:')) return handleRelayChatCompletions(req, res, body, resolved)
+  if (target.provider === 'openai-api') return handleOpenAIApiChatCompletions(req, res, body, resolved)
+  if (target.provider === 'chatgpt-sub') return handleChatGptSubChatCompletions(req, res, body, resolved)
+  return handleDeepSeekChatCompletions(req, res, body, resolved)
 }
 
 export function createServer({ fetchImpl = fetch } = {}) {
@@ -169,7 +184,10 @@ export function createServer({ fetchImpl = fetch } = {}) {
           relayModels.push(makeRelayModel(slug, m.toUpperCase() + ' (' + relay.name + ')', relay.name + ' - ' + relay.base_url))
         }
       }
-      localModels = [...relayModels, ...localModels]
+      const virtualModels = VIRTUAL_MODELS.map(model =>
+        makeRelayModel(model.id, model.name, '显式智能路由：按当前健康、额度、延迟和成本选择已配置 Provider')
+      )
+      localModels = [...virtualModels, ...relayModels, ...localModels]
 
       return sendJson(res, 200, buildModelsResponse(localModels))
     }
@@ -182,14 +200,13 @@ export function createServer({ fetchImpl = fetch } = {}) {
         setProxyMeta(res, { model: resolved.model })
         requestLog(req, 'model=' + resolved.model + ' effort=' + (resolved.reasoningEffort || 'default') + ' stream=' + body.stream)
 
-        if (isRelayModel(resolved.model)) return await handleRelay(req, res, body, resolved)
-        if (shouldRouteViaOpenAIApi(resolved.model)) return await handleOpenAIApi(req, res, body, resolved)
-        if (isChatGptSubModel(resolved.model)) return await handleChatGptSub(req, res, body, resolved)
-        return await handleDeepSeek(req, res, body, resolved)
+        return await executeRoutingPlan(req, res, body, resolved,
+          (target, attemptRes, attemptBody, attemptResolved) =>
+            dispatchResponsesTarget(target, req, attemptRes, attemptBody, attemptResolved))
       } catch (error) {
         if (req.clientAbortSignal.aborted || res.destroyed) return
         console.error('[codex-proxy] request failed:', error.message)
-        if (!res.headersSent) return sendJson(res, 502, { error: { type: 'proxy_error', message: error.message } })
+        if (!res.headersSent) return sendJson(res, Number(error.status) || 502, { error: { type: error.code === 'NO_VIRTUAL_ROUTE' ? 'route_unavailable' : (error.code === 'BUDGET_EXCEEDED' ? 'budget_exceeded' : 'proxy_error'), message: error.message, ...(error.decision ? { details: error.decision } : {}) } })
         if (!res.writableEnded) res.end()
       }
       return
@@ -209,14 +226,13 @@ export function createServer({ fetchImpl = fetch } = {}) {
         setProxyMeta(res, { model: resolved.model })
         requestLog(req, 'chat-completions model=' + resolved.model + ' stream=' + body.stream)
 
-        if (isRelayModel(resolved.model)) return await handleRelayChatCompletions(req, res, body, resolved)
-        if (shouldRouteViaOpenAIApi(resolved.model)) return await handleOpenAIApiChatCompletions(req, res, body, resolved)
-        if (isChatGptSubModel(resolved.model)) return await handleChatGptSubChatCompletions(req, res, body, resolved)
-        return await handleDeepSeekChatCompletions(req, res, body, resolved)
+        return await executeRoutingPlan(req, res, body, resolved,
+          (target, attemptRes, attemptBody, attemptResolved) =>
+            dispatchChatCompletionsTarget(target, req, attemptRes, attemptBody, attemptResolved))
       } catch (error) {
         if (req.clientAbortSignal.aborted || res.destroyed) return
         console.error('[codex-proxy] chat/completions failed:', error.message)
-        if (!res.headersSent) return sendJson(res, 502, { error: { type: 'proxy_error', message: error.message } })
+        if (!res.headersSent) return sendJson(res, Number(error.status) || 502, { error: { type: error.code === 'NO_VIRTUAL_ROUTE' ? 'route_unavailable' : (error.code === 'BUDGET_EXCEEDED' ? 'budget_exceeded' : 'proxy_error'), message: error.message, ...(error.decision ? { details: error.decision } : {}) } })
         if (!res.writableEnded) res.end()
       }
       return
@@ -258,6 +274,9 @@ export function createServer({ fetchImpl = fetch } = {}) {
       return sendJson(res, 200, { codes: listHttpErrorGuides() })
     }
     if (req.method === 'GET' && url.pathname === '/admin/api/runtime-info') return handleRuntimeInfoGet(req, res)
+    if (req.method === 'GET' && url.pathname === '/admin/api/prices') return handlePriceCatalogGet(req, res)
+    if (req.method === 'PUT' && url.pathname === '/admin/api/prices') return handlePriceCatalogPut(req, res)
+    if (req.method === 'GET' && url.pathname === '/admin/api/costs') return handleCostReportGet(req, res)
     if (req.method === 'POST' && url.pathname === '/admin/api/deploy-update') return handleDeployUpdate(req, res)
     if (req.method === 'GET' && url.pathname === '/admin/api/config') return handleAdminConfigGet(req, res)
     if (req.method === 'PUT' && url.pathname === '/admin/api/config') return handleAdminConfigPut(req, res)

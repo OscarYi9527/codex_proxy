@@ -34,7 +34,15 @@ const CONFIG_DEFAULTS = {
   chatgptAccounts: [],
   activeChatgptAccountId: null,
   chatgptAccountStrategy: 'headroom',
-  chatgptLowQuotaThreshold: 10
+  chatgptLowQuotaThreshold: 10,
+  crossProviderFallbackEnabled: false,
+  fallbackChain: [
+    { provider: 'chatgpt-sub', model: 'gpt-5.6-sol' },
+    { provider: 'openai-api', model: 'openai-api-gpt-5.6-sol' },
+    { provider: 'deepseek', model: 'deepseek-v4-pro' }
+  ],
+  fallbackStatuses: [429, 502, 503, 504],
+  providerBudgets: {}
 }
 
 export function atomicWriteJson(filePath, value) {
@@ -107,7 +115,17 @@ function loadProxyConfig() {
       : CONFIG_DEFAULTS.chatgptAccountStrategy,
     chatgptLowQuotaThreshold: Number.isFinite(Number(fileCfg.chatgpt_low_quota_threshold))
       ? Math.max(0, Math.min(100, Number(fileCfg.chatgpt_low_quota_threshold)))
-      : CONFIG_DEFAULTS.chatgptLowQuotaThreshold
+      : CONFIG_DEFAULTS.chatgptLowQuotaThreshold,
+    crossProviderFallbackEnabled: fileCfg.cross_provider_fallback_enabled === true,
+    fallbackChain: Array.isArray(fileCfg.fallback_chain)
+      ? fileCfg.fallback_chain
+      : CONFIG_DEFAULTS.fallbackChain,
+    fallbackStatuses: Array.isArray(fileCfg.fallback_statuses)
+      ? fileCfg.fallback_statuses.map(Number).filter(code => code >= 400 && code <= 599)
+      : CONFIG_DEFAULTS.fallbackStatuses,
+    providerBudgets: fileCfg.provider_budgets && typeof fileCfg.provider_budgets === 'object'
+      ? fileCfg.provider_budgets
+      : CONFIG_DEFAULTS.providerBudgets
   }
 }
 
@@ -323,7 +341,11 @@ function saveProxyConfig(fields, { snapshot = false, reason = 'change' } = {}) {
     openai_api_upstream: fields.openaiApiUpstream,
     default_model: fields.defaultModel,
     chatgpt_account_strategy: fields.chatgptAccountStrategy,
-    chatgpt_low_quota_threshold: fields.chatgptLowQuotaThreshold
+    chatgpt_low_quota_threshold: fields.chatgptLowQuotaThreshold,
+    cross_provider_fallback_enabled: fields.crossProviderFallbackEnabled,
+    fallback_chain: fields.fallbackChain,
+    fallback_statuses: fields.fallbackStatuses,
+    provider_budgets: fields.providerBudgets
   }
 
   for (const [k, v] of Object.entries(map)) {

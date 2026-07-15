@@ -36,6 +36,9 @@ flowchart LR
 | `src/circuit-breaker.js` | Provider 级熔断和半开恢复 |
 | `src/error-guide.js` | HTTP 错误分类、原因和处理建议查找表 |
 | `src/diagnostics.js` | 账号池/Provider/熔断联合诊断、结论与上下文操作 |
+| `src/smart-routing.js` | 显式回退计划、虚拟模型评分和错误响应延迟提交 |
+| `src/pricing.js` | 本地可更新模型价格目录与单请求成本估算 |
+| `src/cost-governance.js` | Provider 日/月成本汇总和预算门禁 |
 | `src/runtime-info.js` | 运行路径、版本、Commit 和工作区/安装副本一致性 |
 | `src/admin.js` | 本机管理 API、隔离登录、诊断和运维操作 |
 | `src/admin_app.js` | 管理后台交互与零基础教程 |
@@ -53,6 +56,15 @@ flowchart TD
 
 默认不会在不同 Provider 之间静默切换。ChatGPT 账号池内部可以按策略切换账号；
 跨 Provider 回退必须由用户明确配置或启动参数显式启用。
+
+请求级智能路由由 `src/smart-routing.js` 统一执行：
+
+1. 普通模型先按模型前缀确定初始 Provider；默认计划只有一个目标。
+2. 用户显式开启后，按 `fallback_chain` 追加具体 Provider + 模型。
+3. `auto*` 虚拟模型本身代表用户明确授权，根据健康、额度、延迟和价格排序可用目标。
+4. 成功响应一旦写出即保持流式直通；错误响应先在本地缓冲，只有状态和错误类型允许时才丢弃并进入下一目标。
+5. 401/402/403、参数和权限错误硬性禁止跨 Provider 回退。
+6. 调用上游前检查实际 Provider 预算；`fallback` 跳过超预算线路，`stop` 返回 402。
 
 ## ChatGPT 账号生命周期
 
@@ -100,6 +112,8 @@ flowchart TD
 - 实际请求与手动 ping 都更新 Provider 健康记录；客户端主动取消不会计为上游故障。
 - Provider 与账号事件保留 7 天，按 1h/24h/7d 计算成功率、429 和 P95；熔断开启与账号切换使用独立运维事件统计。
 - 自动诊断把账号状态、每日策略、Provider 健康、熔断和 HTTP 错误指南合并为可执行结论。
+- `recordUsage` 使用 `model-prices.json` 为每次完成请求增加估算成本，并累计到 Provider、模型和北京时间自然日。
+- 价格目录只影响本地估算和预算，不读取真实账单；Relay 与 OpenAI-over-Relay 按实际 Provider 归集。
 
 ## 持久化与安全
 
@@ -141,6 +155,8 @@ flowchart TD
 |---|---|---|
 | `GET` | `/admin/api/diagnostics` | 脱敏运行诊断 |
 | `GET` | `/admin/api/diagnosis` | 实时自动诊断、趋势和上下文操作 |
+| `GET/PUT` | `/admin/api/prices` | 查询/更新本地模型价格目录 |
+| `GET` | `/admin/api/costs` | 成本汇总和预算状态 |
 | `GET` | `/admin/api/runtime-info` | 运行版本、路径和部署一致性 |
 | `POST` | `/admin/api/deploy-update` | 启动本机安全部署流程 |
 | `GET` | `/admin/api/chatgpt-login/preflight` | CLI、OAuth app-server 与浏览器预检 |

@@ -128,6 +128,7 @@ export function buildModelsResponse(localModels = []) {
   }
 
   function ownedBy(slug) {
+    if (['auto', 'auto-fast', 'auto-cheap', 'auto-reliable'].includes(slug)) return 'auto-router'
     if (slug.startsWith('relay-')) return 'relay'
     if (slug.startsWith('openai-api-')) return 'openai-api'
     if (/^gpt-/i.test(slug)) return 'chatgpt-sub'

@@ -20,6 +20,9 @@ import { getProviderHealth, recordProviderOutcome, resetProviderHealth } from '.
 import { attachHttpErrorGuide, getHttpErrorGuide, listHttpErrorGuides } from '../src/error-guide.js'
 import { compareRuntimeTrees } from '../src/runtime-info.js'
 import { accountPoolDiagnosis, buildAutomaticDiagnosis } from '../src/diagnostics.js'
+import { buildRoutingPlan, executeRoutingPlan, isVirtualModel, shouldFallbackResponse } from '../src/smart-routing.js'
+import { estimateRequestCost, getPriceCatalog, normalizePriceCatalog } from '../src/pricing.js'
+import { budgetDecision, getCostReport } from '../src/cost-governance.js'
 
 describe('模型解析', () => {
   it('解析 body.model', () => {
@@ -296,6 +299,109 @@ describe('四通道路由分类', () => {
   })
 })
 
+describe('显式跨 Provider 与虚拟模型路由', () => {
+  it('默认不跨 Provider，只有显式开启后才使用配置的回退链', () => {
+    const original = {
+      enabled: proxyConfig.crossProviderFallbackEnabled,
+      chain: proxyConfig.fallbackChain,
+      accounts: proxyConfig.chatgptAccounts,
+      openai: proxyConfig.openaiApiKey
+    }
+    proxyConfig.fallbackChain = [
+      { provider: 'chatgpt-sub', model: 'gpt-main' },
+      { provider: 'openai-api', model: 'openai-api-gpt-backup' }
+    ]
+    proxyConfig.chatgptAccounts = [{ id: 'a', routing_enabled: true, access_token: 'token' }]
+    proxyConfig.openaiApiKey = 'key'
+    try {
+      proxyConfig.crossProviderFallbackEnabled = false
+      assert.deepStrictEqual(buildRoutingPlan({ headers: {} }, { model: 'gpt-main' }).map(item => item.provider), ['chatgpt-sub'])
+      proxyConfig.crossProviderFallbackEnabled = true
+      assert.deepStrictEqual(buildRoutingPlan({ headers: {} }, { model: 'gpt-main' }).map(item => item.provider), ['chatgpt-sub', 'openai-api'])
+    } finally {
+      proxyConfig.crossProviderFallbackEnabled = original.enabled
+      proxyConfig.fallbackChain = original.chain
+      proxyConfig.chatgptAccounts = original.accounts
+      proxyConfig.openaiApiKey = original.openai
+    }
+  })
+
+  it('auto 系列是显式虚拟模型且 auto-cheap 优先免费订阅线路', () => {
+    const original = {
+      chain: proxyConfig.fallbackChain,
+      accounts: proxyConfig.chatgptAccounts,
+      openai: proxyConfig.openaiApiKey
+    }
+    proxyConfig.fallbackChain = [
+      { provider: 'openai-api', model: 'openai-api-gpt-paid' },
+      { provider: 'chatgpt-sub', model: 'gpt-subscription' }
+    ]
+    proxyConfig.chatgptAccounts = [{ id: 'a', routing_enabled: true, access_token: 'token' }]
+    proxyConfig.openaiApiKey = 'key'
+    try {
+      assert.strictEqual(isVirtualModel('auto-reliable'), true)
+      const plan = buildRoutingPlan({ headers: {} }, { model: 'auto-cheap' })
+      assert.strictEqual(plan[0].provider, 'chatgpt-sub')
+      assert.ok(plan.every(item => item.virtualModel === 'auto-cheap'))
+    } finally {
+      proxyConfig.fallbackChain = original.chain
+      proxyConfig.chatgptAccounts = original.accounts
+      proxyConfig.openaiApiKey = original.openai
+    }
+  })
+
+  it('401 和 402 不盲目回退，允许的 503 才进入下一 Provider', async () => {
+    assert.strictEqual(shouldFallbackResponse(401, 'authentication_error'), false)
+    assert.strictEqual(shouldFallbackResponse(402, 'billing_error'), false)
+    assert.strictEqual(shouldFallbackResponse(503, 'upstream_error'), true)
+    const original = {
+      enabled: proxyConfig.crossProviderFallbackEnabled,
+      chain: proxyConfig.fallbackChain,
+      accounts: proxyConfig.chatgptAccounts,
+      openai: proxyConfig.openaiApiKey
+    }
+    proxyConfig.crossProviderFallbackEnabled = true
+    proxyConfig.fallbackChain = [
+      { provider: 'chatgpt-sub', model: 'gpt-main' },
+      { provider: 'openai-api', model: 'openai-api-gpt-backup' }
+    ]
+    proxyConfig.chatgptAccounts = [{ id: 'a', routing_enabled: true, access_token: 'token' }]
+    proxyConfig.openaiApiKey = 'key'
+    const req = Object.assign(new EventEmitter(), { headers: {}, requestId: 'fallback-test' })
+    const real = Object.assign(new EventEmitter(), {
+      headersSent: false,
+      writableEnded: false,
+      status: null,
+      chunks: [],
+      writeHead(status) { this.status = status; this.headersSent = true },
+      write(chunk) { this.chunks.push(Buffer.from(chunk)); return true },
+      end(chunk) { if (chunk) this.write(chunk); this.writableEnded = true }
+    })
+    const providers = []
+    try {
+      await executeRoutingPlan(req, real, { model: 'gpt-main' }, { model: 'gpt-main', bodyModel: 'gpt-main' },
+        async (target, response) => {
+          providers.push(target.provider)
+          if (target.provider === 'chatgpt-sub') {
+            response.writeHead(503, { 'content-type': 'application/json' })
+            response.end(JSON.stringify({ error: { type: 'upstream_error' } }))
+          } else {
+            response.writeHead(200, { 'content-type': 'application/json' })
+            response.end('{"ok":true}')
+          }
+        })
+      assert.deepStrictEqual(providers, ['chatgpt-sub', 'openai-api'])
+      assert.strictEqual(real.status, 200)
+      assert.strictEqual(Buffer.concat(real.chunks).toString(), '{"ok":true}')
+    } finally {
+      proxyConfig.crossProviderFallbackEnabled = original.enabled
+      proxyConfig.fallbackChain = original.chain
+      proxyConfig.chatgptAccounts = original.accounts
+      proxyConfig.openaiApiKey = original.openai
+    }
+  })
+})
+
 describe('中转站模型解析', () => {
   it('解析 relay-{id}-{model}', () => {
     const parts = 'relay-myproxy-gpt-5.5'.split('-')
@@ -310,12 +416,14 @@ describe('buildModelsResponse', () => {
       { slug: 'gpt-5.5' },
       { slug: 'openai-api-gpt-5.5' },
       { slug: 'relay-myproxy-gpt-5.5' },
-      { slug: 'deepseek-v4-pro' }
+      { slug: 'deepseek-v4-pro' },
+      { slug: 'auto' }
     ])
     assert.strictEqual(result.data.find(m=>m.id==='gpt-5.5').owned_by, 'chatgpt-sub')
     assert.strictEqual(result.data.find(m=>m.id==='openai-api-gpt-5.5').owned_by, 'openai-api')
     assert.strictEqual(result.data.find(m=>m.id==='relay-myproxy-gpt-5.5').owned_by, 'relay')
     assert.strictEqual(result.data.find(m=>m.id==='deepseek-v4-pro').owned_by, 'deepseek')
+    assert.strictEqual(result.data.find(m=>m.id==='auto').owned_by, 'auto-router')
   })
 })
 
@@ -337,12 +445,14 @@ describe('用量统计', () => {
     assert.deepStrictEqual(today.providers['chatgpt-sub'], {
       requests: 1,
       input_tokens: 100,
-      output_tokens: 50
+      output_tokens: 50,
+      estimated_cost_usd: 0
     })
     assert.deepStrictEqual(today.providers['relay:x'], {
       requests: 1,
       input_tokens: 200,
-      output_tokens: 100
+      output_tokens: 100,
+      estimated_cost_usd: 0.0012
     })
     assert.deepStrictEqual(today.accounts['account-a'], {
       requests: 2,
@@ -356,6 +466,78 @@ describe('用量统计', () => {
     const after = resetStats()
     assert.strictEqual(Object.keys(after.providers).length, 0)
     assert.strictEqual(Object.keys(after.daily).length, 0)
+  })
+})
+
+describe('价格、成本与预算治理', () => {
+  it('按可更新价格目录估算每次、每日和累计成本', () => {
+    const catalog = normalizePriceCatalog({
+      notice: 'test',
+      prices: {
+        'openai-api:*': { input_per_million: 2, output_per_million: 8, kind: 'test' }
+      }
+    }, '2026-07-15T00:00:00.000Z')
+    const estimate = estimateRequestCost('openai-api', 'openai-api-gpt-test', 1_000_000, 500_000, catalog)
+    assert.strictEqual(estimate.estimated_cost_usd, 6)
+    assert.ok(getPriceCatalog().prices['chatgpt-sub:*'])
+    resetStats()
+    recordUsage('openai-api-gpt-test', 'openai-api', 1_000_000, 500_000)
+    const report = getCostReport()
+    assert.ok(report.total_usd > 0)
+    assert.strictEqual(report.today_usd, report.providers['openai-api'].daily_usd)
+    resetStats()
+  })
+
+  it('达到 Provider 日预算后返回可执行的 fallback 或 stop 决策', () => {
+    const original = proxyConfig.providerBudgets
+    resetStats()
+    proxyConfig.providerBudgets = {
+      'openai-api': { daily_usd: 0.01, monthly_usd: 1, action: 'fallback' }
+    }
+    try {
+      recordUsage('openai-api-gpt-test', 'openai-api', 1_000_000, 0)
+      const decision = budgetDecision('openai-api')
+      assert.strictEqual(decision.exceeded, true)
+      assert.strictEqual(decision.reason, 'daily_budget_exceeded')
+      assert.strictEqual(decision.action, 'fallback')
+    } finally {
+      proxyConfig.providerBudgets = original
+      resetStats()
+    }
+  })
+
+  it('预算 stop 门禁在请求上游前返回 402', async () => {
+    const original = {
+      budgets: proxyConfig.providerBudgets,
+      enabled: proxyConfig.crossProviderFallbackEnabled,
+      upstream: proxyConfig.openaiApiUpstream
+    }
+    resetStats()
+    proxyConfig.crossProviderFallbackEnabled = false
+    proxyConfig.openaiApiUpstream = 'official'
+    proxyConfig.providerBudgets = {
+      'openai-api': { daily_usd: 0.01, monthly_usd: 1, action: 'stop' }
+    }
+    recordUsage('openai-api-gpt-test', 'openai-api', 1_000_000, 0)
+    let dispatched = false
+    try {
+      await assert.rejects(
+        executeRoutingPlan(
+          { headers: {}, requestId: 'budget-stop' },
+          Object.assign(new EventEmitter(), { headersSent: false, writableEnded: false }),
+          { model: 'openai-api-gpt-test' },
+          { model: 'openai-api-gpt-test', bodyModel: 'openai-api-gpt-test' },
+          async () => { dispatched = true }
+        ),
+        error => error.code === 'BUDGET_EXCEEDED' && error.status === 402
+      )
+      assert.strictEqual(dispatched, false)
+    } finally {
+      proxyConfig.providerBudgets = original.budgets
+      proxyConfig.crossProviderFallbackEnabled = original.enabled
+      proxyConfig.openaiApiUpstream = original.upstream
+      resetStats()
+    }
   })
 })
 
@@ -1429,6 +1611,20 @@ describe('原子配置写入和管理 API', () => {
       assert.strictEqual(statsResponse.status, 200)
       assert.ok(stats.providers)
       assert.ok(stats.accounts)
+
+      const pricesResponse = await fetch(base + '/admin/api/prices')
+      const prices = await pricesResponse.json()
+      assert.strictEqual(pricesResponse.status, 200)
+      assert.ok(prices.prices['chatgpt-sub:*'])
+
+      const costsResponse = await fetch(base + '/admin/api/costs')
+      const costs = await costsResponse.json()
+      assert.strictEqual(costsResponse.status, 200)
+      assert.strictEqual(costs.currency, 'USD')
+
+      const modelsResponse = await fetch(base + '/v1/models')
+      const models = await modelsResponse.json()
+      assert.ok(models.data.some(model => model.id === 'auto-reliable' && model.owned_by === 'auto-router'))
 
       const diagnosticsResponse = await fetch(base + '/admin/api/diagnostics')
       const diagnostics = await diagnosticsResponse.json()

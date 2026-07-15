@@ -4,7 +4,7 @@ Windows 上的 Codex CLI / VS Code 多上游路由代理。它在保留原生 Re
 工具调用和流式输出的同时，统一接入 ChatGPT 订阅账号池、OpenAI API、DeepSeek
 和 OpenAI 兼容中转节点，并提供本地管理后台、稳定性保护与可观测性。
 
-当前版本：**2.3.1**
+当前版本：**2.4.0**
 
 ## 主要能力
 
@@ -55,6 +55,9 @@ Windows 上的 Codex CLI / VS Code 多上游路由代理。它在保留原生 Re
 - 提供健康检查、请求日志、后台启动、Windows 登录自启动和运行期监控。
 - 支持 DeepSeek、GPT 订阅、GPT API 三种显式启动模式。
 - 默认不静默切换供应商；只有显式启用 `--auto-failover` 才自动回退。
+- 请求级跨 Provider 回退默认关闭；可显式配置 ChatGPT → OpenAI API → Relay → DeepSeek，并按 HTTP 状态决定是否回退，401/402/403 永不盲目重试。
+- 提供 `auto`、`auto-fast`、`auto-cheap`、`auto-reliable` 四个显式虚拟模型，分别侧重综合、延迟、成本和可靠性。
+- 本地可更新模型价格目录，按请求/日/月估算成本；API 与中转线路可设置日/月预算，达到后回退免费订阅线路或停止请求。
 
 ## 工作原理
 
@@ -276,6 +279,8 @@ powershell -ExecutionPolicy Bypass -File `
 
 ### 自动故障转移
 
+#### Codex 子进程级回退
+
 默认情况下代理离线会终止当前 DeepSeek Codex 子进程，不会偷偷改变供应商。
 如确实需要自动切到 GPT 订阅：
 
@@ -284,6 +289,32 @@ powershell -ExecutionPolicy Bypass -File `
   "$HOME\.codex-local-multi-proxy\codex-safe.ps1" `
   --route deepseek --auto-failover
 ```
+
+#### 请求级显式跨 Provider 回退
+
+请求级回退同样默认关闭。可在“系统设置 → 智能路由与显式回退”勾选开启，并按行配置：
+
+```text
+chatgpt-sub | gpt-5.6-sol
+openai-api | openai-api-gpt-5.6-sol
+relay:hk-01 | relay-hk-01-gpt-5.4
+deepseek | deepseek-v4-pro
+```
+
+只有配置的状态（默认 `429, 502, 503, 504`）才进入下一 Provider。`400`、`401`、
+`402`、`403`、`404`、`409`、`422` 以及鉴权、计费、权限、参数错误始终直接返回，
+避免跨供应商盲目重试。普通模型仍遵循默认关闭；用户主动选择以下虚拟模型即表示
+明确允许智能跨 Provider：
+
+| 虚拟模型 | 策略 |
+|---|---|
+| `auto` | 综合成功率、额度、Provider 状态和延迟 |
+| `auto-fast` | 优先 24h P95 延迟 |
+| `auto-cheap` | 优先本地价格目录中的低成本，免费订阅优先 |
+| `auto-reliable` | 优先成功率、账号剩余额度和健康状态 |
+
+流式成功响应仍直接转发，不会为了回退而缓存完整输出；只有错误响应会在本地短暂缓冲，
+确认符合回退规则后才尝试下一 Provider。
 
 ## 服务管理
 
@@ -330,6 +361,8 @@ powershell -ExecutionPolicy Bypass -File `
 | `GET` | `/admin/api/stats` | 获取 Provider、模型和账号健康统计 |
 | `GET` | `/admin/api/diagnostics` | 获取不含 Token/邮箱的本地诊断报告 |
 | `GET` | `/admin/api/diagnosis` | 获取实时自动诊断；可传 status、type、provider、model |
+| `GET/PUT` | `/admin/api/prices` | 查询或更新本地模型价格目录 |
+| `GET` | `/admin/api/costs` | 获取请求、今日、月度累计成本和预算状态 |
 | `GET` | `/admin/api/error-guide` | 获取 HTTP 错误码原因与处理建议查找表 |
 | `GET` | `/admin/api/runtime-info` | 获取实际运行版本、路径及部署一致性 |
 | `POST` | `/admin/api/deploy-update` | 从本机启动备份、部署、重启、健康检查和自动回滚 |
@@ -426,6 +459,8 @@ API 端点：
 | PUT | /admin/api/config | 保存配置到文件并热重载 |
 | GET | /admin/api/diagnostics | 获取队列、账号、熔断和凭据保护状态 |
 | GET | /admin/api/diagnosis | 获取实时问题结论、账号分类、趋势和一键动作描述 |
+| GET/PUT | /admin/api/prices | 查询或更新每百万 Token 本地估算价格 |
+| GET | /admin/api/costs | 获取 Provider 日/月/累计成本和预算门禁状态 |
 | GET | /admin/api/error-guide | 获取 HTTP 错误码原因与处理建议查找表 |
 | GET | /admin/api/runtime-info | 获取实际运行位置、版本、Commit 和安装一致性 |
 | POST | /admin/api/deploy-update | 启动安全部署、重启、健康检查和失败回滚 |
@@ -480,6 +515,24 @@ API 端点：
 24 小时，`emergency_continue_until` 到期后无需重启即自动恢复原保护。该功能不会增加
 官方额度，剩余 10% 仍可能被快速耗尽。
 
+#### 成本与预算
+
+`model-prices.json` 是可更新的本地估算目录，单位为 USD / 1,000,000 Tokens。管理后台
+可修改价格并显示每个 Provider 的请求累计、今日与本月估算。价格不会读取或修改真实
+账单，初始估算值仅用于本地治理，使用前应按服务商最新价格核对。
+
+`provider_budgets` 支持为 `openai-api`、`deepseek`、`relay:<id>` 或 `relay:*` 设置：
+
+```json
+{
+  "openai-api": { "daily_usd": 2, "monthly_usd": 30, "action": "fallback" },
+  "relay:*": { "daily_usd": 1, "monthly_usd": 15, "action": "stop" }
+}
+```
+
+`fallback` 会在显式回退计划或 `auto*` 计划中跳过超预算线路；没有后续线路时仍返回
+可诊断的 `402 budget_exceeded`。`stop` 会立即停止请求，不调用上游。
+
 配置文件支持以下字段（均可通过管理后台修改）：
 | 字段 | 说明 |
 |---|---|
@@ -493,6 +546,10 @@ API 端点：
 | openai_api_responses_url | OpenAI Responses 地址（可选） |
 | openai_api_chat_completions_url | OpenAI Chat Completions 地址（可选） |
 | default_model | 默认模型 |
+| cross_provider_fallback_enabled | 是否显式开启请求级跨 Provider 回退 |
+| fallback_chain | Provider 与具体模型组成的有序回退链 |
+| fallback_statuses | 允许进入下一 Provider 的 HTTP 状态 |
+| provider_budgets | Provider 日/月 USD 预算及 fallback/stop 动作 |
 
 
 ```json

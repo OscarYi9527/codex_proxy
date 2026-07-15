@@ -83,10 +83,10 @@ export async function handleOpenAIApi(req, res, body, resolved) {
     })
   }
 
-  if (isStream) return streamChatCompletionToResponses(upstreamResp, res, { ...body, model: resolved.model })
+  if (isStream) return streamChatCompletionToResponses(upstreamResp, res, { ...body, model: resolved.model }, { provider })
 
   const result = await upstreamResp.json()
-  recordUsage(resolved.model, 'openai-api',
+  recordUsage(resolved.model, provider,
     result.usage?.prompt_tokens || 0,
     result.usage?.completion_tokens || 0)
   saveStats()
@@ -122,6 +122,6 @@ export async function handleOpenAIApiChatCompletions(req, res, body, resolved) {
   requestLog(req, `chat-completions model=${resolved.model} body_model=${resolved.bodyModel || '-'} thread=${resolved.threadId || '-'} openai_api_model=${upstreamModel} status=${upstreamResp.status}`)
 
   return pipeResponsesUpstream(upstreamResp, res, {
-    onBody: (u) => { recordUsage(resolved.model, 'openai-api', u.prompt_tokens ?? u.input_tokens, u.completion_tokens ?? u.output_tokens); saveStats() }
+    onBody: (u) => { recordUsage(resolved.model, provider, u.prompt_tokens ?? u.input_tokens, u.completion_tokens ?? u.output_tokens); saveStats() }
   })
 }

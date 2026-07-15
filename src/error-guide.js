@@ -104,6 +104,12 @@ const ERROR_TYPE_OVERRIDES = {
     meaning: '单个请求已按安全上限尝试两个账号，但均因登录、网络或上游错误失败。',
     causes: ['两个候选账号均发生 Token 刷新、网络、鉴权或上游连接错误'],
     actions: ['查看错误详情中的 account_attempts 和 last_error', '检查账号登录状态与网络，不要立即连续重试']
+  },
+  budget_exceeded: {
+    title: '线路预算已达到上限',
+    meaning: '本地成本治理阻止继续使用已达到日/月预算的 API 或中转线路。',
+    causes: ['对应 Provider 的本地估算成本已达到配置的每日或每月上限'],
+    actions: ['在系统设置检查成本报告和预算', '按策略切换到免费订阅线路，或明确调整预算后再继续']
   }
 }
 

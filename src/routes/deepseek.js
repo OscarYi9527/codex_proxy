@@ -114,6 +114,7 @@ export async function handleDeepSeekChatCompletions(req, res, body, resolved) {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', ...proxyMetaHeaders(res) })
     const decoder = new TextDecoder()
     let buffer = ''
+    const streamUsage = { input_tokens: 0, output_tokens: 0 }
     for await (const chunk of upstream.body) {
       buffer += decoder.decode(chunk, { stream: true }).replace(/\r\n/g, '\n')
       let boundary
@@ -124,7 +125,12 @@ export async function handleDeepSeekChatCompletions(req, res, body, resolved) {
         if (!data || data === '[DONE]') continue
         try {
           const ev = JSON.parse(data)
-          if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
+          if (ev.type === 'message_start' && ev.message?.usage) {
+            streamUsage.input_tokens = Number(ev.message.usage.input_tokens || 0)
+            streamUsage.output_tokens = Number(ev.message.usage.output_tokens || 0)
+          } else if (ev.type === 'message_delta' && ev.usage) {
+            streamUsage.output_tokens = Number(ev.usage.output_tokens || streamUsage.output_tokens)
+          } else if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
             const chunk = {
               id: ev.index != null ? `chatcmpl-${ev.index}` : 'chatcmpl-0',
               object: 'chat.completion.chunk',
@@ -146,6 +152,8 @@ export async function handleDeepSeekChatCompletions(req, res, body, resolved) {
       }
     }
     if (!res.writableEnded) res.end('data: [DONE]\n\n')
+    recordUsage(resolved.model, 'deepseek', streamUsage.input_tokens, streamUsage.output_tokens)
+    saveStats()
     return
   }
 

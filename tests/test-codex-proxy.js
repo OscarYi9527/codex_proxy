@@ -9,10 +9,10 @@ import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurren
 import { proxyConfig, atomicWriteJson, configForSettingsSnapshot, mergeAccountBackup, mergeSettingsSnapshot, orderChatgptAccounts, renameChatgptAccountInList } from '../src/config.js'
 import { assertCircuitAvailable, getCircuitStates, recordCircuitResult, resetCircuits } from '../src/circuit-breaker.js'
 import { fetchWithRetry, proxyMetaHeaders, retryAfterMs } from '../src/server-utils.js'
-import { redactSecrets } from '../src/logger.js'
+import { redactSecrets, summarizeError } from '../src/logger.js'
 import { createServer } from '../src/server.js'
 import { findDuplicateAccount, findPrivateBrowser, parseDeviceAuthOutput, privateBrowserArgs, publicProxyConfig } from '../src/admin.js'
-import { acquireActiveAccountWithRetry, refreshBelowReserveAccounts } from '../src/routes/chatgpt-sub.js'
+import { acquireActiveAccountWithRetry, chatGptAccountCircuitKey, refreshBelowReserveAccounts } from '../src/routes/chatgpt-sub.js'
 import { getRouteDecisions, recordRouteDecision, resetRouteDecisions } from '../src/route-decisions.js'
 import { decryptConfigSecrets, encryptConfigSecrets, isEncryptedSecret } from '../src/credential-store.js'
 import { getProviderHealth, recordProviderOutcome, resetProviderHealth } from '../src/provider-health.js'
@@ -457,7 +457,7 @@ describe('额度感知和会话粘性账号选择', () => {
     ]
     try {
       assert.strictEqual(accountRemainingPercent(proxyConfig.chatgptAccounts[0]), 5)
-      assert.strictEqual(pickActiveAccount().id, 'high')
+      assert.strictEqual(pickActiveAccount(null, { strategy: 'headroom' }).id, 'high')
     } finally {
       proxyConfig.chatgptAccounts = original
     }
@@ -638,6 +638,16 @@ describe('Provider 熔断器', () => {
     assert.strictEqual(getCircuitStates()[0].state, 'closed')
     resetCircuits()
   })
+
+  it('ChatGPT 账号熔断彼此隔离', () => {
+    resetCircuits()
+    const first = chatGptAccountCircuitKey('account-a')
+    const second = chatGptAccountCircuitKey('account-b')
+    for (let i = 0; i < 3; i++) recordCircuitResult(first, { error: new Error('network failed') })
+    assert.throws(() => assertCircuitAvailable(first), /circuit/)
+    assert.doesNotThrow(() => assertCircuitAvailable(second))
+    resetCircuits()
+  })
 })
 
 describe('稳定重试策略', () => {
@@ -675,6 +685,35 @@ describe('稳定重试策略', () => {
     }, 2)
     assert.strictEqual(response.status, 429)
     assert.strictEqual(calls, 1)
+  })
+
+  it('重试中的失败只在最终失败时计入一次熔断', async () => {
+    resetCircuits()
+    let calls = 0
+    await assert.rejects(
+      fetchWithRetry(async () => {
+        calls += 1
+        throw new Error('fetch failed')
+      }, 'https://example.test', { circuitKey: 'retry-once' }, 2),
+      /fetch failed/
+    )
+    assert.strictEqual(calls, 2)
+    const [circuit] = getCircuitStates()
+    assert.strictEqual(circuit.name, 'retry-once')
+    assert.strictEqual(circuit.failures, 1)
+    assert.strictEqual(circuit.state, 'closed')
+    resetCircuits()
+  })
+
+  it('上游错误诊断包含脱敏的 cause 与重试信息', () => {
+    const cause = Object.assign(new Error('socket reset with Bearer secret-token'), { code: 'ECONNRESET' })
+    const error = new Error('fetch failed', { cause })
+    error.proxyRetry = { attempts: 2, maxAttempts: 2, urlOrigin: 'https://chatgpt.com' }
+    const summary = summarizeError(error)
+    assert.match(summary, /fetch failed/)
+    assert.match(summary, /ECONNRESET/)
+    assert.match(summary, /attempts=2\/2/)
+    assert.doesNotMatch(summary, /secret-token/)
   })
 
   it('账号短暂忙碌时进入队列并在释放后原子占用', async () => {

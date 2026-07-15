@@ -3,6 +3,7 @@
 
 import { assertCircuitAvailable, recordCircuitResult } from './circuit-breaker.js'
 import { recordProviderOutcome } from './provider-health.js'
+import { summarizeError } from './logger.js'
 
 const MAX_BODY_BYTES = 16 * 1024 * 1024
 
@@ -95,11 +96,28 @@ export async function fetchWithRetry(fetchImpl, url, options, maxAttempts = 5) {
   let lastError
   const {
     circuitKey = null,
+    providerKey = circuitKey,
     retryStatuses = [429, 502, 503, 504],
     attemptTimeoutMs = 0,
     maxRetryDelayMs = 30_000,
     ...fetchOptions
   } = options || {}
+  const urlOrigin = (() => {
+    try { return new URL(url).origin } catch { return null }
+  })()
+  function recordFinalResult(result) {
+    recordCircuitResult(circuitKey, result)
+    recordProviderOutcome(providerKey, {
+      ...result,
+      source: 'request'
+    })
+  }
+  function attachRetryDiagnostics(error, attempts) {
+    if (error && typeof error === 'object') {
+      error.proxyRetry = { attempts, maxAttempts, urlOrigin }
+    }
+    return error
+  }
   const RETRYABLE_ERRORS = [
     'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND',
     'EAI_AGAIN', 'EPIPE', 'UND_ERR_SOCKET', 'fetch failed',
@@ -119,19 +137,19 @@ export async function fetchWithRetry(fetchImpl, url, options, maxAttempts = 5) {
     const attemptStartedAt = Date.now()
     try {
       const response = await fetchImpl(url, { ...fetchOptions, signal: attemptAbort.signal })
-      recordCircuitResult(circuitKey, { status: response.status })
-      recordProviderOutcome(circuitKey, {
-        status: response.status,
-        latencyMs: Date.now() - attemptStartedAt,
-        source: 'request'
-      })
       if (retryStatuses.includes(response.status) && attempt < maxAttempts - 1) {
         const body = await response.text().catch(() => '')
         await response.body?.cancel().catch(() => {})
         retryDelayMs = Math.min(maxRetryDelayMs, retryAfterMs(response) ?? retryDelayMs)
         lastError = new Error(`Upstream returned HTTP ${response.status} (attempt ${attempt + 1}/${maxAttempts}): ${body.slice(0, 200)}`)
-        console.error('[codex-proxy]', lastError.message)
+        console.error('[codex-proxy] retrying upstream response: %s', summarizeError(attachRetryDiagnostics(lastError, attempt + 1)))
       } else {
+        // One client request is one circuit observation. Intermediate retry
+        // failures must not trip a provider or account on their own.
+        recordFinalResult({
+          status: response.status,
+          latencyMs: Date.now() - attemptStartedAt
+        })
         // The signal must remain active while a streaming response body is
         // consumed. Its unref'ed timer cleans itself up after the deadline.
         preserveSignalForResponseBody = true
@@ -140,19 +158,20 @@ export async function fetchWithRetry(fetchImpl, url, options, maxAttempts = 5) {
     } catch (error) {
       lastError = error
       const callerAborted = fetchOptions.signal?.aborted === true
-      if (error.code !== 'CIRCUIT_OPEN' && !callerAborted) recordCircuitResult(circuitKey, { error })
       if (error.code !== 'CIRCUIT_OPEN' && !callerAborted) {
-        recordProviderOutcome(circuitKey, {
-          latencyMs: Date.now() - attemptStartedAt,
-          error,
-          source: 'request'
-        })
+        const willRetry = attempt < maxAttempts - 1 && isRetryableError(error)
+        if (!willRetry) {
+          recordFinalResult({
+            latencyMs: Date.now() - attemptStartedAt,
+            error
+          })
+        }
       }
       if (callerAborted) throw error
       if (attempt < maxAttempts - 1 && isRetryableError(error)) {
-        console.error('[codex-proxy] fetch error (attempt %d/%d): %s', attempt + 1, maxAttempts, error.message)
+        console.error('[codex-proxy] retrying upstream error: %s', summarizeError(attachRetryDiagnostics(error, attempt + 1)))
       } else {
-        throw error
+        throw attachRetryDiagnostics(error, attempt + 1)
       }
     } finally {
       if (!preserveSignalForResponseBody) attemptAbort.cleanup()

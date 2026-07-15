@@ -42,6 +42,29 @@ export function redactSecrets(value) {
     .replace(/("(?:api_?key|access_?token|refresh_?token|authorization)"\s*:\s*")[^"]+(")/gi, '$1[REDACTED]$2')
 }
 
+// Network libraries commonly place the useful failure details in `cause`.
+// Keep that information bounded and redacted before it reaches request logs.
+export function summarizeError(error, maxDepth = 2) {
+  const parts = []
+  const visited = new Set()
+  let current = error
+  for (let depth = 0; current && depth <= maxDepth && !visited.has(current); depth++) {
+    visited.add(current)
+    const label = depth === 0 ? 'error' : `cause${depth}`
+    const name = current.name && current.name !== 'Error' ? `${current.name}:` : ''
+    const code = current.code ? ` code=${current.code}` : ''
+    const message = String(current.message || current).replace(/\s+/g, ' ').slice(0, 300)
+    parts.push(`${label}=${name}${message}${code}`)
+    current = current.cause
+  }
+  const retry = error?.proxyRetry
+  if (retry) {
+    const origin = retry.urlOrigin ? ` origin=${retry.urlOrigin}` : ''
+    parts.push(`attempts=${retry.attempts}/${retry.maxAttempts}${origin}`)
+  }
+  return redactSecrets(parts.join(' | '))
+}
+
 export function requestLog(req, extra = '') {
   if (!extra && isNoisyAdminRead(req)) return
   const ts = new Date().toISOString()

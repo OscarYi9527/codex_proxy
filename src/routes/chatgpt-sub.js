@@ -2,7 +2,7 @@
 // Handles gpt-* models via ChatGPT backend (uses Codex auth headers)
 
 import { proxyConfig } from '../config.js'
-import { requestLog } from '../logger.js'
+import { requestLog, summarizeError } from '../logger.js'
 import { sendJson, pipeResponsesUpstream, fetchWithRetry, setProxyMeta } from '../server-utils.js'
 import { recordUsage, recordAccountOutcome, saveStats } from '../stats.js'
 import { chinaFetch, withChinaDispatcher } from '../china-fetch.js'
@@ -18,6 +18,10 @@ const BUSY_ACCOUNT_RETRY_MS = 500
 const BUSY_ACCOUNT_RETRY_COUNT = 120
 const QUOTA_RECHECK_MIN_AGE_MS = 2 * 60 * 1000
 const accountWaitQueue = []
+
+export function chatGptAccountCircuitKey(accountId) {
+  return accountId ? `chatgpt-sub:account:${accountId}` : 'chatgpt-sub'
+}
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -263,7 +267,10 @@ async function sendWithAccountRotation(req, chatGptFetch, upstreamBody, { model,
         headers: buildAccountPoolHeaders(req, account, { includeResponsesLite }),
         body: upstreamBody,
         signal: upstreamSignalFor(req),
-        circuitKey: 'chatgpt-sub',
+        circuitKey: chatGptAccountCircuitKey(account.id),
+        // Provider health stays aggregated while availability decisions are
+        // isolated to the account actually used for this attempt.
+        providerKey: 'chatgpt-sub',
         // Let account rotation handle quota responses immediately rather than
         // retrying a known-limited account.
         retryStatuses: [502, 503, 504]
@@ -332,7 +339,7 @@ async function sendWithAccountRotation(req, chatGptFetch, upstreamBody, { model,
         errorType: error.retryable === false ? 'authentication' : 'network',
         latencyMs: Date.now() - attemptStartedAt
       })
-      requestLog(req, `chatgpt-account=${account.id} network_error=${error.message} rotate`)
+      requestLog(req, `chatgpt-account=${account.id} network_error=${summarizeError(error)} rotate`)
       account = await acquireActiveAccountWithRetry(req, model, tried, sessionKey, chatGptFetch)
     }
   }
@@ -431,7 +438,8 @@ export async function handleChatGptSub(req, res, body, resolved) {
       headers: chatGptHeaders(req, { includeResponsesLite: tryResponsesLite }),
       body: upstreamBody,
       signal: upstreamSignalFor(req),
-      circuitKey: 'chatgpt-sub'
+      circuitKey: chatGptAccountCircuitKey(req.headers['chatgpt-account-id']),
+      providerKey: 'chatgpt-sub'
     })
 
     upstream = await fetchWithRetry(chatGptFetch, proxyConfig.chatgptResponsesUrl, upstreamOptions)
@@ -510,7 +518,8 @@ export async function handleChatGptSubChatCompletions(req, res, body, resolved) 
       headers: chatGptHeaders(req, { includeResponsesLite: false }),
       body: upstreamBody,
       signal: upstreamSignalFor(req),
-      circuitKey: 'chatgpt-sub'
+      circuitKey: chatGptAccountCircuitKey(req.headers['chatgpt-account-id']),
+      providerKey: 'chatgpt-sub'
     })
     upstream = await fetchWithRetry(chatGptFetch, proxyConfig.chatgptResponsesUrl, upstreamOptions)
   }

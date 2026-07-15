@@ -29,25 +29,26 @@
   修改项和测试证据。
 - [x] 确认 Gateway 稳定起点为 `feature/custom-api-urls@e3ed1d6`；新分支使用
   `feature/ai-editor-account-gateway` 并注明堆叠依赖。
-- [ ] 不重复开发已经完成的额度、账号路由、诊断、成本和管理模块。
+- [x] 不重复开发已经完成的额度、账号路由、诊断、成本和管理模块。
 
 ### 阶段 1：Gateway / Edge 基础框架
 
 - [x] 从 `feature/custom-api-urls@e3ed1d6` 创建并推送堆叠分支
   `feature/ai-editor-account-gateway`。
-- [ ] 增加 `standalone`、`edge`、`gateway` 三种隔离运行模式，并保持 standalone 为默认。
-- [ ] 建立 TypeScript Gateway、React 管理页面、SQLite 数据层和 PostgreSQL 适配边界。
-- [ ] Gateway 使用 `127.0.0.1:47920`，Edge 使用 `127.0.0.1:47921`，不得读写共享 `47892`。
-- [ ] 提供 Gateway/Edge 独立启动、停止、单实例保护、隔离数据目录和 `/live`。
-- [ ] 保证 standalone 全部现有回归测试继续通过。
+- [x] 增加 `standalone`、`edge`、`gateway` 三种隔离运行模式，并保持 standalone 为默认。
+- [x] 建立 TypeScript Gateway、React 管理页面、SQLite 数据层和 PostgreSQL 适配边界。
+- [x] Gateway 使用 `127.0.0.1:47920`，Edge 使用 `127.0.0.1:47921`，不得读写共享 `47892`。
+- [x] 提供 Gateway/Edge 独立启动、停止、单实例保护、隔离数据目录和 `/live`。
+- [x] 保证 standalone 全部现有回归测试继续通过。
+- [x] 完成 T002–T007 与 T009–T021；T008 的真实密钥后端随产品认证阶段实现。
 
 ### 阶段 2：先向 Oscar 提供 Mock 合同
 
-- [ ] 实现 `GET /ai-editor/status` 和状态重试、handoff、webview ticket、logout、models 最小接口。
-- [ ] Mock 支持 `ready`、`login_required`、`account_unavailable`、
+- [x] 实现 `GET /ai-editor/status` 和状态重试、handoff、webview ticket、logout、models 最小接口。
+- [x] Mock 支持 `ready`、`login_required`、`account_unavailable`、
   `service_unavailable`、`password_change_required`。
-- [ ] 每次交付提供分支、SHA、启动命令、接口地址、Mock 切换方式、已实现和未实现接口。
-- [ ] Oscar 可以不依赖真实账号服务开发账户菜单、状态栏、Turn 门禁和管理 Webview。
+- [x] 首轮交付文档提供分支、启动命令、接口地址、Mock 切换方式、已实现和未实现接口。
+- [x] Oscar 可以不依赖真实账号服务开发账户菜单、状态栏、Turn 门禁和管理 Webview。
 
 ### 阶段 3–4：产品账号与 Edge
 
@@ -80,6 +81,8 @@
 
 - [ ] 增加 Gateway 单元测试、API 合同测试、Edge 转发、Token 轮换/重放、组织越权、
   并发积分结算、凭据泄露和 React 页面测试。
+- [x] 第一轮已覆盖公共模块、配置、SQLite/PostgreSQL repository、Gateway Mock、
+  Edge nonce/handoff 防重放、三模式和开发脚本生命周期。
 - [ ] Gateway/admin 新增代码覆盖率不低于 80%。
 - [ ] 每次交付固定提供分支、SHA、启动命令、数据库迁移、接口变化、测试结果和已知问题。
 - [ ] 所有合并先在独立 integration worktree 完成备份、冲突审计、全量测试和回滚验证。

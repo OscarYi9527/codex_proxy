@@ -2,6 +2,23 @@
 
 本项目遵循语义化版本。日期使用北京时间。
 
+## [Unreleased]
+
+### Added
+
+- 新增隔离的 TypeScript/Fastify Gateway、React/Vite 管理页面骨架，以及 Kysely
+  SQLite/PostgreSQL 双方言 schema、迁移和 repository contract。
+- 新增固定监听 `127.0.0.1:47920/47921` 的 Gateway/Edge 第一轮 Mock，覆盖账号状态、
+  状态重试、一次性 handoff、防重放、Webview ticket、退出和安全模型列表。
+- 新增 AI Editor 开发启动、停止和确认式重置脚本；强制隔离数据根、PID 归属验证并拒绝
+  共享端口 `47892`。
+
+### Changed
+
+- 根入口支持 standalone（默认）与 Edge 显式模式，发布门禁扩展为 Gateway、React、
+  隔离脚本测试及两个生产构建。
+- Node.js 工程基线调整为 22.19 及以上，以匹配 Vite 7 和 Gateway 工具链。
+
 ## [2.4.1] - 2026-07-15
 
 ### Added

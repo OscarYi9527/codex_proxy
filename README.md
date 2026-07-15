@@ -116,7 +116,7 @@ DeepSeek 路由执行以下转换：
 
 - Windows 10/11
 - PowerShell 5.1 或更高版本
-- Node.js 20 或更高版本
+- Node.js 22.19 或更高版本（Gateway 管理前端使用 Vite 7）
 - 已安装可用的全局 Codex CLI，或已安装包含原生 `codex.exe` 的 OpenAI Codex VS Code 扩展
 - 使用 GPT 订阅模式时，已通过 Codex 完成 ChatGPT 登录
 - 使用 GPT `*-API` 模型时，有有效的 `OPENAI_API_KEY`
@@ -341,6 +341,59 @@ powershell -ExecutionPolicy Bypass -File `
 powershell -ExecutionPolicy Bypass -File `
   "$HOME\.codex-local-multi-proxy\uninstall-codex-proxy-autostart.ps1"
 ```
+
+## AI Editor Gateway / Edge 开发基线
+
+当前分支提供第一轮隔离 Mock，供 Oscar 在不依赖真实账号、积分或 Provider 的情况下开发
+Code 端。该分支堆叠依赖 `feature/custom-api-urls@e3ed1d6`，不能先于依赖分支单独合并。
+接口事实来源仍是 `My_Code/specs/002-ai-editor-account-gateway/contracts/`。
+
+```powershell
+# 安装 workspace 依赖并启动 Gateway + Edge
+npm install
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  .\tools\start-ai-editor-dev.ps1 -Mode all
+
+# 停止；只会处理当前仓库写入隔离数据根的 PID
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  .\tools\stop-ai-editor-dev.ps1 -Mode all
+```
+
+固定开发地址：
+
+```text
+Gateway：http://127.0.0.1:47920
+Edge：   http://127.0.0.1:47921
+数据根： .ai-editor-dev/default/
+```
+
+Gateway Mock Bearer Token 为 `mock-access-token`、`mock-level2-token` 和
+`mock-level1-token`。Edge 本机 nonce 每次启动随机生成在隔离数据根的
+`edge-local-nonce.secret`，请求 `/ai-editor/*` 时通过 `X-AI-Editor-Local-Nonce`
+发送；nonce、ticket 和 handoff 凭据不得提交或写入日志。开发脚本会拒绝共享端口
+`47892`、公开监听地址和仓库根数据目录。
+
+第一轮 Mock 覆盖：
+
+- Gateway：账号状态/重试、Webview ticket、退出和模型列表。
+- Edge：状态/重试、一次性 handoff、防重放、Webview ticket、退出和模型列表。
+- 状态：`ready`、`login_required`、`account_unavailable`、
+  `service_unavailable`、`password_change_required`。
+
+启动时可用 `-MockState service_unavailable` 指定初始状态。开发环境还可以携带本机
+nonce 调用 `POST /ai-editor/mock/state` 动态切换状态；该接口仅在开发脚本显式设置
+`AI_EDITOR_ENABLE_MOCK_CONTROL=true` 时存在。重置数据必须同时给出规范化后的同一路径：
+
+```powershell
+$root = [IO.Path]::GetFullPath(".ai-editor-dev\default")
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  .\tools\reset-ai-editor-dev.ps1 `
+  -DataRoot $root -ConfirmDataRoot $root -Force
+```
+
+Gateway 默认使用 SQLite（WAL、外键和 5 秒 busy timeout），生产适配边界支持
+PostgreSQL。切换 PostgreSQL 时设置 `AI_EDITOR_GATEWAY_DB_DIALECT=postgres` 与
+`AI_EDITOR_GATEWAY_POSTGRES_URL`。当前数据库迁移只是基础 schema，不包含真实生产账号。
 
 ## HTTP 接口
 
@@ -608,17 +661,22 @@ Invoke-RestMethod http://127.0.0.1:47892/admin/api/chatgpt-login/preflight
 
 ```powershell
 npm test
+npm run gateway:test
+npm run admin:test
+npm run test:dev-scripts
 npm run check
+npm run gateway:build
+npm run admin:build
 npm run release:check
 git diff --check
 ```
 
 自动化测试使用本地 mock，不会消耗真实模型额度。
 
-`npm run release:check` 会核对 package/lock/README/CHANGELOG 版本、运行文件
-清单、JavaScript 与 PowerShell 语法，并执行全量测试和空白错误检查。旧配置或
-统计首次加载时会自动补齐当前 schema；仅在确有变化时写回，并先把原始文件保存到
-`.migration-backups/`。
+`npm run release:check` 会核对 package/lock/README/CHANGELOG 版本、运行文件清单、
+JavaScript 与 PowerShell 语法，并执行 standalone/Edge、Gateway、React、隔离脚本测试、
+TypeScript 检查、生产构建和空白错误检查。旧配置或统计首次加载时会自动补齐当前
+schema；仅在确有变化时写回，并先把原始文件保存到 `.migration-backups/`。
 
 ## 常见问题
 
@@ -724,6 +782,11 @@ VS Code 兼容层会把 `chatgpt.cliExecutable` 指向 `codex-vscode-launcher.ex
 ## 仓库结构
 
 - `src/server.js`：HTTP 服务、模型路由和管理 API 入口。
+- `src/launcher.js` / `src/mode.js`：默认 standalone 与隔离 Edge 运行模式入口。
+- `src/edge/`：仅监听本机的 AI Editor Edge 与第一轮 Mock。
+- `gateway/`：Fastify/TypeScript Gateway、Kysely 双数据库边界、迁移和测试。
+- `gateway/admin-web/`：React/Vite 管理页面骨架。
+- `tools/*-ai-editor-dev.ps1`：47920/47921 隔离启动、停止和确认式数据重置。
 - `src/chatgpt-accounts.js`：账号池、额度、Token、并发租约和冷却。
 - `src/routes/`：ChatGPT、OpenAI API、DeepSeek 和中转节点处理器。
 - `src/admin.html` / `src/admin_app.js` / `src/admin_modules/`：本地管理后台、账号池、分析、设置和新手教程。

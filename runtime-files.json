@@ -52,6 +52,7 @@
     "src/routes/thread-route.js",
     "src/routes/ping.js",
     "codex-safe.ps1",
+    "ensure-codex-proxy.ps1",
     "codex-mode.ps1",
     "codex-env-proxy.ps1",
     "set-codex-route.ps1",

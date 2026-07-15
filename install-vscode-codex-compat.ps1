@@ -71,6 +71,8 @@ public static class CodexVSCodeLauncher
             string catalog = Path.Combine(launcherDir, "codex-models.json");
             string realCodex = FindRealCodex(launcherPath);
 
+            EnsureProxyReady(launcherDir);
+
             var forwarded = new List<string>
             {
                 "-c", "model=\"gpt-5.6-sol\"",
@@ -98,6 +100,33 @@ public static class CodexVSCodeLauncher
         {
             Console.Error.WriteLine("[codex-vscode-launcher] " + ex.Message);
             return 1;
+        }
+    }
+
+    private static void EnsureProxyReady(string launcherDir)
+    {
+        string ensureScript = Path.Combine(launcherDir, "ensure-codex-proxy.ps1");
+        if (!File.Exists(ensureScript)) return;
+
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = "-NoProfile -ExecutionPolicy Bypass -File " + QuoteArgument(ensureScript),
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            var proc = Process.Start(psi);
+            if (!proc.WaitForExit(60000))
+            {
+                Console.Error.WriteLine("[codex-vscode-launcher] ensure-codex-proxy.ps1 timed out; continuing anyway");
+                try { proc.Kill(); } catch { }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine("[codex-vscode-launcher] ensure-codex-proxy.ps1 failed: " + ex.Message);
         }
     }
 

@@ -59,7 +59,7 @@ function Invoke-ProxyStart {
         throw "Missing installed start script: $startScript"
     }
     & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') `
-        -NoProfile -ExecutionPolicy Bypass -File $startScript
+        -NoProfile -ExecutionPolicy Bypass -File $startScript | Out-Null
 }
 
 function Request-ProxyRestart {
@@ -209,6 +209,8 @@ try {
     $runtime = $null
     if ($NoRestart) {
         Write-Step 'deployment completed without restart'
+    } elseif ($changed.Count -eq 0) {
+        Write-Step 'already synchronized; no restart needed'
     } else {
         $previousPid = Restart-InstalledProxy
         $runtime = Wait-ProxyHealthy $commit $true $previousPid

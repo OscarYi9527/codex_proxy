@@ -166,19 +166,15 @@ if (-not $selectedRoute) {
 
 $codexExe = Find-CodexExe
 
-if ($selectedRoute -eq 'deepseek' -and -not (Test-Proxy) -and $env:CODEX_SAFE_NO_START -ne '1') {
-    try {
-        if (-not $env:DEEPSEEK_API_KEY) { throw 'DEEPSEEK_API_KEY is not set.' }
-        & (Join-Path $env:SystemRoot 'System32\cscript.exe') //nologo (Join-Path $proxyDir 'start-codex-proxy.vbs')
-        for ($attempt = 0; $attempt -lt 20 -and -not (Test-Proxy); $attempt++) {
-            Start-Sleep -Milliseconds 250
-        }
-        $listener = Get-NetTCPConnection -State Listen -LocalPort 47892 -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($listener) {
-            $listener.OwningProcess | Set-Content -Path (Join-Path $proxyDir '.codex-proxy.pid') -Encoding ascii
-        }
-    } catch {
-        Write-Warning "Local multi-upstream proxy unavailable: $($_.Exception.Message)"
+# ensure-codex-proxy.ps1 covers the NO_PROXY/localhost bypass, syncing the
+# installed proxy with any source-workspace changes, starting it if it's
+# down, and making sure the watchdog is running. Run it before Test-Proxy,
+# the health monitor job, and codex.exe itself, since they all inherit this
+# process's environment. Only the deepseek route depends on the local proxy.
+if ($selectedRoute -eq 'deepseek') {
+    $ensureScript = Join-Path $proxyDir 'ensure-codex-proxy.ps1'
+    if (Test-Path -LiteralPath $ensureScript) {
+        & $ensureScript
     }
 }
 

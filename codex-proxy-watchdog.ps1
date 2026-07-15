@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 $proxyDir = $PSScriptRoot
-$startScript = Join-Path $proxyDir 'start-codex-proxy.ps1'
+$ensureScript = Join-Path $proxyDir 'ensure-codex-proxy.ps1'
 $pidFile = Join-Path $proxyDir '.codex-proxy-watchdog.pid'
 $logFile = Join-Path $proxyDir 'codex-proxy-watchdog.log'
 $healthUrl = 'http://127.0.0.1:47892/live'
@@ -41,7 +41,7 @@ try {
         if ($failedChecks -ge 2) {
             Write-WatchdogLog 'proxy unhealthy; starting recovery'
             try {
-                & $startScript
+                & $ensureScript
                 Write-WatchdogLog 'proxy recovery completed'
             } catch {
                 Write-WatchdogLog "proxy recovery failed: $($_.Exception.Message)"

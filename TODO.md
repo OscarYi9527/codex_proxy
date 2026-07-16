@@ -10,7 +10,7 @@
   `F:\AI\codex-collaboration\codex_proxy-black`，迁移前不得影响正在运行的 Proxy。
 - [x] 编写 `docs/COLLABORATION_WORKSPACE.md`，明确同事仓库、remote、worktree 和合并门禁。
 - [x] 已记录同事仓库 `OscarYi9527/My_Code`、分支 `codex/account-gateway-mvp`
-  和交付 commit `788f3921`。
+  和最新合同交付 commit `0da3497f1`。
 - [x] 已将同事仓库克隆到 `F:\AI\codex-collaboration\My_Code`，并确认工作区干净。
 - [x] 已确认 `My_Code` 与 `codex_proxy-black` 没有共同 Git 历史；禁止将两个根仓库
   直接合并，后续通过 API 合同和端到端测试完成产品集成。
@@ -52,12 +52,22 @@
 
 ### 阶段 3–4：产品账号与 Edge
 
-- [ ] 实现一次性管理员临时密码、首次强制改密、邮箱、邀请码注册和最后一个一级管理员保护。
-- [ ] 实现浏览器登录、PKCE、随机 state、随机回调端口和一次性授权码。
-- [ ] Access Token 有效期 5 分钟；Refresh Token 滚动 30 天，并检测重放后撤销设备会话。
-- [ ] 未登录、禁用或到期账号不能发送新 Turn，但已接受 Turn 可以完成。
-- [ ] Edge 只保存产品账号 Refresh Token；Access Token 仅存内存，不保存任何中央上游凭据。
-- [ ] Windows 使用 DPAPI、macOS 使用 Keychain；退出后 `/v1` 返回未登录且 `/live` 可访问。
+- [x] 实现一次性管理员临时密码、首次强制改密、邮箱和邀请码注册；最后一个一级管理员
+  保护随 T075–T078 管理 API 完成。
+- [x] 实现浏览器登录、PKCE、随机 state、随机回调端口和一次性授权码。
+- [x] Access Token 有效期 5 分钟；Refresh Token 滚动 30 天，并检测重放后撤销设备会话。
+- [x] 未登录、禁用、到期或待改密账号不能发送新 Turn；Gateway 转发与客户端 socket
+  解耦，为后续结算保留完成机会。
+- [x] Edge 只保存产品账号 Refresh Token；Access Token 仅存内存，不保存任何中央上游凭据。
+- [x] Windows 使用 DPAPI、macOS 使用 Keychain；退出后 `/v1` 返回未登录且 `/live` 可访问。
+
+### 阶段 4.5：真实模型和 Responses 链路
+
+- [x] 完成 T038–T046 的 Edge/Gateway 模型、Responses 和兼容 Chat Completions 转发。
+- [x] 捕获在途账号绑定，账号切换不会改写已接受 Turn 的 Access Token 和设备会话。
+- [x] 复用现有 Provider 路由模块，并用 Gateway 隔离存储根阻止读取共享 `47892` 数据。
+- [x] 动态模型目录只列出隔离 Gateway 已配置 Provider，并过滤 `gpt-mock`。
+- [ ] T047/T048 由 Oscar 使用真实订阅和非订阅 Provider 完成联合验收。
 
 ### 阶段 5–6：组织、权限、积分和并发风险
 
@@ -69,7 +79,8 @@
 
 ### 阶段 7–9：Provider、管理页面和审计保留
 
-- [ ] 将现有 ChatGPT、OpenAI API、DeepSeek、Relay、模型目录、智能路由、熔断和诊断接入 Gateway。
+- [x] 通过兼容适配器将现有 ChatGPT、OpenAI API、DeepSeek、Relay、模型目录和路由接入
+  Gateway；中央 Provider 管理 API、凭据轮换与角色化诊断仍待 T083–T092。
 - [ ] Edge、普通用户和二级管理员不能获取中央凭据、成本、熔断或 Provider 路由诊断。
 - [ ] React 页面覆盖普通用户、二级管理员和一级管理员能力，且越权不能只靠隐藏菜单。
 - [ ] Token 不进入 URL 或 `localStorage`，管理页面可安全嵌入 Code Webview。
@@ -83,6 +94,8 @@
   并发积分结算、凭据泄露和 React 页面测试。
 - [x] 第一轮已覆盖公共模块、配置、SQLite/PostgreSQL repository、Gateway Mock、
   Edge nonce/handoff 防重放、三模式和开发脚本生命周期。
+- [x] 增加真实 PKCE、Argon2id、授权码/Refresh Token 重放、DPAPI envelope、
+  单飞刷新、绑定切换、动态模型和非 Mock 本机 Relay 流式链路测试。
 - [ ] Gateway/admin 新增代码覆盖率不低于 80%。
 - [ ] 每次交付固定提供分支、SHA、启动命令、数据库迁移、接口变化、测试结果和已知问题。
 - [ ] 所有合并先在独立 integration worktree 完成备份、冲突审计、全量测试和回滚验证。

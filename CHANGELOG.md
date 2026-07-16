@@ -12,12 +12,20 @@
   状态重试、一次性 handoff、防重放、Webview ticket、退出和安全模型列表。
 - 新增 AI Editor 开发启动、停止和确认式重置脚本；强制隔离数据根、PID 归属验证并拒绝
   共享端口 `47892`，启动后执行 `/live` 健康门禁且失败时自动回滚。
+- 新增 AI Editor 真实 Authorization Code + PKCE 登录、Argon2id 密码/bootstrap、
+  5 分钟 Access Token、滚动 Refresh Token 重放撤销和设备会话。
+- 新增 Edge Windows DPAPI/macOS Keychain Refresh Token 存储、单飞刷新、60 秒单次
+  handoff、账号切换身份快照，以及真实模型/Responses/Chat Completions 转发。
+- 新增 Gateway 动态安全模型目录和现有 Provider 兼容适配器；真实链路测试使用隔离本机
+  Relay，明确排除 `gpt-mock`。
 
 ### Changed
 
 - 根入口支持 standalone（默认）与 Edge 显式模式，发布门禁扩展为 Gateway、React、
   隔离脚本测试及两个生产构建。
 - Node.js 工程基线调整为 22.19 及以上，以匹配 Vite 7 和 Gateway 工具链。
+- Gateway Provider 配置、统计、线程路由和健康数据改用隔离存储根，standalone 未设置
+  `CODEX_PROXY_STORAGE_ROOT` 时保持原有仓库根行为。
 
 ## [2.4.1] - 2026-07-15
 

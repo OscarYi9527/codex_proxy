@@ -344,9 +344,14 @@ powershell -ExecutionPolicy Bypass -File `
 
 ## AI Editor Gateway / Edge 开发基线
 
-当前分支提供第一轮隔离 Mock，供 Oscar 在不依赖真实账号、积分或 Provider 的情况下开发
-Code 端。该分支堆叠依赖 `feature/custom-api-urls@e3ed1d6`，不能先于依赖分支单独合并。
-接口事实来源仍是 `My_Code/specs/002-ai-editor-account-gateway/contracts/`。
+当前分支同时保留第一轮合同 Mock，并已加入 T023–T033 真实产品认证与安全本机绑定、
+T038–T046 真实模型目录和 Responses/Chat Completions 转发。该分支堆叠依赖
+`feature/custom-api-urls@e3ed1d6`，不能先于依赖分支单独合并。接口事实来源固定为：
+
+```text
+My_Code@0da3497f12e96bae58f9fe6b20a08833a0c3c2bd/
+  specs/002-ai-editor-account-gateway/contracts/
+```
 
 ```powershell
 # 安装 workspace 依赖并启动 Gateway + Edge
@@ -367,6 +372,28 @@ Edge：   http://127.0.0.1:47921
 数据根： .ai-editor-dev/default/
 ```
 
+未显式指定认证模式时，启动器默认使用 `real`。空数据库首次启动会在前台只显示一次
+固定登录名 `admin` 和高熵临时密码；完成系统浏览器 PKCE 登录后，必须立即修改密码并
+填写邮箱，之后才能访问 `/v1/models` 或发送 Turn。Access Token 仅有效 5 分钟，Edge
+只在内存保存 Access Token，并通过 Windows DPAPI CurrentUser 或 macOS Keychain 保存
+滚动 30 天的 Refresh Token。授权码、Refresh Token 和邀请码在 Gateway 数据库中只保存
+keyed digest；检测到 Refresh Token 重放时会撤销整个 Token family 和当前设备会话。
+
+真实模式的模型目录只返回隔离 Gateway 当前已配置且可用的 Provider 模型；`gpt-mock`
+会被明确过滤，不能作为真实 AI 链路验收证据。Gateway 通过兼容适配器复用现有 Provider、
+路由和流式协议模块，但配置、账号、统计、线程路由和健康数据全部写入当前
+`.ai-editor-dev/.../gateway/`，不会读取或复制共享 `47892` 的数据。Edge 会为每个 Turn
+附加五分钟 Access Token、设备会话和稳定 Turn ID，并在账号切换时保持已在途请求的旧
+身份快照。
+
+需要继续运行 Oscar 第一轮 Mock 脚本时，显式使用：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  .\tools\start-ai-editor-dev.ps1 -Mode all `
+  -AuthenticationMode mock -MockState ready
+```
+
 Gateway Mock Bearer Token 为 `mock-access-token`、`mock-level2-token` 和
 `mock-level1-token`。Edge 本机 nonce 每次启动随机生成在隔离数据根的
 `edge-local-nonce.secret`，请求 `/ai-editor/*` 时通过 `X-AI-Editor-Local-Nonce`
@@ -374,14 +401,14 @@ Gateway Mock Bearer Token 为 `mock-access-token`、`mock-level2-token` 和
 `47892`、公开监听地址和仓库根数据目录。启动命令只有在两个服务的 `/live` 均返回
 预期模式后才成功；任一服务启动失败时会按相反顺序停止本次已启动的进程。
 
-第一轮 Mock 覆盖：
+Mock 覆盖：
 
 - Gateway：账号状态/重试、Webview ticket、退出和模型列表。
 - Edge：状态/重试、一次性 handoff、防重放、Webview ticket、退出和模型列表。
 - 状态：`ready`、`login_required`、`account_unavailable`、
   `service_unavailable`、`password_change_required`。
 
-启动时可用 `-MockState service_unavailable` 指定初始状态。开发环境还可以携带本机
+Mock 启动时可用 `-MockState service_unavailable` 指定初始状态。开发环境还可以携带本机
 nonce 调用 `POST /ai-editor/mock/state` 动态切换状态；该接口仅在开发脚本显式设置
 `AI_EDITOR_ENABLE_MOCK_CONTROL=true` 时存在。重置数据必须同时给出规范化后的同一路径：
 
@@ -395,7 +422,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
 Gateway 默认使用 SQLite（WAL、外键和 5 秒 busy timeout），生产适配边界支持
 PostgreSQL。切换 PostgreSQL 时设置 `AI_EDITOR_GATEWAY_DB_DIALECT=postgres` 与
 `AI_EDITOR_GATEWAY_POSTGRES_URL`。两个方言通过同一个 `inTransaction` 边界执行原子
-业务操作。当前数据库迁移只是基础 schema，不包含真实生产账号。
+业务操作。当前阶段尚未完成 T049+ 的真实 Webview session，以及 T061+ 的积分风险预留、
+用量结算和中央 Provider 管理页面；不得把随机 Webview ticket 或尚未结算的流式测试当作
+这些后续任务的完成证据。
 
 ## HTTP 接口
 
@@ -785,8 +814,9 @@ VS Code 兼容层会把 `chatgpt.cliExecutable` 指向 `codex-vscode-launcher.ex
 
 - `src/server.js`：HTTP 服务、模型路由和管理 API 入口。
 - `src/launcher.js` / `src/mode.js`：默认 standalone 与隔离 Edge 运行模式入口。
-- `src/edge/`：仅监听本机的 AI Editor Edge 与第一轮 Mock。
-- `gateway/`：Fastify/TypeScript Gateway、Kysely 双数据库边界、迁移和测试。
+- `src/edge/`：仅监听本机的 AI Editor Edge、OS 安全存储、真实 handoff 与兼容 Mock。
+- `gateway/`：Fastify/TypeScript Gateway、真实产品认证、模型/Responses 路由、
+  Kysely 双数据库边界、迁移和测试。
 - `gateway/admin-web/`：React/Vite 管理页面骨架。
 - `tools/*-ai-editor-dev.ps1`：47920/47921 隔离启动、停止和确认式数据重置。
 - `src/chatgpt-accounts.js`：账号池、额度、Token、并发租约和冷却。
@@ -810,6 +840,7 @@ VS Code 兼容层会把 `chatgpt.cliExecutable` 指向 `codex-vscode-launcher.ex
 - [安全说明](SECURITY.md)
 - [后续计划](TODO.md)
 - [Oscar 第一轮 Gateway/Edge Mock 联调交接](docs/AI_EDITOR_GATEWAY_OSCAR_HANDOFF.md)
+- [Oscar 真实认证与 Responses 联调交接](docs/AI_EDITOR_GATEWAY_REAL_AUTH_RESPONSES_HANDOFF.md)
 
 ## 安全说明
 

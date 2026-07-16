@@ -4,7 +4,10 @@
 Black 仓库：`OscarYi9527/codex_proxy`
 审计分支：`feature/custom-api-urls`
 审计基线：`e3ed1d626c51ac127bd193672849d3e52ec6baf9`
-接口事实来源：`My_Code@788f3921/specs/002-ai-editor-account-gateway/contracts/`
+审计时接口来源：`My_Code@788f3921/specs/002-ai-editor-account-gateway/contracts/`
+
+当前接口事实来源已更新为：
+`My_Code@0da3497f12e96bae58f9fe6b20a08833a0c3c2bd/specs/002-ai-editor-account-gateway/contracts/`。
 
 ## 1. 基线结论
 

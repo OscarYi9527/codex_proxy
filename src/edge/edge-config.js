@@ -23,7 +23,7 @@ function parsePort(value, fallback) {
   return port
 }
 
-function isolatedDataRoot(value, repositoryRoot) {
+function isolatedDataRoot(value, repositoryRoot, environment) {
   const result = path.resolve(value)
   const developmentParent = path.resolve(repositoryRoot, '.ai-editor-dev')
   const developmentPrefix = `${developmentParent}${path.sep}`
@@ -35,15 +35,17 @@ function isolatedDataRoot(value, repositoryRoot) {
   if (blocked.has(result) || result === path.parse(result).root) {
     throw new Error(`Edge data root is not isolated: ${result}`)
   }
-  if (!result.startsWith(developmentPrefix)) {
+  if (environment !== 'production' && !result.startsWith(developmentPrefix)) {
     throw new Error(`Development Edge data root must be under ${developmentParent}`)
   }
   return result
 }
 
 export function loadEdgeConfig(env = process.env, options = {}) {
-  if (env.NODE_ENV === 'production') {
-    throw new Error('Production Edge is not available while Mock authentication is active')
+  const environment = env.NODE_ENV === 'production' ? 'production' : 'development'
+  const authMode = env.AI_EDITOR_EDGE_AUTH_MODE === 'mock' ? 'mock' : 'real'
+  if (environment === 'production' && authMode === 'mock') {
+    throw new Error('Mock authentication is forbidden in production Edge mode')
   }
   const currentDir = path.dirname(fileURLToPath(import.meta.url))
   const repositoryRoot = path.resolve(options.repositoryRoot || path.join(currentDir, '..', '..'))
@@ -51,14 +53,17 @@ export function loadEdgeConfig(env = process.env, options = {}) {
   if (host !== EDGE_DEVELOPMENT_HOST) throw new Error('Development Edge must bind to 127.0.0.1')
   const gatewayOrigin = new URL(env.AI_EDITOR_GATEWAY_ORIGIN || GATEWAY_DEVELOPMENT_ORIGIN)
   if (
-    gatewayOrigin.origin !== GATEWAY_DEVELOPMENT_ORIGIN ||
+    (environment !== 'production' && gatewayOrigin.origin !== GATEWAY_DEVELOPMENT_ORIGIN) ||
+    (environment === 'production' && gatewayOrigin.protocol !== 'https:') ||
     gatewayOrigin.pathname !== '/' ||
     gatewayOrigin.search ||
     gatewayOrigin.hash ||
     gatewayOrigin.username ||
     gatewayOrigin.password
   ) {
-    throw new Error(`Development Gateway origin must be ${GATEWAY_DEVELOPMENT_ORIGIN}`)
+    throw new Error(environment === 'production'
+      ? 'Production Gateway origin must use HTTPS without path, query or credentials'
+      : `Development Gateway origin must be ${GATEWAY_DEVELOPMENT_ORIGIN}`)
   }
   const state = env.AI_EDITOR_MOCK_STATE || 'ready'
   if (!EDGE_ALLOWED_STATES.includes(state)) throw new Error(`Unsupported mock state: ${state}`)
@@ -72,9 +77,12 @@ export function loadEdgeConfig(env = process.env, options = {}) {
     gatewayOrigin: gatewayOrigin.origin,
     dataRoot: isolatedDataRoot(
       env.AI_EDITOR_EDGE_DATA_ROOT || path.join(repositoryRoot, '.ai-editor-dev', 'edge'),
-      repositoryRoot
+      repositoryRoot,
+      environment
     ),
     localNonce,
+    authMode,
+    environment,
     mockState: state
   })
 }

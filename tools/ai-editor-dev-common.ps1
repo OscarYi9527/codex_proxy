@@ -162,6 +162,47 @@ function Start-AiEditorProcess {
     return $process.Id
 }
 
+function Invoke-AiEditorForegroundProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$NodePath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][hashtable]$Environment
+    )
+
+    $repo = Get-AiEditorRepositoryRoot
+    $previousEnvironment = @{}
+    try {
+        foreach ($entry in $Environment.GetEnumerator()) {
+            $previousEnvironment[$entry.Key] = [Environment]::GetEnvironmentVariable(
+                [string]$entry.Key,
+                [EnvironmentVariableTarget]::Process
+            )
+            [Environment]::SetEnvironmentVariable(
+                [string]$entry.Key,
+                [string]$entry.Value,
+                [EnvironmentVariableTarget]::Process
+            )
+        }
+        Push-Location $repo
+        try {
+            & $NodePath @Arguments
+            if ($LASTEXITCODE -ne 0) {
+                throw "Foreground Node process failed with exit code $LASTEXITCODE"
+            }
+        } finally {
+            Pop-Location
+        }
+    } finally {
+        foreach ($entry in $Environment.GetEnumerator()) {
+            [Environment]::SetEnvironmentVariable(
+                [string]$entry.Key,
+                $previousEnvironment[$entry.Key],
+                [EnvironmentVariableTarget]::Process
+            )
+        }
+    }
+}
+
 function Stop-AiEditorProcess {
     param(
         [Parameter(Mandatory = $true)][ValidateSet('gateway', 'edge')][string]$Mode,

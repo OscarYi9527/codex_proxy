@@ -1,7 +1,7 @@
-import { FixedClock } from '../../src/common/clock.js'
+import { FixedClock, SystemClock } from '../../src/common/clock.js'
 import { HmacSha256Digest } from '../../src/common/digests.js'
 import { safeErrorBody, SafeError } from '../../src/common/errors.js'
-import { SequenceIdSource } from '../../src/common/ids.js'
+import { CryptoIdSource, SequenceIdSource } from '../../src/common/ids.js'
 import { SafeLogger } from '../../src/common/logging.js'
 import { redactValue } from '../../src/common/redaction.js'
 
@@ -12,6 +12,18 @@ describe('Gateway common deterministic and safe primitives', () => {
     expect(clock.now().toISOString()).toBe('2026-07-16T00:00:00.000Z')
     expect(ids.opaque('req')).toBe('req_test_0001')
     expect(ids.opaque('err')).toBe('err_test_0002')
+    expect(ids.secret()).toContain('test-secret-0003')
+    expect(new SystemClock().nowMs()).toBeGreaterThan(0)
+    expect(new SystemClock().now()).toBeInstanceOf(Date)
+    expect(() => new FixedClock('not-a-date')).toThrow(/valid instant/)
+  })
+
+  it('creates bounded cryptographic IDs and rejects invalid entropy requests', () => {
+    const ids = new CryptoIdSource()
+    expect(ids.opaque('req')).toMatch(/^req_[a-f0-9]{32}$/)
+    expect(ids.secret()).toMatch(/^[A-Za-z0-9_-]+$/)
+    expect(() => ids.secret(15)).toThrow(/between 16 and 128/)
+    expect(() => ids.secret(129)).toThrow(/between 16 and 128/)
   })
 
   it('uses keyed namespaced digests and constant-time matching', () => {
@@ -20,6 +32,9 @@ describe('Gateway common deterministic and safe primitives', () => {
     expect(invitation).not.toContain('visible-secret')
     expect(digests.matches('invitation', 'visible-secret', invitation)).toBe(true)
     expect(digests.matches('refresh-token', 'visible-secret', invitation)).toBe(false)
+    expect(digests.matches('invitation', 'visible-secret', 'short')).toBe(false)
+    expect(() => new HmacSha256Digest('short')).toThrow(/at least 32 bytes/)
+    expect(() => digests.digest('invalid namespace!', 'value')).toThrow(/namespace/)
   })
 
   it('redacts nested secrets in structured logs', () => {
@@ -35,6 +50,9 @@ describe('Gateway common deterministic and safe primitives', () => {
     expect(JSON.stringify(records)).not.toContain('Bearer secret')
     expect(JSON.stringify(records)).not.toContain('api_key=secret')
     expect(redactValue({ password: 'secret' })).toEqual({ password: '[REDACTED]' })
+    logger.warn('warning')
+    logger.error('error')
+    expect(records).toHaveLength(3)
   })
 
   it('emits stable machine-readable safe errors', () => {

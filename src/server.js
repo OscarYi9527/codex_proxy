@@ -5,7 +5,12 @@ import os from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
-import { PROXY_DIR, initializeCredentialProtection, proxyConfig } from './config.js'
+import {
+  PROXY_DIR,
+  STORAGE_ROOT,
+  initializeCredentialProtection,
+  proxyConfig
+} from './config.js'
 import { requestLog } from './logger.js'
 import { sendJson, readJson, id, setProxyMeta } from './server-utils.js'
 import { getCircuitStates, resetCircuits } from './circuit-breaker.js'
@@ -392,7 +397,7 @@ export function startStandaloneServer() {
     throw new Error('src/server.js only starts standalone mode; use src/launcher.js for edge or gateway')
   }
   const credentialProtection = initializeCredentialProtection()
-  initializeProviderHealth(path.join(PROXY_DIR, '..'))
+  initializeProviderHealth(STORAGE_ROOT)
   console.log('[codex-proxy] credential protection:', credentialProtection.enabled ? 'Windows DPAPI + AES-256-GCM' : 'disabled')
   acquireInstanceLock()
   const server = createServer()

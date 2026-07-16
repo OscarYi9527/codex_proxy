@@ -5,14 +5,17 @@ import { credentialStoreEnabled, decryptConfigSecrets, encryptConfigSecrets, ini
 import { backupBeforeMigration, migrateConfigDocument } from './migrations.js'
 
 const PROXY_DIR = path.dirname(fileURLToPath(import.meta.url))
-const CONFIG_FILE = path.join(PROXY_DIR, '..', 'codex-proxy-config.json')
-const CONFIG_BACKUP_DIR = path.join(PROXY_DIR, '..', '.config-backups')
-const ACCOUNT_BACKUP_DIR = path.join(PROXY_DIR, '..', '.account-backups')
+const STORAGE_ROOT = path.resolve(
+  process.env.CODEX_PROXY_STORAGE_ROOT || path.join(PROXY_DIR, '..')
+)
+const CONFIG_FILE = path.join(STORAGE_ROOT, 'codex-proxy-config.json')
+const CONFIG_BACKUP_DIR = path.join(STORAGE_ROOT, '.config-backups')
+const ACCOUNT_BACKUP_DIR = path.join(STORAGE_ROOT, '.account-backups')
 let credentialProtection = { enabled: false, reason: 'not initialized' }
 
 // A previously initialized install must decrypt before the first config load.
-if (process.platform === 'win32' && fs.existsSync(path.join(PROXY_DIR, '..', '.credential-key.dpapi.json'))) {
-  credentialProtection = initializeCredentialStore(path.join(PROXY_DIR, '..'))
+if (process.platform === 'win32' && fs.existsSync(path.join(STORAGE_ROOT, '.credential-key.dpapi.json'))) {
+  credentialProtection = initializeCredentialStore(STORAGE_ROOT)
 }
 const ACCOUNT_STRATEGIES = new Set([
   'priority', 'round-robin', 'headroom', 'least-used', 'latency',
@@ -392,7 +395,7 @@ function reloadProxyConfig() {
 }
 
 export function initializeCredentialProtection() {
-  credentialProtection = initializeCredentialStore(path.join(PROXY_DIR, '..'))
+  credentialProtection = initializeCredentialStore(STORAGE_ROOT)
   if (!credentialProtection.enabled) return credentialProtection
   let migratedFiles = 0
   const migrate = file => {
@@ -567,4 +570,12 @@ export function setChatgptAccountRoutingWeight(accountId, weight) {
   return setChatgptAccountRouting(accountId, { weight })
 }
 
-export { proxyConfig, reloadProxyConfig, saveProxyConfig, CONFIG_FILE, PROXY_DIR, loadProxyConfig }
+export {
+  proxyConfig,
+  reloadProxyConfig,
+  saveProxyConfig,
+  CONFIG_FILE,
+  PROXY_DIR,
+  STORAGE_ROOT,
+  loadProxyConfig
+}

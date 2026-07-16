@@ -1,10 +1,12 @@
 import type { FastifyInstance } from 'fastify'
 import type { IdSource } from '../../common/ids.js'
+import type { AccessIdentity } from '../../auth/types.js'
 
 declare module 'fastify' {
   interface FastifyRequest {
     safeRequestId: string
     accountRole?: 'level1' | 'level2' | 'user'
+    accountIdentity?: AccessIdentity
   }
 }
 

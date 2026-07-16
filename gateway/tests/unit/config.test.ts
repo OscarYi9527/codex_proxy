@@ -10,6 +10,7 @@ describe('Gateway fixed development configuration', () => {
     expect(config.port).toBe(47920)
     expect(config.dataRoot).toBe(path.join(repositoryRoot, '.ai-editor-dev', 'gateway'))
     expect(config.database.sqliteFile).toBe(path.join(config.dataRoot, 'gateway.sqlite'))
+    expect(config.authMode).toBe('real')
   })
 
   it('rejects shared port, public development host, and repository data root', () => {
@@ -33,5 +34,47 @@ describe('Gateway fixed development configuration', () => {
       NODE_ENV: 'test',
       AI_EDITOR_GATEWAY_DATA_ROOT: path.resolve('F:/shared-runtime')
     }, { repositoryRoot })).toThrow(/must be under/)
+    expect(() => loadGatewayConfig({
+      NODE_ENV: 'unsupported'
+    }, { repositoryRoot })).toThrow(/Unsupported Gateway environment/)
+    expect(() => loadGatewayConfig({
+      NODE_ENV: 'test',
+      AI_EDITOR_MOCK_STATE: 'unknown'
+    }, { repositoryRoot })).toThrow(/Unsupported mock account state/)
+  })
+
+  it('supports explicit production PostgreSQL configuration', () => {
+    const dataRoot = path.resolve('F:/production-gateway-data')
+    const production = loadGatewayConfig({
+      NODE_ENV: 'production',
+      AI_EDITOR_GATEWAY_HOST: '10.0.0.5',
+      AI_EDITOR_GATEWAY_PORT: '8443',
+      AI_EDITOR_GATEWAY_DATA_ROOT: dataRoot,
+      AI_EDITOR_GATEWAY_DB_DIALECT: 'postgres',
+      AI_EDITOR_GATEWAY_POSTGRES_URL: 'postgres://gateway@example.test/gateway',
+      AI_EDITOR_MOCK_STATE: 'login_required'
+    }, { repositoryRoot })
+    expect(production).toMatchObject({
+      environment: 'production',
+      host: '10.0.0.5',
+      port: 8443,
+      dataRoot,
+      authMode: 'real',
+      mockState: 'login_required',
+      database: {
+        dialect: 'postgres',
+        postgresUrl: 'postgres://gateway@example.test/gateway'
+      }
+    })
+    expect(() => loadGatewayConfig({
+      NODE_ENV: 'production',
+      AI_EDITOR_GATEWAY_DATA_ROOT: dataRoot,
+      AI_EDITOR_GATEWAY_DB_DIALECT: 'postgres'
+    }, { repositoryRoot })).toThrow(/POSTGRES_URL/)
+    expect(() => loadGatewayConfig({
+      NODE_ENV: 'production',
+      AI_EDITOR_GATEWAY_DATA_ROOT: dataRoot,
+      AI_EDITOR_GATEWAY_AUTH_MODE: 'mock'
+    }, { repositoryRoot })).toThrow(/Mock authentication is forbidden/)
   })
 })

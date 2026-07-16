@@ -1,11 +1,11 @@
 // Usage statistics accumulator
 import fs from 'fs'
 import path from 'path'
-import { PROXY_DIR, atomicWriteJson } from './config.js'
+import { STORAGE_ROOT, atomicWriteJson } from './config.js'
 import { estimateRequestCost } from './pricing.js'
 import { backupBeforeMigration, CURRENT_STATS_SCHEMA, migrateStatsDocument } from './migrations.js'
 
-const STATS_FILE = path.join(PROXY_DIR, '..', 'codex-proxy-stats.json')
+const STATS_FILE = path.join(STORAGE_ROOT, 'codex-proxy-stats.json')
 const DAILY_RETENTION_DAYS = 370
 let stats = { schema_version: CURRENT_STATS_SCHEMA, updated: new Date().toISOString(), providers: {}, accounts: {}, daily: {}, operational_events: [] }
 

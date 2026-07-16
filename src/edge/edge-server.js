@@ -3,6 +3,12 @@ import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { loadEdgeConfig, EDGE_ALLOWED_STATES } from './edge-config.js'
+import {
+  createPlatformRefreshTokenStore,
+  LocalAccountBindingStore
+} from './local-account-store.js'
+import { LocalHandoffService } from './local-handoff.js'
+import { GatewayClient } from './gateway-client.js'
 
 const BODY_LIMIT = 16 * 1024 * 1024
 
@@ -25,14 +31,22 @@ async function readJson(req) {
   let size = 0
   for await (const chunk of req) {
     size += chunk.length
-    if (size > BODY_LIMIT) throw Object.assign(new Error('Request body too large'), { statusCode: 413, code: 'request_too_large' })
-    chunks.push(chunk)
+    if (size > BODY_LIMIT) {
+      for (const item of chunks) item.fill(0)
+      throw Object.assign(new Error('Request body too large'), {
+        statusCode: 413,
+        code: 'request_too_large'
+      })
+    }
+    chunks.push(Buffer.from(chunk))
   }
   if (!chunks.length) return {}
+  const combined = Buffer.concat(chunks)
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    return JSON.parse(combined.toString('utf8'))
   } finally {
-    chunks.fill(Buffer.alloc(0))
+    combined.fill(0)
+    for (const chunk of chunks) chunk.fill(0)
   }
 }
 
@@ -49,7 +63,7 @@ function sendJson(res, status, value, requestId) {
   res.end(payload)
 }
 
-function safeFailure(state, requestId) {
+function safeMockStatus(state, requestId) {
   if (state === 'ready') {
     return {
       state,
@@ -75,17 +89,26 @@ function safeFailure(state, requestId) {
 
 function validateLocalRequest(req, config) {
   if (!isLoopback(req.socket?.remoteAddress)) {
-    throw Object.assign(new Error('Edge only accepts loopback clients'), { statusCode: 403, code: 'loopback_required' })
+    throw Object.assign(new Error('Edge only accepts loopback clients'), {
+      statusCode: 403,
+      code: 'loopback_required'
+    })
   }
   const allowedHosts = new Set([`${config.host}:${config.port}`, `localhost:${config.port}`])
   if (!allowedHosts.has(req.headers.host || '')) {
-    throw Object.assign(new Error('Invalid Edge Host header'), { statusCode: 403, code: 'invalid_host' })
+    throw Object.assign(new Error('Invalid Edge Host header'), {
+      statusCode: 403,
+      code: 'invalid_host'
+    })
   }
   const origin = req.headers.origin
   if (origin) {
     const parsed = new URL(origin)
     if (!['127.0.0.1', 'localhost'].includes(parsed.hostname) || Number(parsed.port) !== config.port) {
-      throw Object.assign(new Error('Invalid Edge Origin header'), { statusCode: 403, code: 'invalid_origin' })
+      throw Object.assign(new Error('Invalid Edge Origin header'), {
+        statusCode: 403,
+        code: 'invalid_origin'
+      })
     }
   }
 }
@@ -93,16 +116,48 @@ function validateLocalRequest(req, config) {
 function requireLocalNonce(req, config) {
   const candidate = Buffer.from(String(req.headers['x-ai-editor-local-nonce'] || ''))
   const expected = Buffer.from(config.localNonce)
-  if (candidate.length !== expected.length || !crypto.timingSafeEqual(candidate, expected)) {
-    throw Object.assign(new Error('Invalid local Edge nonce'), { statusCode: 401, code: 'local_authorization_required' })
+  try {
+    if (candidate.length !== expected.length || !crypto.timingSafeEqual(candidate, expected)) {
+      throw Object.assign(new Error('Invalid local Edge nonce'), {
+        statusCode: 401,
+        code: 'local_authorization_required'
+      })
+    }
+  } finally {
+    candidate.fill(0)
+    expected.fill(0)
   }
 }
 
 export function createEdgeServer(options = {}) {
   const config = options.config || loadEdgeConfig()
-  let state = config.mockState
-  let bindingVersion = 0
-  const handoffs = new Map()
+  const authMode = config.authMode || 'mock'
+  let mockState = config.mockState
+  let mockBindingVersion = 0
+  const mockHandoffs = new Map()
+
+  let bindingStore = options.bindingStore
+  let gatewayClient = options.gatewayClient
+  let handoff = options.handoffService
+  if (authMode === 'real') {
+    bindingStore ||= new LocalAccountBindingStore({
+      secureStore: options.secureStore || createPlatformRefreshTokenStore({
+        dataRoot: config.dataRoot,
+        platform: options.platform
+      }),
+      now: options.now
+    })
+    gatewayClient ||= new GatewayClient({
+      gatewayOrigin: config.gatewayOrigin,
+      bindingStore,
+      fetchImpl: options.fetchImpl,
+      now: options.now
+    })
+    handoff ||= new LocalHandoffService({
+      bindingStore,
+      now: options.now
+    })
+  }
 
   const server = http.createServer(async (req, res) => {
     const requestId = opaque('req')
@@ -111,30 +166,50 @@ export function createEdgeServer(options = {}) {
       const url = new URL(req.url, `http://${req.headers.host}`)
 
       if (req.method === 'GET' && url.pathname === '/live') {
-        return sendJson(res, 200, { status: 'ok', service: 'ai-editor-edge', mode: 'edge' }, requestId)
+        return sendJson(res, 200, {
+          status: 'ok',
+          service: 'ai-editor-edge',
+          mode: 'edge'
+        }, requestId)
       }
       if (req.method === 'GET' && url.pathname === '/ready') {
+        if (authMode === 'real') await gatewayClient.initialize()
+        const ready = authMode === 'mock'
+          ? mockState !== 'service_unavailable'
+          : Boolean(bindingStore.snapshot())
         return sendJson(res, 200, {
-          status: state === 'service_unavailable' ? 'degraded' : 'ready',
+          status: ready ? 'ready' : 'degraded',
           service: 'ai-editor-edge'
         }, requestId)
       }
       if (url.pathname.startsWith('/ai-editor/')) requireLocalNonce(req, config)
 
       if (req.method === 'GET' && url.pathname === '/ai-editor/status') {
-        return sendJson(res, 200, safeFailure(state, requestId), requestId)
+        const status = authMode === 'mock'
+          ? safeMockStatus(mockState, requestId)
+          : await gatewayClient.getSafeStatus()
+        return sendJson(res, 200, status, requestId)
       }
       if (req.method === 'POST' && url.pathname === '/ai-editor/status/retry') {
-        return sendJson(res, 200, safeFailure(state, requestId), requestId)
+        const status = authMode === 'mock'
+          ? safeMockStatus(mockState, requestId)
+          : await gatewayClient.getSafeStatus()
+        return sendJson(res, 200, status, requestId)
       }
       if (req.method === 'POST' && url.pathname === '/ai-editor/handoff/start') {
         const body = await readJson(req)
+        if (authMode === 'real') {
+          return sendJson(res, 201, handoff.start(body.state), requestId)
+        }
         if (typeof body.state !== 'string' || body.state.length < 8 || body.state.length > 512) {
-          throw Object.assign(new Error('Invalid login state'), { statusCode: 400, code: 'invalid_login_state' })
+          throw Object.assign(new Error('Invalid login state'), {
+            statusCode: 400,
+            code: 'invalid_login_state'
+          })
         }
         const handoffId = opaque('lh')
         const nonce = secret()
-        handoffs.set(handoffId, {
+        mockHandoffs.set(handoffId, {
           nonce,
           state: body.state,
           expiresAt: Date.now() + 60_000
@@ -143,47 +218,80 @@ export function createEdgeServer(options = {}) {
       }
       if (req.method === 'POST' && url.pathname === '/ai-editor/handoff/complete') {
         const body = await readJson(req)
-        const grant = handoffs.get(body.handoffId)
-        handoffs.delete(body.handoffId)
+        if (authMode === 'real') {
+          return sendJson(res, 200, await handoff.complete(body), requestId)
+        }
+        const grant = mockHandoffs.get(body.handoffId)
+        mockHandoffs.delete(body.handoffId)
         if (!grant || grant.expiresAt < Date.now() || grant.nonce !== body.nonce || grant.state !== body.state) {
-          throw Object.assign(new Error('Local handoff is invalid or expired'), { statusCode: 400, code: 'handoff_invalid' })
+          throw Object.assign(new Error('Local handoff is invalid or expired'), {
+            statusCode: 400,
+            code: 'handoff_invalid'
+          })
         }
         if (!body.deviceSessionId || !body.refreshToken || !body.accessToken) {
-          throw Object.assign(new Error('Local handoff payload is incomplete'), { statusCode: 400, code: 'handoff_incomplete' })
+          throw Object.assign(new Error('Local handoff payload is incomplete'), {
+            statusCode: 400,
+            code: 'handoff_incomplete'
+          })
         }
-        bindingVersion += 1
-        state = 'ready'
+        mockBindingVersion += 1
+        mockState = 'ready'
         return sendJson(res, 200, {
           status: 'completed',
-          bindingVersion
+          bindingVersion: mockBindingVersion
         }, requestId)
       }
       if (req.method === 'POST' && url.pathname === '/ai-editor/webview-ticket') {
-        if (state !== 'ready') {
-          throw Object.assign(new Error('Account is not ready'), { statusCode: 409, code: state })
+        if (authMode === 'real') {
+          return sendJson(res, 200, await gatewayClient.requestWebviewTicket(), requestId)
+        }
+        if (mockState !== 'ready') {
+          throw Object.assign(new Error('Account is not ready'), {
+            statusCode: 409,
+            code: mockState
+          })
         }
         return sendJson(res, 200, { ticket: secret(), expiresIn: 60 }, requestId)
       }
       if (req.method === 'POST' && url.pathname === '/ai-editor/logout') {
-        state = 'login_required'
-        bindingVersion += 1
+        if (authMode === 'real') {
+          await gatewayClient.logout()
+        } else {
+          mockState = 'login_required'
+          mockBindingVersion += 1
+        }
         return sendJson(res, 204, null, requestId)
       }
       if (req.method === 'POST' && url.pathname === '/ai-editor/mock/state') {
-        if (process.env.AI_EDITOR_ENABLE_MOCK_CONTROL !== 'true') {
-          throw Object.assign(new Error('Mock control is disabled'), { statusCode: 404, code: 'not_found' })
+        if (authMode !== 'mock' || process.env.AI_EDITOR_ENABLE_MOCK_CONTROL !== 'true') {
+          throw Object.assign(new Error('Mock control is disabled'), {
+            statusCode: 404,
+            code: 'not_found'
+          })
         }
         const body = await readJson(req)
         if (!EDGE_ALLOWED_STATES.includes(body.state)) {
-          throw Object.assign(new Error('Unsupported mock state'), { statusCode: 400, code: 'invalid_mock_state' })
+          throw Object.assign(new Error('Unsupported mock state'), {
+            statusCode: 400,
+            code: 'invalid_mock_state'
+          })
         }
-        state = body.state
-        return sendJson(res, 200, safeFailure(state, requestId), requestId)
+        mockState = body.state
+        return sendJson(res, 200, safeMockStatus(mockState, requestId), requestId)
       }
       if (req.method === 'GET' && url.pathname === '/v1/models') {
-        if (state !== 'ready') {
+        if (authMode === 'real') {
+          return sendJson(res, 200, await gatewayClient.models(), requestId)
+        }
+        if (mockState !== 'ready') {
           return sendJson(res, 401, {
-            error: { code: state, message: 'AI Editor 产品账号尚未就绪。', requestId, retryable: state === 'service_unavailable' }
+            error: {
+              code: mockState,
+              message: 'AI Editor 产品账号尚未就绪。',
+              requestId,
+              retryable: mockState === 'service_unavailable'
+            }
           }, requestId)
         }
         return sendJson(res, 200, {
@@ -191,10 +299,25 @@ export function createEdgeServer(options = {}) {
           data: [{ id: 'gpt-mock', object: 'model', owned_by: 'ai-editor' }]
         }, requestId)
       }
+      if (
+        authMode === 'real' &&
+        req.method === 'POST' &&
+        ['/v1/responses', '/v1/chat/completions'].includes(url.pathname)
+      ) {
+        const body = await readJson(req)
+        await gatewayClient.forward(url.pathname, req, res, body)
+        return
+      }
       return sendJson(res, 404, {
-        error: { code: 'not_found', message: '未找到请求的 Edge 接口。', requestId, retryable: false }
+        error: {
+          code: 'not_found',
+          message: '未找到请求的 Edge 接口。',
+          requestId,
+          retryable: false
+        }
       }, requestId)
     } catch (error) {
+      if (res.headersSent || res.writableEnded || res.destroyed) return
       const statusCode = Number(error.statusCode) || 500
       const code = error.code || 'internal_error'
       return sendJson(res, statusCode, {
@@ -202,20 +325,24 @@ export function createEdgeServer(options = {}) {
           code,
           message: statusCode >= 500 ? 'Edge 暂时不可用。' : error.message,
           requestId,
-          retryable: statusCode >= 500
+          retryable: error.retryable === true || statusCode >= 500
         }
       }, requestId)
     }
   })
 
-  return { server, config }
+  return { server, config, authMode, bindingStore, gatewayClient }
 }
 
 export async function startEdgeServer(options = {}) {
   const edge = createEdgeServer(options)
   fs.mkdirSync(edge.config.dataRoot, { recursive: true, mode: 0o700 })
   const marker = path.join(edge.config.dataRoot, '.ai-editor-edge-data-root')
-  fs.writeFileSync(marker, 'edge-development-data\n', { encoding: 'utf8', mode: 0o600 })
+  fs.writeFileSync(marker, 'edge-development-data\n', {
+    encoding: 'utf8',
+    mode: 0o600
+  })
+  if (edge.authMode === 'real') await edge.gatewayClient.initialize()
   await new Promise((resolve, reject) => {
     edge.server.once('error', reject)
     edge.server.listen(edge.config.port, edge.config.host, resolve)

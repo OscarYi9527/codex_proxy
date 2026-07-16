@@ -41,6 +41,7 @@ export class SequenceIdSource implements IdSource {
 
   secret(bytes = 32): string {
     this.#next += 1
-    return `test-secret-${bytes}-${String(this.#next).padStart(4, '0')}`
+    const prefix = `test-secret-${String(this.#next).padStart(4, '0')}-`
+    return `${prefix}${'x'.repeat(Math.max(bytes, 16))}`
   }
 }

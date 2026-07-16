@@ -15,6 +15,7 @@ export interface GatewayConfig {
     readonly sqliteFile: string
     readonly postgresUrl?: string
   }
+  readonly authMode: 'real' | 'mock'
   readonly mockState: MockAccountState
 }
 
@@ -108,6 +109,10 @@ export function loadGatewayConfig(
   if (dialect === 'postgres' && !postgresUrl) {
     throw new Error('AI_EDITOR_GATEWAY_POSTGRES_URL is required for the postgres dialect')
   }
+  const authMode = env.AI_EDITOR_GATEWAY_AUTH_MODE === 'mock' ? 'mock' : 'real'
+  if (environment === 'production' && authMode === 'mock') {
+    throw new Error('Mock authentication is forbidden in production Gateway mode')
+  }
   return {
     environment,
     host: parseHost(env.AI_EDITOR_GATEWAY_HOST, environment),
@@ -118,6 +123,7 @@ export function loadGatewayConfig(
       sqliteFile: path.join(dataRoot, 'gateway.sqlite'),
       ...(postgresUrl ? { postgresUrl } : {})
     },
+    authMode,
     mockState: parseMockState(env.AI_EDITOR_MOCK_STATE)
   }
 }

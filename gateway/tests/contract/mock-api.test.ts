@@ -15,6 +15,7 @@ const config: GatewayConfig = {
     dialect: 'sqlite',
     sqliteFile: ':memory:'
   },
+  authMode: 'mock',
   mockState: 'ready'
 }
 
@@ -91,5 +92,31 @@ describe('Gateway safe Mock API contract', () => {
     })
     expect(accepted.statusCode).toBe(200)
     expect(accepted.json()).toMatchObject({ expiresIn: 60 })
+  })
+
+  it.each([
+    ['login_required', ['login']],
+    ['service_unavailable', ['retry']],
+    ['account_unavailable', ['openAccount']],
+    ['password_change_required', ['openAccount']]
+  ] as const)('maps Mock state %s to safe actions and an empty model list', async (state, actions) => {
+    gateway.mock?.setState(state)
+    const headers = { authorization: 'Bearer mock-access-token' }
+    const status = await gateway.app.inject({
+      method: 'GET',
+      url: '/api/v1/account/status',
+      headers
+    })
+    expect(status.json()).toMatchObject({
+      state,
+      actions,
+      errorId: expect.stringMatching(/^err_/)
+    })
+    const models = await gateway.app.inject({
+      method: 'GET',
+      url: '/v1/models',
+      headers
+    })
+    expect(models.json().data).toEqual([])
   })
 })

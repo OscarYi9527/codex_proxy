@@ -91,9 +91,9 @@ try {
     }
     $sharedBefore = Get-NetTCPConnection -LocalPort 47892 -State Listen -ErrorAction SilentlyContinue |
         Select-Object -First 1
-    & $start -Mode all -DataRoot $lifecycleRoot -GatewayPort 47920 -EdgePort 47921
+    & $start -Mode all -DataRoot $lifecycleRoot -GatewayPort 47920 -EdgePort 47921 -AuthenticationMode mock
     Assert-Throws -Message 'A second start must not overwrite live PID metadata' -Action {
-        & $start -Mode all -DataRoot $lifecycleRoot -GatewayPort 47920 -EdgePort 47921
+        & $start -Mode all -DataRoot $lifecycleRoot -GatewayPort 47920 -EdgePort 47921 -AuthenticationMode mock
     }
     $gatewayLive = Wait-HttpReady -Uri 'http://127.0.0.1:47920/live'
     $edgeLive = Wait-HttpReady -Uri 'http://127.0.0.1:47921/live'

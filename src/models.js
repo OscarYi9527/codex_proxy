@@ -1,9 +1,9 @@
 // Model resolution and catalog helpers
 import fs from 'fs'
 import path from 'path'
-import { proxyConfig, PROXY_DIR, getRelay } from './config.js'
+import { proxyConfig, STORAGE_ROOT, getRelay } from './config.js'
 
-const THREAD_ROUTES_DIR = process.env.CODEX_PROXY_THREAD_ROUTES_DIR || path.join(PROXY_DIR, '..', 'codex-thread-routes')
+const THREAD_ROUTES_DIR = process.env.CODEX_PROXY_THREAD_ROUTES_DIR || path.join(STORAGE_ROOT, 'codex-thread-routes')
 try { fs.mkdirSync(THREAD_ROUTES_DIR, { recursive: true }) } catch {}
 
 // ── Four upstream channels ──────────────────────────────────────

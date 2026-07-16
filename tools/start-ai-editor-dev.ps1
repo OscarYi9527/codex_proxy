@@ -7,6 +7,8 @@ param(
     [int]$EdgePort = 47921,
     [ValidateSet('ready', 'login_required', 'account_unavailable', 'service_unavailable', 'password_change_required')]
     [string]$MockState = 'ready',
+    [ValidateSet('real', 'mock')]
+    [string]$AuthenticationMode,
     [switch]$ValidateOnly
 )
 
@@ -17,6 +19,11 @@ if ([string]::IsNullOrWhiteSpace($DataRoot)) {
     $DataRoot = Join-Path $repo '.ai-editor-dev\default'
 }
 $DataRoot = Resolve-AiEditorDataRoot -DataRoot $DataRoot
+$AuthenticationMode = if ([string]::IsNullOrWhiteSpace($AuthenticationMode)) {
+    if ($PSBoundParameters.ContainsKey('MockState')) { 'mock' } else { 'real' }
+} else {
+    $AuthenticationMode
+}
 Assert-AiEditorPort -Port $GatewayPort -Name 'Gateway'
 Assert-AiEditorPort -Port $EdgePort -Name 'Edge'
 if ($GatewayPort -eq $EdgePort) {
@@ -36,6 +43,7 @@ if ($ValidateOnly) {
         dataRoot = $DataRoot
         gateway = "http://127.0.0.1:$GatewayPort"
         edge = "http://127.0.0.1:$EdgePort"
+        authenticationMode = $AuthenticationMode
     }
     return
 }
@@ -70,17 +78,25 @@ try {
     if ($Mode -in @('all', 'gateway')) {
         $gatewayRoot = Join-Path $DataRoot 'gateway'
         Initialize-AiEditorDataRoot -DataRoot $gatewayRoot
+        $gatewayEnvironment = @{
+            NODE_ENV = 'development'
+            AI_EDITOR_GATEWAY_HOST = '127.0.0.1'
+            AI_EDITOR_GATEWAY_PORT = $GatewayPort
+            AI_EDITOR_GATEWAY_DATA_ROOT = $gatewayRoot
+            AI_EDITOR_GATEWAY_AUTH_MODE = $AuthenticationMode
+            AI_EDITOR_MOCK_STATE = $MockState
+        }
+        if ($AuthenticationMode -eq 'real') {
+            Invoke-AiEditorForegroundProcess `
+                -NodePath $node `
+                -Arguments @('--import', 'tsx', (Join-Path $repo 'gateway\src\bootstrap-cli.ts')) `
+                -Environment $gatewayEnvironment
+        }
         $processId = Start-AiEditorProcess `
             -Mode gateway `
             -NodePath $node `
             -Arguments @('--import', 'tsx', (Join-Path $repo 'gateway\src\server.ts')) `
-            -Environment @{
-                NODE_ENV = 'development'
-                AI_EDITOR_GATEWAY_HOST = '127.0.0.1'
-                AI_EDITOR_GATEWAY_PORT = $GatewayPort
-                AI_EDITOR_GATEWAY_DATA_ROOT = $gatewayRoot
-                AI_EDITOR_MOCK_STATE = $MockState
-            } `
+            -Environment $gatewayEnvironment `
             -DataRoot $DataRoot
         $startedModes.Add('gateway')
         Wait-AiEditorServiceHealthy `
@@ -106,8 +122,9 @@ try {
                 AI_EDITOR_EDGE_DATA_ROOT = $edgeRoot
                 AI_EDITOR_GATEWAY_ORIGIN = "http://127.0.0.1:$GatewayPort"
                 AI_EDITOR_EDGE_LOCAL_NONCE = $localNonce
+                AI_EDITOR_EDGE_AUTH_MODE = $AuthenticationMode
                 AI_EDITOR_MOCK_STATE = $MockState
-                AI_EDITOR_ENABLE_MOCK_CONTROL = 'true'
+                AI_EDITOR_ENABLE_MOCK_CONTROL = if ($AuthenticationMode -eq 'mock') { 'true' } else { 'false' }
             } `
             -DataRoot $DataRoot
         $startedModes.Add('edge')

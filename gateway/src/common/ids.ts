@@ -12,6 +12,11 @@ export type IdPrefix =
   | 'wv'
   | 'turn'
   | 'usage'
+  | 'provider'
+  | 'cred'
+  | 'route'
+  | 'audit'
+  | 'oauth'
 
 export interface IdSource {
   opaque(prefix: IdPrefix): string

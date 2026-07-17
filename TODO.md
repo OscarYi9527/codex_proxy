@@ -87,11 +87,14 @@
 
 ### 阶段 7–9：Provider、管理页面和审计保留
 
-- [x] 通过兼容适配器将现有 ChatGPT、OpenAI API、DeepSeek、Relay、模型目录和路由接入
-  Gateway；中央 Provider 管理 API、凭据轮换与角色化诊断仍待 T083–T092。
-- [ ] Edge、普通用户和二级管理员不能获取中央凭据、成本、熔断或 Provider 路由诊断。
-- [ ] React 页面继续覆盖二级管理员组织管理和一级管理员 Provider/系统管理；当前角色导航
-  已由 Gateway 强制，普通用户页面已完成。
+- [x] 完成 T081–T089：Level-1 Provider/凭据/模型/路由 API、官方 ChatGPT 隔离登录、
+  动态运行时配置、脱敏诊断、角色合同测试和 React Provider/诊断页面。
+- [x] Edge、普通用户和二级管理员不能获取中央凭据、熔断或 Provider 路由诊断；角色降权
+  后旧身份也会被服务端拒绝并写审计。
+- [x] `plaintext-v1` 仅允许回环开发、持续显示警告，并在 production/非回环启动时拒绝。
+- [x] 数据库 Relay 配置已通过非 Mock `/v1/models` 与真实 SSE Responses 集成测试。
+- [ ] T090 由 Oscar 在 Code 侧验证真实模型目录刷新；T091–T098 审计正文与保留仍待实现。
+- [ ] React 页面继续覆盖二级管理员组织管理；一级管理员 Provider/系统诊断页面已完成。
 - [x] Token 不进入 URL 或 `localStorage`，管理页面可安全嵌入 Code Webview。
 - [ ] 仅保存用户提问、最终回复、时间、模型、Token 和扣分；禁止保存系统提示词、文件原文、
   推理、工具输出、完整上游请求及 Refresh Token。

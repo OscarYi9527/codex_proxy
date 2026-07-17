@@ -17,6 +17,23 @@ button {
   font: inherit;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+input,
+select {
+  width: 100%;
+  margin-top: 6px;
+  padding: 9px 10px;
+  border: 1px solid #cbd5e3;
+  border-radius: 8px;
+  color: inherit;
+  background: #fff;
+  font: inherit;
+}
+
 .bootstrap-shell {
   width: min(560px, calc(100% - 48px));
   margin: 12vh auto;
@@ -193,6 +210,104 @@ dd {
   background: #fff8e8;
 }
 
+.provider-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.provider-form button {
+  align-self: end;
+}
+
+.provider-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px 0;
+  border-bottom: 1px solid #edf1f6;
+}
+
+.provider-card:last-child {
+  border-bottom: 0;
+}
+
+.provider-card header,
+.button-row,
+.credential-list li,
+.credential-form {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.provider-card header > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.provider-card header span,
+.credential-list {
+  color: #657287;
+}
+
+.provider-card button,
+.provider-form button,
+.credential-form button {
+  padding: 8px 12px;
+  border: 1px solid #b8c5d8;
+  border-radius: 8px;
+  color: #233a59;
+  background: #f4f7fb;
+  cursor: pointer;
+}
+
+.provider-card button.danger {
+  border-color: #edb7b7;
+  color: #8d2424;
+  background: #fff2f2;
+}
+
+.credential-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.credential-form label {
+  flex: 1;
+}
+
+.official-login {
+  padding: 14px;
+  border: 1px solid #cfe0f7;
+  border-radius: 10px;
+  background: #f3f8ff;
+}
+
+.official-login p {
+  margin-bottom: 0;
+}
+
+.official-login a {
+  display: inline-block;
+  margin-top: 10px;
+  color: #155eb9;
+}
+
+.diagnostics-output {
+  max-height: 560px;
+  overflow: auto;
+  padding: 16px;
+  border-radius: 10px;
+  color: #dce8f8;
+  background: #111d2f;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 720px) {
   .management-layout {
     grid-template-columns: 1fr;
@@ -208,5 +323,15 @@ dd {
 
   .session-note {
     display: none;
+  }
+
+  .provider-form {
+    grid-template-columns: 1fr;
+  }
+
+  .provider-card header,
+  .credential-form {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

@@ -22,6 +22,9 @@
   `/admin` 严格 CSP 管理外壳。
 - 新增服务端角色导航，以及普通用户账号、积分、设备与使用记录 React 页面。
 - Gateway/Edge 合同测试开始共同消费 My_Code 的 `edge-code-contract.json` fixture。
+- 新增 Level-1 Provider、凭据、模型路由和安全诊断 API，以及 Provider/诊断 React 页面。
+- 新增 Gateway 隔离 `CODEX_HOME` 的 OpenAI 官方登录端点；认证临时目录在导入后删除。
+- 新增数据库 Relay 配置驱动真实模型目录和 SSE Responses 的非 Mock 集成测试。
 
 ### Changed
 
@@ -31,6 +34,8 @@
 - Gateway Provider 配置、统计、线程路由和健康数据改用隔离存储根，standalone 未设置
   `CODEX_PROXY_STORAGE_ROOT` 时保持原有仓库根行为。
 - 真实开发启动会先构建管理 React 页面，再前台执行一次性 bootstrap。
+- Gateway 的 `plaintext-v1` 凭据仅允许回环开发；production 或非回环环境存在明文凭据时
+  拒绝启动，API 和页面只展示掩码及持续安全警告。
 
 ## [2.4.1] - 2026-07-15
 

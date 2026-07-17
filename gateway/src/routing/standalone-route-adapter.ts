@@ -2,6 +2,7 @@ import { Readable, Writable } from 'node:stream'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { FastifyReply, FastifyRequest } from 'fastify'
+import { redactValue } from '../common/redaction.js'
 
 export interface SafeModel {
   readonly id: string
@@ -26,6 +27,29 @@ export interface ProviderRouteAdapter {
     reply: FastifyReply,
     body: Record<string, unknown>
   ): Promise<void>
+  configureProviders?(configuration: GatewayProviderRuntimeConfiguration): Promise<void>
+  safeDiagnostics?(): Promise<Record<string, unknown>>
+}
+
+export interface GatewayProviderRuntimeConfiguration {
+  readonly deepseekApiKey: string
+  readonly deepseekUrl: string
+  readonly openaiApiKey: string
+  readonly openaiApiBaseUrl: string
+  readonly chatgptResponsesUrl: string
+  readonly chatgptAccounts: readonly Record<string, unknown>[]
+  readonly relays: ReadonlyArray<{
+    id: string
+    name: string
+    base_url: string
+    api_key: string
+    models: readonly string[]
+  }>
+  readonly fallbackChain: ReadonlyArray<{
+    provider: string
+    model: string
+  }>
+  readonly modelIds: readonly string[]
 }
 
 class SyntheticRequest extends Readable {
@@ -155,6 +179,9 @@ type StandaloneHandler = (request: SyntheticRequest, response: ResponseBase) => 
 
 export class StandaloneRouteAdapter implements ProviderRouteAdapter {
   #handler: StandaloneHandler | null = null
+  #proxyConfig: Record<string, unknown> | null = null
+  #modelIds: readonly string[] = []
+  #diagnostics: (() => Promise<Record<string, unknown>>) | null = null
 
   constructor(private readonly options: { storageRoot: string }) {}
 
@@ -187,9 +214,18 @@ export class StandaloneRouteAdapter implements ProviderRouteAdapter {
         providers['chatgpt-sub'] ||
         relays.length
       )
+      const configuredModels = this.#modelIds.map<SafeModel>(id => ({
+        id,
+        object: 'model',
+        owned_by: 'gateway-config'
+      }))
       return {
         object: 'list',
-        data: value.data.filter(model => {
+        data: [...value.data, ...configuredModels]
+          .filter((model, index, models) =>
+            models.findIndex(candidate => candidate.id === model.id) === index
+          )
+          .filter(model => {
           if (['auto', 'auto-fast', 'auto-cheap', 'auto-reliable'].includes(model.id)) {
             return anyProvider
           }
@@ -199,7 +235,7 @@ export class StandaloneRouteAdapter implements ProviderRouteAdapter {
           if (model.id.startsWith('openai-api-')) return providers['openai-api'] === true
           if (/^gpt-/i.test(model.id)) return providers['chatgpt-sub'] === true
           return providers.deepseek === true
-        })
+          })
       }
     } finally {
       modelBody.fill(0)
@@ -255,6 +291,39 @@ export class StandaloneRouteAdapter implements ProviderRouteAdapter {
     return response
   }
 
+  async configureProviders(
+    configuration: GatewayProviderRuntimeConfiguration
+  ): Promise<void> {
+    if (!this.#proxyConfig) {
+      throw new Error('Standalone provider adapter is not initialized')
+    }
+    Object.assign(this.#proxyConfig, {
+      deepseekApiKey: configuration.deepseekApiKey,
+      upstreamUrl: configuration.deepseekUrl,
+      openaiApiKey: configuration.openaiApiKey,
+      openaiApiBaseUrl: configuration.openaiApiBaseUrl,
+      openaiApiResponsesUrl: `${configuration.openaiApiBaseUrl.replace(/\/+$/, '')}/responses`,
+      openaiApiChatCompletionsUrl:
+        `${configuration.openaiApiBaseUrl.replace(/\/+$/, '')}/chat/completions`,
+      openaiApiUpstream: 'official',
+      chatgptResponsesUrl: configuration.chatgptResponsesUrl,
+      chatgptAccounts: configuration.chatgptAccounts.map(account => ({ ...account })),
+      activeChatgptAccountId:
+        String(configuration.chatgptAccounts[0]?.['id'] || '') || null,
+      relays: configuration.relays.map(relay => ({
+        ...relay,
+        models: [...relay.models]
+      })),
+      fallbackChain: configuration.fallbackChain.map(route => ({ ...route }))
+    })
+    this.#modelIds = [...configuration.modelIds]
+  }
+
+  async safeDiagnostics(): Promise<Record<string, unknown>> {
+    if (!this.#diagnostics) return {}
+    return redactValue(await this.#diagnostics()) as Record<string, unknown>
+  }
+
   private handler(): StandaloneHandler {
     if (this.#handler) return this.#handler
     throw new Error('Standalone provider adapter is not initialized; call initialize()')
@@ -276,6 +345,30 @@ export class StandaloneRouteAdapter implements ProviderRouteAdapter {
         close(): void
       }
     }
+    const configModule = await import(
+      pathToFileURL(path.join(repositoryRoot, 'src', 'config.js')).href
+    ) as { proxyConfig: Record<string, unknown> }
+    this.#proxyConfig = configModule.proxyConfig
+    const circuits = await import(
+      pathToFileURL(path.join(repositoryRoot, 'src', 'circuit-breaker.js')).href
+    ) as Record<string, unknown>
+    const health = await import(
+      pathToFileURL(path.join(repositoryRoot, 'src', 'provider-health.js')).href
+    ) as Record<string, unknown>
+    const decisions = await import(
+      pathToFileURL(path.join(repositoryRoot, 'src', 'route-decisions.js')).href
+    ) as Record<string, unknown>
+    this.#diagnostics = async () => ({
+      providers: typeof health['getProviderHealth'] === 'function'
+        ? (health['getProviderHealth'] as () => unknown)()
+        : {},
+      circuits: typeof circuits['getCircuitStates'] === 'function'
+        ? (circuits['getCircuitStates'] as () => unknown)()
+        : {},
+      recentRouteErrors: typeof decisions['getRouteDecisions'] === 'function'
+        ? (decisions['getRouteDecisions'] as (limit: number) => unknown)(50)
+        : []
+    })
     const server = module.createServer()
     const listener = server.listeners('request')[0]
     if (typeof listener !== 'function') throw new Error('Standalone request handler is unavailable')

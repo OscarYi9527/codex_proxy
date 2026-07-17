@@ -79,3 +79,56 @@ export interface UsageResponse {
     readonly completedAt: string
   }>
 }
+
+export interface ProviderCredentialSummary {
+  readonly id: string
+  readonly maskedPreview: string
+  readonly storageFormat: 'plaintext-v1' | 'envelope-v1'
+  readonly updatedAt: string
+  readonly lastUsedAt: string | null
+}
+
+export interface ProviderSummary {
+  readonly id: string
+  readonly kind: 'chatgpt' | 'openai' | 'deepseek' | 'relay'
+  readonly displayName: string
+  readonly status: 'active' | 'disabled'
+  readonly config: {
+    readonly baseUrl?: string
+    readonly models?: readonly string[]
+  }
+  readonly version: number
+  readonly updatedAt: string
+  readonly credentials: readonly ProviderCredentialSummary[]
+  readonly plaintextWarning: string | null
+}
+
+export interface ProviderListResponse {
+  readonly warning: string | null
+  readonly providers: readonly ProviderSummary[]
+}
+
+export interface ModelRouteSummary {
+  readonly id: string
+  readonly publicModelId: string
+  readonly providerId: string
+  readonly upstreamModelId: string
+  readonly priority: number
+  readonly enabled: boolean
+}
+
+export interface ModelRouteResponse {
+  readonly models: readonly ModelRouteSummary[]
+}
+
+export interface ChatgptLoginStatus {
+  readonly id?: string
+  readonly status: 'idle' | 'waiting' | 'success' | 'error' | 'cancelled'
+  readonly message?: string
+  readonly startedAt?: string
+  readonly verificationUrl?: string | null
+  readonly codexSource?: string | null
+  readonly codexVersion?: string | null
+}
+
+export type ProviderDiagnostics = Readonly<Record<string, unknown>>

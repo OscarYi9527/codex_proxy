@@ -46,6 +46,13 @@ import {
 } from './api/webview-routes.js'
 import { registerAccountUsageRoutes } from './api/account-usage-routes.js'
 import { registerManagementShell } from './api/management-shell.js'
+import { ProviderRepository } from './db/repositories/provider-repository.js'
+import { ProviderService } from './providers/provider-service.js'
+import { registerAdminProviderRoutes } from './api/admin-provider-routes.js'
+import {
+  ProcessChatgptLoginService,
+  type ChatgptLoginCoordinator
+} from './providers/chatgpt-login-service.js'
 
 export interface GatewayApp {
   readonly app: FastifyInstance
@@ -65,6 +72,7 @@ export async function createGatewayApp(options: {
   secrets?: GatewaySecrets
   bootstrapSink?: (loginName: string, temporaryPassword: string) => void
   providerAdapter?: ProviderRouteAdapter
+  chatgptLogin?: ChatgptLoginCoordinator
 } = {}): Promise<GatewayApp> {
   const config = options.config || loadGatewayConfig()
   const clock = options.clock || new SystemClock()
@@ -105,6 +113,7 @@ export async function createGatewayApp(options: {
   }))
 
   registerManagementShell(app)
+  let chatgptLogin: ChatgptLoginCoordinator | null = null
 
   if (config.authMode === 'mock' && mock) {
     const tokenVerifier = options.tokenVerifier || new FixedMockAccessTokenVerifier()
@@ -190,6 +199,21 @@ export async function createGatewayApp(options: {
       storageRoot: config.dataRoot
     })
     if (providerAdapter instanceof StandaloneRouteAdapter) await providerAdapter.initialize()
+    const providerRepository = new ProviderRepository(
+      database.db,
+      callback => database.inTransaction(callback)
+    )
+    chatgptLogin = options.chatgptLogin ||
+      new ProcessChatgptLoginService(config.dataRoot, ids, () => clock.now())
+    const providerService = new ProviderService(
+      providerRepository,
+      providerAdapter,
+      config,
+      clock,
+      ids,
+      chatgptLogin
+    )
+    await providerService.initialize()
     const models = new ModelCatalog(providerAdapter)
     const responses = new ResponsesGateway(
       new RequestPreflight(tokens, models),
@@ -224,6 +248,10 @@ export async function createGatewayApp(options: {
       authenticate: authenticateAccount,
       repository: webviewRepository
     })
+    registerAdminProviderRoutes(app, {
+      authenticate: authenticateAccount,
+      service: providerService
+    })
     registerV1Routes(app, { verifier: v1Verifier, models, responses })
   }
 
@@ -233,6 +261,7 @@ export async function createGatewayApp(options: {
     database,
     mock,
     async close() {
+      await chatgptLogin?.close()
       await app.close()
       await database.close()
     }

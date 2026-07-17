@@ -7,6 +7,7 @@ import { createGatewayApp, type GatewayApp } from '../../src/app.js'
 import { databaseHandle, type DatabaseHandle } from '../../src/db/database.js'
 import { createSqliteDatabase } from '../../src/db/dialects/sqlite.js'
 import type { ProviderRouteAdapter } from '../../src/routing/standalone-route-adapter.js'
+import type { ChatgptLoginCoordinator } from '../../src/providers/chatgpt-login-service.js'
 
 export class MutableClock implements Clock {
   #nowMs: number
@@ -42,6 +43,8 @@ export async function createRealGatewayFixture(
   options: {
     providerAdapter?: ProviderRouteAdapter
     useDefaultProviderAdapter?: boolean
+    chatgptLogin?: ChatgptLoginCoordinator
+    prepareDatabase?: (database: DatabaseHandle) => Promise<void>
   } = {}
 ): Promise<RealGatewayFixture> {
   const config: GatewayConfig = {
@@ -57,6 +60,10 @@ export async function createRealGatewayFixture(
     mockState: 'login_required'
   }
   const database = databaseHandle(createSqliteDatabase(':memory:'))
+  if (options.prepareDatabase) {
+    await database.migrateToLatest()
+    await options.prepareDatabase(database)
+  }
   const clock = new MutableClock()
   let bootstrap: RealGatewayFixture['bootstrap'] | undefined
   const defaultTestAdapter = {
@@ -83,6 +90,7 @@ export async function createRealGatewayFixture(
     bootstrapSink: (loginName, password) => {
       bootstrap = { loginName, password }
     },
+    ...(options.chatgptLogin ? { chatgptLogin: options.chatgptLogin } : {}),
     ...(options.useDefaultProviderAdapter
       ? {}
       : { providerAdapter: options.providerAdapter || defaultTestAdapter })

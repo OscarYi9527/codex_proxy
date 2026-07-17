@@ -426,12 +426,23 @@ keyed digest、60 秒后过期且只能消费一次；交换成功后仅设置 3
 普通用户可查看自己的账号、积分、设备和使用记录；导航模型由 Gateway 按角色返回，
 不能依赖前端隐藏菜单授权。开发启动器会在真实模式启动前构建该 React 页面。
 
+一级管理员还可以在同一管理外壳中配置 ChatGPT、OpenAI API、DeepSeek 和 Relay
+Provider，查看动态模型路由与脱敏诊断。`/api/v1/admin/providers*`、
+`/api/v1/admin/models*` 和 `/api/v1/admin/diagnostics*` 会在服务端重新校验数据库中的
+一级管理员角色；普通用户和二级管理员均返回 `403`，不会收到凭据、路由、熔断或底层
+诊断。凭据响应只包含掩码、存储格式和时间字段。
+
+当前 MVP 的 `plaintext-v1` 仅允许回环 development/test。页面持续显示安全警告；只要
+数据库中存在这种凭据，Gateway 就拒绝在 production 或非回环地址启动。OpenAI 官方
+登录通过隔离 `CODEX_HOME` 启动 `codex app-server`，只向页面返回登录 URL 和安全状态，
+完成后把 `auth.json` 导入 Gateway 数据库并删除临时目录，不读取或改写共享
+standalone 的账号文件。正式部署前仍须完成计划中的 envelope-v1 信封加密迁移。
+
 Gateway 默认使用 SQLite（WAL、外键和 5 秒 busy timeout），生产适配边界支持
 PostgreSQL。切换 PostgreSQL 时设置 `AI_EDITOR_GATEWAY_DB_DIALECT=postgres` 与
 `AI_EDITOR_GATEWAY_POSTGRES_URL`。两个方言通过同一个 `inTransaction` 边界执行原子
-业务操作。当前阶段尚未完成 T061+ 的积分风险预留与用量结算，以及 T081+ 的中央
-Provider 管理；不得把管理页面中的零值积分或尚未结算的流式测试当作这些后续任务的
-完成证据。
+业务操作。当前阶段尚未完成 T061+ 的积分风险预留与用量结算；不得把管理页面中的零值
+积分或尚未结算的流式测试当作这些后续任务的完成证据。
 
 ## HTTP 接口
 

@@ -3,6 +3,8 @@ import { AccountPage } from '../pages/account/AccountPage'
 import { CreditsPage } from '../pages/account/CreditsPage'
 import { DevicesPage } from '../pages/account/DevicesPage'
 import { UsagePage } from '../pages/account/UsagePage'
+import { DiagnosticsPage } from '../pages/system/DiagnosticsPage'
+import { ProvidersPage } from '../pages/system/ProvidersPage'
 import { managementApi, type ManagementApiClient } from './api-client'
 import { managementBootstrapFromEvent } from './bootstrap'
 import type {
@@ -10,6 +12,9 @@ import type {
   DeviceSession,
   ManagementRoute,
   ManagementSession,
+  ModelRouteResponse,
+  ProviderDiagnostics,
+  ProviderListResponse,
   UsageResponse
 } from './types'
 
@@ -18,6 +23,9 @@ interface LoadedManagementData {
   readonly account: AccountDetails
   readonly devices: readonly DeviceSession[]
   readonly usage: UsageResponse
+  readonly providers: ProviderListResponse | null
+  readonly models: ModelRouteResponse | null
+  readonly diagnostics: ProviderDiagnostics | null
 }
 
 function PlaceholderPage({ route }: { readonly route: ManagementRoute }) {
@@ -63,8 +71,23 @@ export function App({
             client.devices(),
             client.usage(session.account.id)
           ])
+          const [providers, models, diagnostics] = session.account.role === 'level1'
+            ? await Promise.all([
+                client.providers(),
+                client.models(),
+                client.diagnostics()
+              ])
+            : [null, null, null]
           setRoute(initialRoute)
-          setData({ session, account, devices, usage })
+          setData({
+            session,
+            account,
+            devices,
+            usage,
+            providers,
+            models,
+            diagnostics
+          })
           setError(null)
         } catch {
           bootstrapping.current = false
@@ -97,6 +120,18 @@ export function App({
 
   const selectRoute = (candidate: ManagementRoute) => {
     if (allowedRoutes.has(candidate)) setRoute(candidate)
+  }
+
+  const refreshProviderData = async () => {
+    if (data.session.account.role !== 'level1') return
+    const [providers, models, diagnostics] = await Promise.all([
+      client.providers(),
+      client.models(),
+      client.diagnostics()
+    ])
+    setData(current => current
+      ? { ...current, providers, models, diagnostics }
+      : current)
   }
 
   return (
@@ -134,7 +169,18 @@ export function App({
         )}
         {route === 'security' && <DevicesPage devices={data.devices} />}
         {route === 'usage' && <UsagePage usage={data.usage} />}
-        {!['account', 'security', 'usage'].includes(route) && (
+        {route === 'providers' && data.providers && data.models && (
+          <ProvidersPage
+            client={client}
+            providers={data.providers}
+            models={data.models}
+            onRefresh={refreshProviderData}
+          />
+        )}
+        {route === 'diagnostics' && data.diagnostics && (
+          <DiagnosticsPage diagnostics={data.diagnostics} />
+        )}
+        {!['account', 'security', 'usage', 'providers', 'diagnostics'].includes(route) && (
           <PlaceholderPage route={route} />
         )}
       </main>

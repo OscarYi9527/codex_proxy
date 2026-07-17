@@ -8,6 +8,7 @@ describe('Gateway fixed development configuration', () => {
     const config = loadGatewayConfig({ NODE_ENV: 'test' }, { repositoryRoot })
     expect(config.host).toBe('127.0.0.1')
     expect(config.port).toBe(47920)
+    expect(config.publicOrigin).toBe('http://127.0.0.1:47920')
     expect(config.dataRoot).toBe(path.join(repositoryRoot, '.ai-editor-dev', 'gateway'))
     expect(config.database.sqliteFile).toBe(path.join(config.dataRoot, 'gateway.sqlite'))
     expect(config.authMode).toBe('real')
@@ -49,6 +50,7 @@ describe('Gateway fixed development configuration', () => {
       NODE_ENV: 'production',
       AI_EDITOR_GATEWAY_HOST: '10.0.0.5',
       AI_EDITOR_GATEWAY_PORT: '8443',
+      AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: 'https://gateway.example.test',
       AI_EDITOR_GATEWAY_DATA_ROOT: dataRoot,
       AI_EDITOR_GATEWAY_DB_DIALECT: 'postgres',
       AI_EDITOR_GATEWAY_POSTGRES_URL: 'postgres://gateway@example.test/gateway',
@@ -58,6 +60,7 @@ describe('Gateway fixed development configuration', () => {
       environment: 'production',
       host: '10.0.0.5',
       port: 8443,
+      publicOrigin: 'https://gateway.example.test',
       dataRoot,
       authMode: 'real',
       mockState: 'login_required',
@@ -76,5 +79,10 @@ describe('Gateway fixed development configuration', () => {
       AI_EDITOR_GATEWAY_DATA_ROOT: dataRoot,
       AI_EDITOR_GATEWAY_AUTH_MODE: 'mock'
     }, { repositoryRoot })).toThrow(/Mock authentication is forbidden/)
+    expect(() => loadGatewayConfig({
+      NODE_ENV: 'production',
+      AI_EDITOR_GATEWAY_DATA_ROOT: dataRoot,
+      AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: 'http://gateway.example.test'
+    }, { repositoryRoot })).toThrow(/HTTPS origin/)
   })
 })

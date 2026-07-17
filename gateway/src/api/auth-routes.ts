@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { SafeError } from '../common/errors.js'
 import { AuthorizationService } from '../auth/authorization-service.js'
 import { TokenService } from '../auth/token-service.js'
@@ -93,6 +93,10 @@ export function registerAuthRoutes(app: FastifyInstance, options: {
   accounts: AccountService
   verifier: AccessTokenVerifier
   statusVerifier?: AccessTokenVerifier
+  accountAuthenticator?: (
+    request: FastifyRequest,
+    reply: FastifyReply
+  ) => Promise<void>
   currentModel: () => Promise<string | null>
   issueWebviewTicket: (
     identity: ReturnType<typeof requireIdentity>,
@@ -101,6 +105,7 @@ export function registerAuthRoutes(app: FastifyInstance, options: {
 }): void {
   const authenticate = requireAccessToken(options.verifier)
   const authenticateStatus = requireAccessToken(options.statusVerifier || options.verifier)
+  const authenticateAccount = options.accountAuthenticator || authenticate
 
   app.get('/api/v1/oauth/authorize', async (request, reply) => {
     const query = asRecord(request.query)
@@ -204,10 +209,10 @@ export function registerAuthRoutes(app: FastifyInstance, options: {
   app.get('/api/v1/account/status', { preHandler: authenticateStatus }, async request =>
     options.accounts.status(requireIdentity(request), await options.currentModel()))
 
-  app.get('/api/v1/account/me', { preHandler: authenticate }, async request =>
+  app.get('/api/v1/account/me', { preHandler: authenticateAccount }, async request =>
     options.accounts.me(requireIdentity(request)))
 
-  app.post('/api/v1/account/password/change', { preHandler: authenticate }, async request => {
+  app.post('/api/v1/account/password/change', { preHandler: authenticateAccount }, async request => {
     const body = asRecord(request.body)
     const email = optionalString(body, 'email')
     return options.accounts.changePassword({
@@ -221,10 +226,10 @@ export function registerAuthRoutes(app: FastifyInstance, options: {
   app.post('/api/v1/account/webview-ticket', { preHandler: authenticate }, async request =>
     options.issueWebviewTicket(requireIdentity(request), asRecord(request.body)))
 
-  app.get('/api/v1/account/devices', { preHandler: authenticate }, async request =>
+  app.get('/api/v1/account/devices', { preHandler: authenticateAccount }, async request =>
     options.accounts.devices(requireIdentity(request)))
 
-  app.delete('/api/v1/account/devices/:sessionId', { preHandler: authenticate }, async (request, reply) => {
+  app.delete('/api/v1/account/devices/:sessionId', { preHandler: authenticateAccount }, async (request, reply) => {
     const params = asRecord(request.params)
     const query = asRecord(request.query)
     await options.accounts.revokeDevice(

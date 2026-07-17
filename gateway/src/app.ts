@@ -38,6 +38,14 @@ import { ModelCatalog } from './routing/model-catalog.js'
 import { RequestPreflight } from './routing/request-preflight.js'
 import { ResponsesGateway } from './routing/responses-gateway.js'
 import { registerV1Routes } from './api/v1-routes.js'
+import { WebviewSessionRepository } from './db/repositories/webview-session-repository.js'
+import { WebviewSessionService } from './auth/webview-session-service.js'
+import {
+  managementSessionAuthenticator,
+  registerWebviewRoutes
+} from './api/webview-routes.js'
+import { registerAccountUsageRoutes } from './api/account-usage-routes.js'
+import { registerManagementShell } from './api/management-shell.js'
 
 export interface GatewayApp {
   readonly app: FastifyInstance
@@ -96,6 +104,8 @@ export async function createGatewayApp(options: {
     service: 'ai-editor-gateway'
   }))
 
+  registerManagementShell(app)
+
   if (config.authMode === 'mock' && mock) {
     const tokenVerifier = options.tokenVerifier || new FixedMockAccessTokenVerifier()
     const authenticate = requireAccessToken(tokenVerifier)
@@ -123,6 +133,10 @@ export async function createGatewayApp(options: {
       database.db,
       callback => database.inTransaction(callback)
     )
+    const webviewRepository = new WebviewSessionRepository(
+      database.db,
+      callback => database.inTransaction(callback)
+    )
     const passwords = new PasswordService()
     const tokens = new TokenService(
       repository,
@@ -142,6 +156,27 @@ export async function createGatewayApp(options: {
         allowPasswordChange: true,
         allowInactive: true
       })
+    }
+    const publicOrigin = config.publicOrigin || `http://${config.host}:${config.port}`
+    const webviews = new WebviewSessionService(
+      webviewRepository,
+      digest,
+      clock,
+      ids,
+      publicOrigin,
+      config.environment === 'production'
+    )
+    const authenticateBearer = requireAccessToken(verifier)
+    const authenticateManagement = managementSessionAuthenticator(webviews)
+    const authenticateAccount = async (
+      request: Parameters<typeof authenticateBearer>[0],
+      reply: Parameters<typeof authenticateBearer>[1]
+    ) => {
+      if (request.headers.authorization) {
+        await authenticateBearer(request, reply)
+        return
+      }
+      await authenticateManagement(request)
     }
     const authorization = new AuthorizationService(
       repository,
@@ -180,20 +215,14 @@ export async function createGatewayApp(options: {
       accounts,
       verifier,
       statusVerifier,
+      accountAuthenticator: authenticateAccount,
       currentModel: () => models.currentModel(),
-      issueWebviewTicket: async (_identity, body) => {
-        if (
-          body['audience'] !== `http://${config.host}:${config.port}` ||
-          body['purpose'] !== 'account-management'
-        ) {
-          throw new SafeError({
-            code: 'invalid_webview_audience',
-            message: '管理页面目标地址无效。',
-            statusCode: 400
-          })
-        }
-        return { ticket: ids.secret(32), expiresIn: 60 }
-      }
+      issueWebviewTicket: (identity, body) => webviews.issueTicket(identity, body)
+    })
+    registerWebviewRoutes(app, webviews)
+    registerAccountUsageRoutes(app, {
+      authenticate: authenticateAccount,
+      repository: webviewRepository
     })
     registerV1Routes(app, { verifier: v1Verifier, models, responses })
   }

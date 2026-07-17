@@ -419,12 +419,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
   -DataRoot $root -ConfirmDataRoot $root -Force
 ```
 
+真实模式同时提供 `/admin` 专用管理外壳。Code 注入的一次性 Webview ticket 只保存
+keyed digest、60 秒后过期且只能消费一次；交换成功后仅设置 30 分钟
+`HttpOnly; SameSite=Strict` 管理 Cookie。管理页面校验同窗口、同源、固定 envelope
+版本和固定 route，不把 ticket 或 Token 写入 URL、React state、Web Storage 或日志。
+普通用户可查看自己的账号、积分、设备和使用记录；导航模型由 Gateway 按角色返回，
+不能依赖前端隐藏菜单授权。开发启动器会在真实模式启动前构建该 React 页面。
+
 Gateway 默认使用 SQLite（WAL、外键和 5 秒 busy timeout），生产适配边界支持
 PostgreSQL。切换 PostgreSQL 时设置 `AI_EDITOR_GATEWAY_DB_DIALECT=postgres` 与
 `AI_EDITOR_GATEWAY_POSTGRES_URL`。两个方言通过同一个 `inTransaction` 边界执行原子
-业务操作。当前阶段尚未完成 T049+ 的真实 Webview session，以及 T061+ 的积分风险预留、
-用量结算和中央 Provider 管理页面；不得把随机 Webview ticket 或尚未结算的流式测试当作
-这些后续任务的完成证据。
+业务操作。当前阶段尚未完成 T061+ 的积分风险预留与用量结算，以及 T081+ 的中央
+Provider 管理；不得把管理页面中的零值积分或尚未结算的流式测试当作这些后续任务的
+完成证据。
 
 ## HTTP 接口
 
@@ -817,7 +824,7 @@ VS Code 兼容层会把 `chatgpt.cliExecutable` 指向 `codex-vscode-launcher.ex
 - `src/edge/`：仅监听本机的 AI Editor Edge、OS 安全存储、真实 handoff 与兼容 Mock。
 - `gateway/`：Fastify/TypeScript Gateway、真实产品认证、模型/Responses 路由、
   Kysely 双数据库边界、迁移和测试。
-- `gateway/admin-web/`：React/Vite 管理页面骨架。
+- `gateway/admin-web/`：React/Vite 专用管理外壳、角色导航和普通用户账号页面。
 - `tools/*-ai-editor-dev.ps1`：47920/47921 隔离启动、停止和确认式数据重置。
 - `src/chatgpt-accounts.js`：账号池、额度、Token、并发租约和冷却。
 - `src/routes/`：ChatGPT、OpenAI API、DeepSeek 和中转节点处理器。

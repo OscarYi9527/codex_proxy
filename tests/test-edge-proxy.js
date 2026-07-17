@@ -111,6 +111,16 @@ describe('Edge real model and Responses proxy contract (T038/T041/T042)', () => 
     assert.equal(stream.status, 200)
     assert.match(stream.headers['content-type'], /text\/event-stream/)
     assert.match(stream.body, /response\.completed/)
+
+    const ticket = await request(
+      port,
+      'POST',
+      '/ai-editor/webview-ticket',
+      {},
+      { 'x-ai-editor-local-nonce': nonce }
+    )
+    assert.equal(ticket.status, 200)
+    assert.deepEqual(JSON.parse(ticket.body), { ticket: 'ticket', expiresIn: 60 })
   })
 })
 

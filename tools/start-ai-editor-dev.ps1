@@ -31,6 +31,7 @@ if ($GatewayPort -eq $EdgePort) {
 }
 
 $node = (Get-Command node -ErrorAction Stop).Source
+$npm = (Get-Command npm.cmd -ErrorAction Stop).Source
 $tsxPackage = Join-Path $repo 'node_modules\tsx\package.json'
 if (-not (Test-Path -LiteralPath $tsxPackage)) {
     throw 'tsx is not installed; run npm install first'
@@ -87,6 +88,10 @@ try {
             AI_EDITOR_MOCK_STATE = $MockState
         }
         if ($AuthenticationMode -eq 'real') {
+            Invoke-AiEditorForegroundProcess `
+                -NodePath $npm `
+                -Arguments @('run', 'admin:build') `
+                -Environment $gatewayEnvironment
             Invoke-AiEditorForegroundProcess `
                 -NodePath $node `
                 -Arguments @('--import', 'tsx', (Join-Path $repo 'gateway\src\bootstrap-cli.ts')) `

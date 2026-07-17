@@ -87,7 +87,7 @@ flowchart LR
 | `gateway/src/auth/` | Argon2id、PKCE、授权码、Access/Refresh Token 和账号服务 |
 | `gateway/src/routing/` | 预检、动态模型目录和现有 Provider 兼容适配 |
 | `gateway/src/db/` | Kysely schema、SQLite/PostgreSQL 方言、迁移和 repository |
-| `gateway/admin-web/` | React/Vite 安全占位管理页面 |
+| `gateway/admin-web/` | React/Vite 专用管理外壳、角色导航、账号/积分/设备/使用页面 |
 | `tools/*-ai-editor-dev.ps1` | 隔离启动、PID 归属停止和确认式数据重置 |
 | `src/routes/chatgpt-sub.js` | ChatGPT 请求、账号轮换、公平队列和取消联动 |
 | `src/chatgpt-accounts.js` | OAuth Token、额度、预测、租约、自适应并发和冷却 |
@@ -105,6 +105,15 @@ flowchart LR
 | `src/diagnostics.js` | 账号池/Provider/熔断联合诊断、结论与上下文操作 |
 | `src/smart-routing.js` | 显式回退计划、虚拟模型评分和错误响应延迟提交 |
 | `src/pricing.js` | 本地可更新模型价格目录与单请求成本估算 |
+
+### 专用管理会话
+
+Code 只加载固定 `/admin#route`，再由 Electron main 在隔离 world 注入 60 秒一次性 ticket。
+Gateway 数据库只保存 ticket 和管理 Cookie 的 keyed digest。`POST /api/v1/webview/session`
+原子消费 ticket，并设置 30 分钟 `HttpOnly; SameSite=Strict` Cookie；生产环境额外设置
+`Secure`。所有 Cookie 写操作要求固定 Gateway `Origin`，关闭标签页时
+`DELETE /api/v1/webview/session` 撤销会话。React 导航使用服务端返回的角色许可列表，
+普通用户页面只读取自身账号、积分、设备和使用记录。
 | `src/cost-governance.js` | Provider 日/月成本汇总和预算门禁 |
 | `src/runtime-info.js` | 运行路径、版本、Commit 和工作区/安装副本一致性 |
 | `src/admin.js` | 管理静态资源、基础配置接口与分域接口聚合 |

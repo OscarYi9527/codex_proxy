@@ -69,6 +69,14 @@
 - [x] 动态模型目录只列出隔离 Gateway 已配置 Provider，并过滤 `gpt-mock`。
 - [ ] T047/T048 由 Oscar 使用真实订阅和非订阅 Provider 完成联合验收。
 
+### 阶段 4.6：真实 AI Editor 管理页面
+
+- [x] 完成 T049/T052 的一次性 Webview ticket、HttpOnly Cookie、过期/重放和关闭撤销。
+- [x] 完成 T050/T054 的 React 管理外壳、同源 bootstrap 校验和服务端角色导航。
+- [x] 完成 T053 的 Edge 安全状态与 Webview ticket 真实转发。
+- [x] 完成 T055 的普通用户账号、积分、设备和使用记录页面。
+- [x] 管理会话和页面不把 ticket、Token、Provider 凭据写入 URL、Web Storage 或日志。
+
 ### 阶段 5–6：组织、权限、积分和并发风险
 
 - [ ] 在 Gateway API 强制执行一级管理员、二级管理员、组织用户权限和跨组织 `403`。
@@ -82,8 +90,9 @@
 - [x] 通过兼容适配器将现有 ChatGPT、OpenAI API、DeepSeek、Relay、模型目录和路由接入
   Gateway；中央 Provider 管理 API、凭据轮换与角色化诊断仍待 T083–T092。
 - [ ] Edge、普通用户和二级管理员不能获取中央凭据、成本、熔断或 Provider 路由诊断。
-- [ ] React 页面覆盖普通用户、二级管理员和一级管理员能力，且越权不能只靠隐藏菜单。
-- [ ] Token 不进入 URL 或 `localStorage`，管理页面可安全嵌入 Code Webview。
+- [ ] React 页面继续覆盖二级管理员组织管理和一级管理员 Provider/系统管理；当前角色导航
+  已由 Gateway 强制，普通用户页面已完成。
+- [x] Token 不进入 URL 或 `localStorage`，管理页面可安全嵌入 Code Webview。
 - [ ] 仅保存用户提问、最终回复、时间、模型、Token 和扣分；禁止保存系统提示词、文件原文、
   推理、工具输出、完整上游请求及 Refresh Token。
 - [ ] 正文默认保留 30 天，组织可配置 7–180 天；到期删除正文并保留匿名统计。

@@ -1,11 +1,144 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { App } from './App'
+import type { ManagementApiClient } from './api-client'
+import type { AccountRole, ManagementRoute } from './types'
 
-describe('Gateway admin shell', () => {
-  it('renders a safe placeholder without credentials or provider details', () => {
-    render(<App />)
-    expect(screen.getByRole('heading', { name: 'AI Editor 管理' })).toBeInTheDocument()
-    expect(screen.getByText(/基础框架已启动/)).toBeInTheDocument()
-    expect(document.body.textContent).not.toMatch(/api[_-]?key|refresh token/i)
+const account = {
+  account: {
+    id: 'acct_test',
+    email: 'user@example.test',
+    loginName: null,
+    role: 'user' as const,
+    status: 'active',
+    expiresAt: null,
+    organization: { id: 'org_test', name: '示例组织' },
+    mustChangePassword: false,
+    mustProvideEmail: false
+  },
+  credits: {
+    periodStart: '2026-07-01T00:00:00.000Z',
+    periodEnd: '2026-08-01T00:00:00.000Z',
+    allocated: '100.000000',
+    settled: '12.500000',
+    available: '87.500000'
+  }
+}
+
+function clientFor(role: AccountRole): ManagementApiClient {
+  const navigationByRole: Record<AccountRole, Array<{ id: ManagementRoute; label: string }>> = {
+    user: [
+      { id: 'account', label: '我的账号' },
+      { id: 'security', label: '设备与安全' },
+      { id: 'usage', label: '使用记录' }
+    ],
+    level2: [
+      { id: 'account', label: '我的账号' },
+      { id: 'security', label: '设备与安全' },
+      { id: 'usage', label: '使用记录' },
+      { id: 'organization', label: '组织用户' },
+      { id: 'invitations', label: '邀请码' }
+    ],
+    level1: [
+      { id: 'account', label: '我的账号' },
+      { id: 'security', label: '设备与安全' },
+      { id: 'usage', label: '使用记录' },
+      { id: 'organization', label: '组织用户' },
+      { id: 'invitations', label: '邀请码' },
+      { id: 'providers', label: 'Provider 与模型' },
+      { id: 'diagnostics', label: '系统诊断' }
+    ]
+  }
+  return {
+    exchangeTicket: async () => ({
+      expiresIn: 1800,
+      account: { id: 'acct_test', role },
+      navigation: navigationByRole[role]
+    }),
+    account: async () => ({
+      ...account,
+      account: { ...account.account, role }
+    }),
+    devices: async () => [{
+      id: 'ds_test',
+      name: '测试电脑',
+      platform: 'windows',
+      createdAt: '2026-07-17T00:00:00.000Z',
+      lastUsedAt: '2026-07-17T01:00:00.000Z',
+      expiresAt: '2026-08-17T00:00:00.000Z',
+      revokedAt: null,
+      current: true
+    }],
+    usage: async () => ({
+      summary: {
+        requests: 1,
+        inputTokens: 20,
+        outputTokens: 10,
+        settledCredits: '12.500000'
+      },
+      records: [{
+        id: 'usage_test',
+        turnId: 'turn_test',
+        modelId: 'real-model',
+        inputTokens: 20,
+        outputTokens: 10,
+        totalCredits: '12.500000',
+        usageSource: 'upstream',
+        completedAt: '2026-07-17T01:00:00.000Z'
+      }]
+    })
+  }
+}
+
+function bootstrap(route: ManagementRoute = 'account', origin = window.location.origin) {
+  window.dispatchEvent(new MessageEvent('message', {
+    source: window,
+    origin,
+    data: {
+      type: 'ai-editor-management-bootstrap',
+      version: 1,
+      route,
+      ticket: 'one-time-management-ticket',
+      expiresIn: 60
+    }
+  }))
+}
+
+describe('Gateway management shell role navigation (T050/T054/T055)', () => {
+  it('accepts only the fixed same-window bootstrap envelope', async () => {
+    render(<App client={clientFor('user')} />)
+    bootstrap('account', 'https://evil.example')
+    expect(screen.getByText(/等待 Code/)).toBeInTheDocument()
+    bootstrap()
+    expect(await screen.findByText('user@example.test')).toBeInTheDocument()
+    expect(screen.getByText('87.500000')).toBeInTheDocument()
+    expect(document.body.textContent).not.toMatch(/one-time-management-ticket/)
+  })
+
+  it.each([
+    ['user', false, false],
+    ['level2', true, false],
+    ['level1', true, true]
+  ] as const)('renders server-authorized navigation for %s', async (
+    role,
+    seesOrganization,
+    seesProviders
+  ) => {
+    render(<App client={clientFor(role)} />)
+    bootstrap()
+    await screen.findByRole('navigation', { name: '管理导航' })
+    expect(Boolean(screen.queryByRole('button', { name: '组织用户' })))
+      .toBe(seesOrganization)
+    expect(Boolean(screen.queryByRole('button', { name: 'Provider 与模型' })))
+      .toBe(seesProviders)
+  })
+
+  it('shows devices and usage without exposing credentials or Provider internals', async () => {
+    render(<App client={clientFor('user')} />)
+    bootstrap('security')
+    expect(await screen.findByText('测试电脑')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '使用记录' }))
+    await waitFor(() => expect(screen.getByText('real-model')).toBeInTheDocument())
+    expect(screen.getByText('12.500000 积分')).toBeInTheDocument()
+    expect(document.body.textContent).not.toMatch(/refresh.?token|api.?key|circuit/i)
   })
 })

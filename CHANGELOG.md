@@ -18,6 +18,10 @@
   handoff、账号切换身份快照，以及真实模型/Responses/Chat Completions 转发。
 - 新增 Gateway 动态安全模型目录和现有 Provider 兼容适配器；真实链路测试使用隔离本机
   Relay，明确排除 `gpt-mock`。
+- 新增 60 秒一次性 Webview ticket、30 分钟 HttpOnly 管理会话、Origin/CSRF 门禁和
+  `/admin` 严格 CSP 管理外壳。
+- 新增服务端角色导航，以及普通用户账号、积分、设备与使用记录 React 页面。
+- Gateway/Edge 合同测试开始共同消费 My_Code 的 `edge-code-contract.json` fixture。
 
 ### Changed
 
@@ -26,6 +30,7 @@
 - Node.js 工程基线调整为 22.19 及以上，以匹配 Vite 7 和 Gateway 工具链。
 - Gateway Provider 配置、统计、线程路由和健康数据改用隔离存储根，standalone 未设置
   `CODEX_PROXY_STORAGE_ROOT` 时保持原有仓库根行为。
+- 真实开发启动会先构建管理 React 页面，再前台执行一次性 bootstrap。
 
 ## [2.4.1] - 2026-07-15
 

@@ -9,6 +9,7 @@ export interface GatewayConfig {
   readonly environment: 'development' | 'test' | 'production'
   readonly host: string
   readonly port: number
+  readonly publicOrigin?: string
   readonly dataRoot: string
   readonly database: {
     readonly dialect: 'sqlite' | 'postgres'
@@ -113,10 +114,30 @@ export function loadGatewayConfig(
   if (environment === 'production' && authMode === 'mock') {
     throw new Error('Mock authentication is forbidden in production Gateway mode')
   }
+  const host = parseHost(env.AI_EDITOR_GATEWAY_HOST, environment)
+  const port = parsePort(env.AI_EDITOR_GATEWAY_PORT, GATEWAY_DEVELOPMENT_PORT, environment)
+  const candidateOrigin = env.AI_EDITOR_GATEWAY_PUBLIC_ORIGIN ||
+    `http://${host}:${port}`
+  const publicUrl = new URL(candidateOrigin)
+  if (
+    publicUrl.origin !== candidateOrigin ||
+    publicUrl.pathname !== '/' ||
+    publicUrl.search ||
+    publicUrl.hash ||
+    publicUrl.username ||
+    publicUrl.password ||
+    (environment === 'production' && publicUrl.protocol !== 'https:') ||
+    (environment !== 'production' && publicUrl.origin !== `http://${host}:${port}`)
+  ) {
+    throw new Error(environment === 'production'
+      ? 'Production Gateway public origin must be an HTTPS origin'
+      : 'Development Gateway public origin must match its fixed listener')
+  }
   return {
     environment,
-    host: parseHost(env.AI_EDITOR_GATEWAY_HOST, environment),
-    port: parsePort(env.AI_EDITOR_GATEWAY_PORT, GATEWAY_DEVELOPMENT_PORT, environment),
+    host,
+    port,
+    publicOrigin: publicUrl.origin,
     dataRoot,
     database: {
       dialect,

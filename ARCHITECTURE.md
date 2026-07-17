@@ -16,7 +16,7 @@ edge：      127.0.0.1:47921
 Gateway/Edge 不得读取、复制或修改 standalone 的配置、ChatGPT 账号、API Key、统计、
 PID、日志或备份。开发启动器必须对端口、PID 和数据目录执行规范化与边界校验；测试使用
 临时数据根。AI Editor 的接口事实来源是独立 `My_Code` 仓库中的
-`0da3497f12e96bae58f9fe6b20a08833a0c3c2bd` 提交下
+`dca68160b25cee78b2c231c4fbd8398624ab93ff` 提交下
 `specs/002-ai-editor-account-gateway/contracts/`，两个仓库不合并 Git 根历史。
 
 当前 `feature/ai-editor-account-gateway` 是堆叠分支，依赖

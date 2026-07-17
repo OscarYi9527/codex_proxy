@@ -10,7 +10,7 @@
   `F:\AI\codex-collaboration\codex_proxy-black`，迁移前不得影响正在运行的 Proxy。
 - [x] 编写 `docs/COLLABORATION_WORKSPACE.md`，明确同事仓库、remote、worktree 和合并门禁。
 - [x] 已记录同事仓库 `OscarYi9527/My_Code`、分支 `codex/account-gateway-mvp`
-  和最新合同交付 commit `0da3497f1`。
+  和最新合同交付 commit `dca68160b`。
 - [x] 已将同事仓库克隆到 `F:\AI\codex-collaboration\My_Code`，并确认工作区干净。
 - [x] 已确认 `My_Code` 与 `codex_proxy-black` 没有共同 Git 历史；禁止将两个根仓库
   直接合并，后续通过 API 合同和端到端测试完成产品集成。

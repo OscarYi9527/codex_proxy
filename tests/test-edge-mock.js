@@ -1,7 +1,13 @@
 import { afterEach, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import http from 'node:http'
 import { createEdgeServer } from '../src/edge/edge-server.js'
+
+const contract = JSON.parse(fs.readFileSync(
+  new URL('../gateway/tests/fixtures/edge-code-contract.json', import.meta.url),
+  'utf8'
+))
 
 const nonce = 'test-local-nonce-32-bytes-minimum'
 const config = {
@@ -60,9 +66,10 @@ describe('Edge first-round Mock API', () => {
     const port = await start()
     assert.equal((await request(port, 'GET', '/live')).status, 200)
     const denied = await request(port, 'GET', '/ai-editor/status')
-    assert.equal(denied.status, 401)
+    assert.equal(denied.status, contract.localAuthorization.missingStatus)
+    assert.equal(denied.body.error.code, contract.localAuthorization.missingErrorCode)
     const accepted = await request(port, 'GET', '/ai-editor/status', null, {
-      'x-ai-editor-local-nonce': nonce
+      [contract.localAuthorization.headerName]: nonce
     })
     assert.equal(accepted.status, 200)
     assert.equal(accepted.body.state, 'ready')
@@ -72,44 +79,59 @@ describe('Edge first-round Mock API', () => {
   it('creates and consumes a one-time local handoff', async () => {
     const port = await start()
     const headers = { 'x-ai-editor-local-nonce': nonce }
-    const created = await request(port, 'POST', '/ai-editor/handoff/start', {
-      state: 'code-login-state'
+    const created = await request(
+      port,
+      contract.handoff.start.method,
+      contract.handoff.start.path,
+      {
+      state: contract.handoff.start.request.state
     }, headers)
-    assert.equal(created.status, 201)
-    const completed = await request(port, 'POST', '/ai-editor/handoff/complete', {
+    assert.ok(contract.handoff.start.successStatuses.includes(created.status))
+    for (const field of contract.handoff.start.responseRequiredFields) {
+      assert.ok(Object.hasOwn(created.body, field))
+    }
+    const completed = await request(port, contract.handoff.complete.method, contract.handoff.complete.path, {
       handoffId: created.body.handoffId,
       nonce: created.body.nonce,
-      state: 'code-login-state',
-      deviceSessionId: 'ds_mock',
-      refreshToken: 'refresh-secret',
-      accessToken: 'access-secret',
-      accessTokenExpiresIn: 300
+      state: contract.handoff.start.request.state,
+      ...contract.handoff.complete.request
     }, headers)
-    assert.deepEqual(completed.body, { status: 'completed', bindingVersion: 1 })
-    const replay = await request(port, 'POST', '/ai-editor/handoff/complete', {
+    assert.equal(completed.body.status, contract.handoff.complete.response.status)
+    assert.ok(completed.body.bindingVersion >= contract.handoff.complete.response.minimumBindingVersion)
+    const replay = await request(port, contract.handoff.complete.method, contract.handoff.complete.path, {
       handoffId: created.body.handoffId,
       nonce: created.body.nonce,
-      state: 'code-login-state',
-      deviceSessionId: 'ds_mock',
-      refreshToken: 'refresh-secret',
-      accessToken: 'access-secret'
+      state: contract.handoff.start.request.state,
+      ...contract.handoff.complete.request
     }, headers)
-    assert.equal(replay.status, 400)
-    assert.equal(replay.body.error.code, 'handoff_invalid')
+    assert.ok(contract.handoff.complete.replayStatuses.includes(replay.status))
+    assert.equal(replay.body.error.code, contract.handoff.complete.replayErrorCode)
   })
 
   it('supports Webview ticket, logout, status retry, and safe models', async () => {
     const port = await start()
     const headers = { 'x-ai-editor-local-nonce': nonce }
-    assert.equal((await request(port, 'GET', '/v1/models')).status, 200)
-    const ticket = await request(port, 'POST', '/ai-editor/webview-ticket', {}, headers)
-    assert.equal(ticket.status, 200)
+    assert.ok(contract.models.successStatuses.includes(
+      (await request(port, contract.models.method, contract.models.path)).status
+    ))
+    const ticket = await request(
+      port,
+      contract.webviewTicket.method,
+      contract.webviewTicket.path,
+      {},
+      headers
+    )
+    assert.ok(contract.webviewTicket.successStatuses.includes(ticket.status))
     assert.equal(ticket.body.expiresIn, 60)
-    assert.equal((await request(port, 'POST', '/ai-editor/status/retry', {}, headers)).status, 200)
-    assert.equal((await request(port, 'POST', '/ai-editor/logout', {}, headers)).status, 204)
+    assert.ok(contract.statusRetry.successStatuses.includes(
+      (await request(port, contract.statusRetry.method, contract.statusRetry.path, {}, headers)).status
+    ))
+    assert.ok(contract.logout.successStatuses.includes(
+      (await request(port, contract.logout.method, contract.logout.path, {}, headers)).status
+    ))
     assert.equal((await request(port, 'GET', '/ai-editor/status', null, headers)).body.state, 'login_required')
-    const models = await request(port, 'GET', '/v1/models')
-    assert.equal(models.status, 401)
-    assert.equal(models.body.error.code, 'login_required')
+    const models = await request(port, contract.models.method, contract.models.path)
+    assert.ok(contract.models.loggedOutStatuses.includes(models.status))
+    assert.equal(models.body.error.code, contract.models.loggedOutErrorCode)
   })
 })

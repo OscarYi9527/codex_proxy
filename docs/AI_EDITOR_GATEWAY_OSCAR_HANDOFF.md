@@ -3,7 +3,7 @@
 > 历史文档：本页只描述第一轮 Mock 基线。真实认证与模型链路请使用
 > [AI_EDITOR_GATEWAY_REAL_AUTH_RESPONSES_HANDOFF.md](AI_EDITOR_GATEWAY_REAL_AUTH_RESPONSES_HANDOFF.md)；
 > 当前合同事实来源为
-> `My_Code@0da3497f12e96bae58f9fe6b20a08833a0c3c2bd/specs/002-ai-editor-account-gateway/contracts/`。
+> `My_Code@dca68160b25cee78b2c231c4fbd8398624ab93ff/specs/002-ai-editor-account-gateway/contracts/`。
 
 ## 1. 交付坐标
 
@@ -14,7 +14,7 @@ Black 已完成 Proxy 侧 T002–T007、T009–T021 和第一轮 Mock。
 分支：  feature/ai-editor-account-gateway
 提交：  84ab6445bb4b557dc379815776bcd784f34676c1
 依赖：  feature/custom-api-urls@e3ed1d6
-合同：  My_Code@0da3497f1/specs/002-ai-editor-account-gateway/contracts/
+合同：  My_Code@dca68160b/specs/002-ai-editor-account-gateway/contracts/
 ```
 
 这是堆叠分支，尚不能脱离 `feature/custom-api-urls` 单独合并。两个仓库没有共同 Git
@@ -126,7 +126,7 @@ git rev-parse HEAD
 预期规划基线为：
 
 ```text
-0da3497f12e96bae58f9fe6b20a08833a0c3c2bd
+dca68160b25cee78b2c231c4fbd8398624ab93ff
 ```
 
 如果远程已经前进，以 `git pull --ff-only` 后的新提交为准并把 SHA 告知 Black。

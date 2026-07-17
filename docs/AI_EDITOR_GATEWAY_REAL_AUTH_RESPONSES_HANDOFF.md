@@ -7,7 +7,7 @@
 ```text
 My_Code:
   branch: codex/account-gateway-mvp
-  contract commit: 0da3497f12e96bae58f9fe6b20a08833a0c3c2bd
+  contract commit: dca68160b25cee78b2c231c4fbd8398624ab93ff
   contracts: specs/002-ai-editor-account-gateway/contracts/
 
 codex_proxy:
@@ -17,6 +17,10 @@ codex_proxy:
 
 未修改接口合同。后续 endpoint、JSON 字段、状态码或安全语义变化，仍须先修改上述
 My_Code `contracts/` 并由双方确认。
+
+Gateway 和 Edge 合同测试直接消费 vendored
+`gateway/tests/fixtures/edge-code-contract.json`；该文件与上述 My_Code 提交中的
+`contracts/fixtures/edge-code-contract.json` 语义一致。
 
 ## Black 本轮完成范围
 

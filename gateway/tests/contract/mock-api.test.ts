@@ -5,6 +5,7 @@ import type { GatewayConfig } from '../../src/config.js'
 import { createGatewayApp, type GatewayApp } from '../../src/app.js'
 import { databaseHandle } from '../../src/db/database.js'
 import { createSqliteDatabase } from '../../src/db/dialects/sqlite.js'
+import { edgeCodeContract } from '../helpers/edge-code-contract.js'
 
 const config: GatewayConfig = {
   environment: 'test',
@@ -43,16 +44,22 @@ describe('Gateway safe Mock API contract', () => {
   })
 
   it('fails closed with stable safe errors when login is missing', async () => {
-    const response = await gateway.app.inject({ method: 'GET', url: '/v1/models' })
-    expect(response.statusCode).toBe(401)
+    const response = await gateway.app.inject({
+      method: edgeCodeContract.models.method,
+      url: edgeCodeContract.models.path
+    })
+    expect(edgeCodeContract.models.loggedOutStatuses).toContain(response.statusCode)
     expect(response.json()).toEqual({
       error: {
-        code: 'login_required',
+        code: edgeCodeContract.models.loggedOutErrorCode,
         message: '需要登录 AI Editor 产品账号。',
         requestId: expect.stringMatching(/^req_/),
         retryable: false
       }
     })
+    for (const field of edgeCodeContract.safeError.requiredFields) {
+      expect(response.json().error).toHaveProperty(field)
+    }
     expect(response.headers['cache-control']).toBe('no-store')
   })
 
@@ -67,12 +74,19 @@ describe('Gateway safe Mock API contract', () => {
       availableCredits: '1000.000000',
       actions: []
     })
-    const models = await gateway.app.inject({ method: 'GET', url: '/v1/models', headers })
+    const models = await gateway.app.inject({
+      method: edgeCodeContract.models.method,
+      url: edgeCodeContract.models.path,
+      headers
+    })
+    expect(edgeCodeContract.models.successStatuses).toContain(models.statusCode)
     expect(models.json()).toEqual({
       object: 'list',
       data: [{ id: 'gpt-mock', object: 'model', owned_by: 'ai-editor' }]
     })
-    expect(models.body).not.toMatch(/provider|credential|circuit|cost/i)
+    for (const field of edgeCodeContract.safeStatusForbiddenFields) {
+      expect(models.body.toLowerCase()).not.toContain(`"${field.toLowerCase()}"`)
+    }
   })
 
   it('issues one-minute safe Webview tickets only for the fixed audience', async () => {
@@ -90,8 +104,11 @@ describe('Gateway safe Mock API contract', () => {
       headers,
       payload: { audience: 'http://127.0.0.1:47920', purpose: 'account-management' }
     })
-    expect(accepted.statusCode).toBe(200)
+    expect(edgeCodeContract.webviewTicket.successStatuses).toContain(accepted.statusCode)
     expect(accepted.json()).toMatchObject({ expiresIn: 60 })
+    for (const field of edgeCodeContract.webviewTicket.responseRequiredFields) {
+      expect(accepted.json()).toHaveProperty(field)
+    }
   })
 
   it.each([
@@ -100,6 +117,8 @@ describe('Gateway safe Mock API contract', () => {
     ['account_unavailable', ['openAccount']],
     ['password_change_required', ['openAccount']]
   ] as const)('maps Mock state %s to safe actions and an empty model list', async (state, actions) => {
+    const contractStatus = edgeCodeContract.statuses.find(item => item.state === state)
+    expect(contractStatus?.actions).toEqual(actions)
     gateway.mock?.setState(state)
     const headers = { authorization: 'Bearer mock-access-token' }
     const status = await gateway.app.inject({

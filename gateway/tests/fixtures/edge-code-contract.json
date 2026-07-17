@@ -1,0 +1,157 @@
+{
+  "schemaVersion": 1,
+  "localAuthorization": {
+    "headerName": "X-AI-Editor-Local-Nonce",
+    "missingStatus": 401,
+    "missingErrorCode": "local_authorization_required"
+  },
+  "statuses": [
+    {
+      "state": "ready",
+      "actions": [],
+      "requiredFields": ["account", "currentModel", "availableCredits"],
+      "forbiddenFields": ["errorId"],
+      "example": {
+        "state": "ready",
+        "checkedAt": "2026-07-17T00:00:00.000Z",
+        "account": {
+          "display": "oscar.mock@example.test",
+          "role": "user"
+        },
+        "currentModel": "mock-gpt",
+        "availableCredits": "1000.000000",
+        "actions": []
+      }
+    },
+    {
+      "state": "login_required",
+      "actions": ["login"],
+      "requiredFields": [],
+      "forbiddenFields": ["account", "currentModel", "availableCredits"],
+      "example": {
+        "state": "login_required",
+        "checkedAt": "2026-07-17T00:00:00.000Z",
+        "actions": ["login"]
+      }
+    },
+    {
+      "state": "account_unavailable",
+      "actions": ["openAccount"],
+      "requiredFields": [],
+      "forbiddenFields": ["account", "currentModel", "availableCredits"],
+      "example": {
+        "state": "account_unavailable",
+        "checkedAt": "2026-07-17T00:00:00.000Z",
+        "actions": ["openAccount"]
+      }
+    },
+    {
+      "state": "service_unavailable",
+      "actions": ["retry"],
+      "requiredFields": ["errorId"],
+      "forbiddenFields": ["account", "currentModel", "availableCredits"],
+      "example": {
+        "state": "service_unavailable",
+        "checkedAt": "2026-07-17T00:00:00.000Z",
+        "errorId": "mock_service_unavailable",
+        "actions": ["retry"]
+      }
+    },
+    {
+      "state": "password_change_required",
+      "actions": ["openAccount"],
+      "requiredFields": [],
+      "forbiddenFields": ["account", "currentModel", "availableCredits"],
+      "example": {
+        "state": "password_change_required",
+        "checkedAt": "2026-07-17T00:00:00.000Z",
+        "actions": ["openAccount"]
+      }
+    }
+  ],
+  "statusRetry": {
+    "method": "POST",
+    "path": "/ai-editor/status/retry",
+    "successStatuses": [200]
+  },
+  "handoff": {
+    "start": {
+      "method": "POST",
+      "path": "/ai-editor/handoff/start",
+      "successStatuses": [200, 201],
+      "request": {
+        "state": "fixture-login-state"
+      },
+      "responseRequiredFields": ["handoffId", "nonce", "expiresIn"]
+    },
+    "complete": {
+      "method": "POST",
+      "path": "/ai-editor/handoff/complete",
+      "successStatuses": [200],
+      "request": {
+        "deviceSessionId": "fixture-device-session",
+        "refreshToken": "fixture-refresh-token-secret",
+        "accessToken": "fixture-access-token-secret",
+        "accessTokenExpiresIn": 300
+      },
+      "response": {
+        "status": "completed",
+        "minimumBindingVersion": 1
+      },
+      "replayStatuses": [400, 409],
+      "replayErrorCode": "handoff_invalid"
+    }
+  },
+  "webviewTicket": {
+    "method": "POST",
+    "path": "/ai-editor/webview-ticket",
+    "successStatuses": [200],
+    "responseRequiredFields": ["ticket", "expiresIn"]
+  },
+  "logout": {
+    "method": "POST",
+    "path": "/ai-editor/logout",
+    "successStatuses": [204],
+    "resultingState": "login_required"
+  },
+  "models": {
+    "method": "GET",
+    "path": "/v1/models",
+    "successStatuses": [200],
+    "loggedOutStatuses": [401, 409],
+    "loggedOutErrorCode": "login_required",
+    "example": {
+      "object": "list",
+      "data": [
+        {
+          "id": "mock-gpt",
+          "object": "model",
+          "owned_by": "ai-editor-mock"
+        },
+        {
+          "id": "mock-deepseek",
+          "object": "model",
+          "owned_by": "ai-editor-mock"
+        }
+      ]
+    }
+  },
+  "safeStatusForbiddenFields": [
+    "provider",
+    "providers",
+    "credential",
+    "credentials",
+    "route",
+    "circuit",
+    "upstream",
+    "port"
+  ],
+  "safeError": {
+    "requiredFields": ["code", "message", "requestId", "retryable"],
+    "forbiddenFields": ["provider", "credential", "route", "circuit", "upstream", "url"]
+  },
+  "reportSecretValues": [
+    "fixture-refresh-token-secret",
+    "fixture-access-token-secret"
+  ]
+}

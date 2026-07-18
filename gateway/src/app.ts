@@ -50,6 +50,9 @@ import { registerManagementShell } from './api/management-shell.js'
 import { ProviderRepository } from './db/repositories/provider-repository.js'
 import { ProviderService } from './providers/provider-service.js'
 import { registerAdminProviderRoutes } from './api/admin-provider-routes.js'
+import { registerAdminOrganizationRoutes } from './api/admin-organization-routes.js'
+import { OrganizationRepository } from './db/repositories/organization-repository.js'
+import { OrganizationService } from './organizations/organization-service.js'
 import {
   ProcessChatgptLoginService,
   type ChatgptLoginCoordinator
@@ -204,6 +207,8 @@ export async function createGatewayApp(options: {
       database.db,
       callback => database.inTransaction(callback)
     )
+    const organizationRepository = new OrganizationRepository(database.db)
+    const organizations = new OrganizationService(organizationRepository, digest, clock, ids)
     chatgptLogin = options.chatgptLogin ||
       new ProcessChatgptLoginService(config.dataRoot, ids, () => clock.now())
     const providerService = new ProviderService(
@@ -256,6 +261,10 @@ export async function createGatewayApp(options: {
     registerAdminProviderRoutes(app, {
       authenticate: authenticateAccount,
       service: providerService
+    })
+    registerAdminOrganizationRoutes(app, {
+      authenticate: authenticateAccount,
+      service: organizations
     })
     registerV1Routes(app, { verifier: v1Verifier, models, responses })
   }

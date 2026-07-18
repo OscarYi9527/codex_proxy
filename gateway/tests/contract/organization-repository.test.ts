@@ -71,15 +71,7 @@ describe('organization repository scope boundaries (T063)', () => {
   afterEach(async () => fixture.gateway.close())
 
   it('lists only accounts in the requested organization', async () => {
-    const noTransaction = async <T>(
-      _operation: (repository: OrganizationRepository) => Promise<T>
-    ): Promise<T> => {
-      throw new Error('This repository scope test does not open a transaction')
-    }
-    const repository = new OrganizationRepository(
-      fixture.database.db,
-      noTransaction
-    )
+    const repository = new OrganizationRepository(fixture.database.db)
 
     await expect(repository.listAccountsForOrganization('org_a')).resolves.toEqual([
       expect.objectContaining({ id: 'acct_org_a_user', organizationId: 'org_a' })

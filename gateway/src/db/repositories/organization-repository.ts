@@ -8,6 +8,7 @@ export interface OrganizationSummary {
   readonly id: string
   readonly name: string
   readonly status: 'active' | 'disabled'
+  readonly auditRetentionDays: number
   readonly updatedAt: string
   readonly version: number
 }
@@ -54,13 +55,14 @@ export class OrganizationRepository {
   async listOrganizations(): Promise<OrganizationSummary[]> {
     const rows = await this.db
       .selectFrom('organizations')
-      .select(['id', 'name', 'status', 'updated_at', 'version'])
+      .select(['id', 'name', 'status', 'audit_retention_days', 'updated_at', 'version'])
       .orderBy('name', 'asc')
       .execute()
     return rows.map(row => ({
       id: row.id,
       name: row.name,
       status: row.status,
+      auditRetentionDays: row.audit_retention_days,
       updatedAt: row.updated_at,
       version: row.version
     }))
@@ -136,11 +138,12 @@ export class OrganizationRepository {
 
   async findOrganization(organizationId: string): Promise<OrganizationSummary | null> {
     const row = await this.db.selectFrom('organizations')
-      .select(['id', 'name', 'status', 'updated_at', 'version'])
+      .select(['id', 'name', 'status', 'audit_retention_days', 'updated_at', 'version'])
       .where('id', '=', organizationId)
       .executeTakeFirst()
     return row ? {
       id: row.id, name: row.name, status: row.status,
+      auditRetentionDays: row.audit_retention_days,
       updatedAt: row.updated_at, version: row.version
     } : null
   }

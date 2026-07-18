@@ -139,6 +139,18 @@ ChatGPT 官方登录使用 Gateway 数据根下的临时 `CODEX_HOME` 和 Codex 
 完成导入后先终止子进程，再删除临时认证目录。MVP `plaintext-v1` 只能用于回环开发，
 production/非回环启动门禁会拒绝任何残留明文凭据。
 
+### Gateway 调用审计与正文保留
+
+Gateway 在 Turn 结算后只从结构化 `user` 文本和最终 `assistant` 文本生成
+`conversation_audits`。system/developer、文件、图片、推理、工具调用和工具输出不会进入
+持久化边界；允许正文还会经过秘密模式遮蔽和 16 KB 长度上限。列表 API 只返回组织、
+账号、公共模型、时间、Token 和正文状态，只有单条详情 API 返回脱敏正文。
+
+二级管理员的审计查询由服务端强制绑定其组织；一级管理员可跨组织筛选并设置 7–180 天
+正文保留期。清理任务只把脱敏正文置空并写入 `body_deleted_at`，不会删除 Token、模型、
+时间和组织聚合。查看正文的成功、拒绝和失败结果，以及保留期修改，会写入
+`admin_audit_events`；事件只包含操作时角色、安全错误码和小型脱敏元数据。
+
 ## 请求路由
 
 ```mermaid

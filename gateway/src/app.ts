@@ -63,6 +63,10 @@ import {
   ProcessChatgptLoginService,
   type ChatgptLoginCoordinator
 } from './providers/chatgpt-login-service.js'
+import { AuditRepository } from './db/repositories/audit-repository.js'
+import { AuditService } from './audit/audit-service.js'
+import { RetentionService } from './audit/retention-service.js'
+import { registerAuditRoutes } from './api/audit-routes.js'
 
 export interface GatewayApp {
   readonly app: FastifyInstance
@@ -124,6 +128,7 @@ export async function createGatewayApp(options: {
 
   registerManagementShell(app)
   let chatgptLogin: ChatgptLoginCoordinator | null = null
+  let retentionTimer: ReturnType<typeof setInterval> | null = null
 
   if (config.authMode === 'mock' && mock) {
     const tokenVerifier = options.tokenVerifier || new FixedMockAccessTokenVerifier()
@@ -217,6 +222,19 @@ export async function createGatewayApp(options: {
       callback => database.inTransaction(callback)
     )
     const organizations = new OrganizationService(organizationRepository, digest, clock, ids)
+    const auditRepository = new AuditRepository(
+      database.db,
+      callback => database.inTransaction(callback)
+    )
+    const audit = new AuditService(auditRepository, clock, ids)
+    const retention = new RetentionService(auditRepository, clock)
+    await retention.cleanupExpiredBodies()
+    retentionTimer = setInterval(() => {
+      void retention.cleanupExpiredBodies().catch(error => {
+        logger.error('audit_retention_cleanup_failed', { error })
+      })
+    }, 60 * 60_000)
+    retentionTimer.unref()
     const creditRepository = new CreditRepository(
       database.db,
       callback => database.inTransaction(callback)
@@ -247,7 +265,8 @@ export async function createGatewayApp(options: {
       new RequestPreflight(tokens, models),
       providerAdapter,
       risks,
-      settlements
+      settlements,
+      audit
     )
     if (!options.bootstrapSink && await repository.countAccounts() === 0) {
       throw new Error(
@@ -292,6 +311,11 @@ export async function createGatewayApp(options: {
       credits,
       rates
     })
+    registerAuditRoutes(app, {
+      authenticate: authenticateAccount,
+      audit,
+      retention
+    })
     registerV1Routes(app, { verifier: v1Verifier, models, responses })
   }
 
@@ -301,6 +325,7 @@ export async function createGatewayApp(options: {
     database,
     mock,
     async close() {
+      if (retentionTimer) clearInterval(retentionTimer)
       await chatgptLogin?.close()
       await app.close()
       await database.close()

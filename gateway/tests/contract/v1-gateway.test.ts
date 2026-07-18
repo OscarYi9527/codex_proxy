@@ -169,6 +169,7 @@ describe('Gateway Responses stream compatibility', () => {
           })
           return {
             providerId: 'provider_billable',
+            assistantText: 'final answer password=AssistantSecret123',
             usage: { inputTokens: 10, outputTokens: 20 }
           }
         }
@@ -276,7 +277,22 @@ describe('Gateway Responses stream compatibility', () => {
         },
         payload: {
           model: 'billable-model',
-          input: 'hello',
+          instructions: 'SYSTEM-INSTRUCTION-MUST-NOT-BE-AUDITED',
+          input: [{
+            type: 'message',
+            role: 'user',
+            content: [
+              {
+                type: 'input_text',
+                text: `hello api_key=${['sk', 'proj', 'audit-secret-123456'].join('-')}`
+              },
+              { type: 'input_file', filename: 'secret.txt', file_data: 'FILE-MUST-NOT-BE-AUDITED' }
+            ]
+          }, {
+            type: 'function_call_output',
+            call_id: 'call_audit',
+            output: 'TOOL-MUST-NOT-BE-AUDITED'
+          }],
           max_output_tokens: 100
         }
       })
@@ -300,6 +316,24 @@ describe('Gateway Responses stream compatibility', () => {
         settled_credits: '0.050000',
         allocated_credits: '100.000000'
       })
+      const audit = await fixture.database.db
+        .selectFrom('conversation_audits')
+        .selectAll()
+        .where('turn_id', '=', 'turn_billable_1234')
+        .executeTakeFirstOrThrow()
+      expect(audit).toMatchObject({
+        organization_id: 'org_billable',
+        account_id: accountId,
+        model_id: 'billable-model',
+        input_tokens: 10,
+        output_tokens: 20,
+        body_deleted_at: null
+      })
+      expect(audit.user_text_sanitized).toContain('hello api_key=[REDACTED]')
+      expect(audit.assistant_text_sanitized).toContain('password=[REDACTED]')
+      expect(JSON.stringify(audit)).not.toMatch(
+        /SYSTEM-INSTRUCTION|FILE-MUST-NOT|TOOL-MUST-NOT|sk-proj-audit|AssistantSecret123/
+      )
     } finally {
       await fixture.gateway.close()
     }

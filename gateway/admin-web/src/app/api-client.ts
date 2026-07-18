@@ -1,9 +1,12 @@
 import type {
   AccountRoutingStrategy,
   AccountDetails,
+  AdminAuditEventListResponse,
   ChatgptAccountImportResult,
   ChatgptAccountLoginStatus,
   ChatgptLoginStatus,
+  ConversationAuditDetail,
+  ConversationAuditListResponse,
   DeviceSession,
   ManagementSession,
   ModelRouteResponse,
@@ -65,6 +68,10 @@ export interface ManagementApiClient {
     maxOverdraftPerTurn: string
     maxCumulativeRisk: string
   }): Promise<void>
+  conversationAudits(organizationId?: string): Promise<ConversationAuditListResponse>
+  conversationAudit(auditId: string): Promise<ConversationAuditDetail>
+  adminAuditEvents(organizationId?: string): Promise<AdminAuditEventListResponse>
+  setAuditRetention(organizationId: string, days: number): Promise<void>
   providers(): Promise<ProviderListResponse>
   createProvider(input: {
     kind: ProviderSummary['kind']
@@ -211,6 +218,26 @@ export const managementApi: ManagementApiClient = {
       {
         method: 'PUT',
         body: JSON.stringify(input)
+      }
+    ),
+  conversationAudits: organizationId =>
+    requestJson(
+      '/api/v1/admin/audit/conversations' +
+        (organizationId ? `?organizationId=${encodeURIComponent(organizationId)}` : '')
+    ),
+  conversationAudit: auditId =>
+    requestJson(`/api/v1/admin/audit/conversations/${encodeURIComponent(auditId)}`),
+  adminAuditEvents: organizationId =>
+    requestJson(
+      '/api/v1/admin/audit/admin-events' +
+        (organizationId ? `?organizationId=${encodeURIComponent(organizationId)}` : '')
+    ),
+  setAuditRetention: (organizationId, days) =>
+    requestVoid(
+      `/api/v1/admin/organizations/${encodeURIComponent(organizationId)}/audit-retention`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ days })
       }
     ),
   providers: () => requestJson('/api/v1/admin/providers'),

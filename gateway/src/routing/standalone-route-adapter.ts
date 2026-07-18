@@ -3,6 +3,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { redactValue } from '../common/redaction.js'
+import { extractAssistantTextFromEvents } from '../audit/conversation-sanitizer.js'
 
 export interface SafeModel {
   readonly id: string
@@ -17,6 +18,7 @@ export interface SafeModelList {
 
 export interface ProviderForwardResult {
   readonly providerId?: string
+  readonly assistantText?: string
   readonly usage?: {
     readonly inputTokens: number
     readonly outputTokens: number
@@ -287,15 +289,17 @@ class ForwardResponse extends ResponseBase {
         }
       }
     }
-    for (const candidate of candidates.reverse()) {
-      const usage = findUsage(candidate)
-      if (usage) {
-        this.#usageCapture = ''
-        return { usage }
-      }
+    let usage: ProviderForwardResult['usage']
+    for (let index = candidates.length - 1; index >= 0; index -= 1) {
+      usage = findUsage(candidates[index])
+      if (usage) break
     }
+    const assistantText = extractAssistantTextFromEvents(candidates)
     this.#usageCapture = ''
-    return {}
+    return {
+      ...(usage ? { usage } : {}),
+      ...(assistantText ? { assistantText } : {})
+    }
   }
 }
 

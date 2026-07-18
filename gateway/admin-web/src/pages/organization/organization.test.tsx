@@ -10,6 +10,7 @@ function client() {
       id: 'org_created',
       name,
       status: 'active' as const,
+      auditRetentionDays: 30,
       updatedAt: '2026-07-18T00:00:00.000Z',
       version: 1
     })),
@@ -41,6 +42,7 @@ const organizations = [{
   id: 'org_a',
   name: '组织 A',
   status: 'active' as const,
+  auditRetentionDays: 30,
   updatedAt: '2026-07-18T00:00:00.000Z',
   version: 1
 }]

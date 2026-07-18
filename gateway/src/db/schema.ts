@@ -2,6 +2,7 @@ import type { ColumnType, Generated } from 'kysely'
 
 type Timestamp = ColumnType<string, string, string>
 type NullableTimestamp = ColumnType<string | null, string | null | undefined, string | null>
+type NullableString = ColumnType<string | null, string | null | undefined, string | null>
 type Version = ColumnType<number, number | undefined, number>
 
 export interface GatewayMetaTable {
@@ -214,11 +215,13 @@ export interface ConversationAuditTable {
 export interface AdminAuditEventTable {
   id: string
   actor_account_id: string
+  actor_role: Generated<'level1' | 'level2' | 'user'>
   organization_id: string | null
   action: string
   target_type: string
   target_id: string | null
   outcome: 'allowed' | 'denied' | 'failed'
+  error_code: NullableString
   safe_metadata_json: string
   created_at: Timestamp
 }

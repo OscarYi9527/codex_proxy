@@ -23,6 +23,10 @@ function client(): ManagementApiClient {
     setMonthlyCredits: async () => undefined,
     setUserCreditAllocation: async () => undefined,
     setRiskPolicy: async () => undefined,
+    conversationAudits: async () => ({ conversations: [] }),
+    conversationAudit: async () => { throw new Error('not used') },
+    adminAuditEvents: async () => ({ events: [] }),
+    setAuditRetention: async () => undefined,
     providers: async () => ({
       warning: null,
       accountPool: {

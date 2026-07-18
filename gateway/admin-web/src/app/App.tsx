@@ -6,6 +6,7 @@ import { UsagePage } from '../pages/account/UsagePage'
 import { InvitationsPage } from '../pages/organization/InvitationsPage'
 import { OrganizationPage } from '../pages/organization/OrganizationPage'
 import { CreditManagementPage } from '../pages/credits/CreditManagementPage'
+import { AuditPage } from '../pages/audit/AuditPage'
 import { DiagnosticsPage } from '../pages/system/DiagnosticsPage'
 import { ProvidersPage } from '../pages/system/ProvidersPage'
 import { managementApi, type ManagementApiClient } from './api-client'
@@ -46,7 +47,8 @@ function PlaceholderPage({ route }: { readonly route: ManagementRoute }) {
     invitations: '邀请码',
     providers: 'Provider 与模型',
     diagnostics: '系统诊断',
-    credits: '积分管理'
+    credits: '积分管理',
+    audit: '调用审计'
   }
   return (
     <section className="content-card">
@@ -261,6 +263,13 @@ export function App({
             onRefresh={refreshOrganizationData}
           />
         )}
+        {route === 'audit' && (
+          <AuditPage
+            client={client}
+            role={data.session.account.role}
+            organizations={data.organizations}
+          />
+        )}
         {route === 'providers' && data.providers && data.models && (
           <ProvidersPage
             client={client}
@@ -272,7 +281,7 @@ export function App({
         {route === 'diagnostics' && data.diagnostics && (
           <DiagnosticsPage diagnostics={data.diagnostics} />
         )}
-        {!['account', 'security', 'usage', 'organization', 'invitations', 'credits', 'providers', 'diagnostics'].includes(route) && (
+        {!['account', 'security', 'usage', 'organization', 'invitations', 'credits', 'audit', 'providers', 'diagnostics'].includes(route) && (
           <PlaceholderPage route={route} />
         )}
       </main>

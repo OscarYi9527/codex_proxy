@@ -4,6 +4,8 @@ import type { ProviderRouteAdapter } from './standalone-route-adapter.js'
 import { RequestPreflight } from './request-preflight.js'
 import { TurnRiskService } from '../credits/turn-risk-service.js'
 import { SettlementService } from '../credits/settlement-service.js'
+import type { AuditService } from '../audit/audit-service.js'
+import type { ProviderForwardResult } from './standalone-route-adapter.js'
 
 function requestBody(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -21,7 +23,8 @@ export class ResponsesGateway {
     private readonly preflight: RequestPreflight,
     private readonly adapter: ProviderRouteAdapter,
     private readonly risks?: TurnRiskService,
-    private readonly settlements?: SettlementService
+    private readonly settlements?: SettlementService,
+    private readonly audit?: AuditService
   ) {}
 
   async handle(
@@ -39,6 +42,23 @@ export class ResponsesGateway {
           body
         })
       : null
+    const complete = async (resultValue: void | ProviderForwardResult): Promise<void> => {
+      const result = resultValue || {}
+      const usage = reservation
+        ? await this.settlements?.settle(verified.turnId, result)
+        : null
+      const inputTokens = usage?.inputTokens ?? result.usage?.inputTokens
+      const outputTokens = usage?.outputTokens ?? result.usage?.outputTokens
+      await this.audit?.recordConversation({
+        identity: verified.identity,
+        turnId: verified.turnId,
+        modelId: verified.modelId,
+        requestBody: body,
+        ...(result.assistantText ? { assistantText: result.assistantText } : {}),
+        ...(inputTokens !== undefined ? { inputTokens } : {}),
+        ...(outputTokens !== undefined ? { outputTokens } : {})
+      })
+    }
     // The standalone compatibility response is decoupled from the local
     // socket close so upstream completion can reconcile usage in later
     // settlement hooks instead of being silently abandoned.
@@ -53,11 +73,11 @@ export class ResponsesGateway {
           })
         }
         const result = await this.adapter.forwardChatCompletions(request, reply, body)
-        if (reservation) await this.settlements?.settle(verified.turnId, result || {})
+        await complete(result)
         return
       }
       const result = await this.adapter.forwardResponses(request, reply, body)
-      if (reservation) await this.settlements?.settle(verified.turnId, result || {})
+      await complete(result)
     } catch (error) {
       if (reservation) {
         await this.risks?.fail(

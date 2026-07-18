@@ -1405,6 +1405,227 @@ dd {
   overflow-wrap: anywhere;
 }
 
+.audit-page {
+  display: grid;
+  gap: 18px;
+}
+
+.audit-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(260px, .6fr);
+  gap: 24px;
+  padding: 28px;
+  border: 1px solid #c8dcf4;
+  border-radius: 18px;
+  color: #eef6ff;
+  background:
+    radial-gradient(circle at 90% 10%, #45b6aa42, transparent 42%),
+    linear-gradient(135deg, #132941, #184b70);
+  box-shadow: 0 18px 44px #183a6c1c;
+}
+
+.audit-hero h2,
+.audit-hero p {
+  margin: 0;
+}
+
+.audit-hero h2 {
+  margin: 6px 0 10px;
+  font-size: 28px;
+}
+
+.audit-hero > div > p:last-child {
+  max-width: 720px;
+  color: #bfd1e5;
+  line-height: 1.65;
+}
+
+.audit-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.audit-summary > div {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid #b8dcf02e;
+  border-radius: 12px;
+  background: #ffffff0d;
+}
+
+.audit-summary span {
+  color: #b9cde2;
+  font-size: 12px;
+}
+
+.audit-summary strong {
+  font-size: 26px;
+}
+
+.audit-toolbar,
+.audit-retention-control {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.audit-toolbar label,
+.audit-retention-control label {
+  color: #43516a;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.audit-toolbar select,
+.audit-retention-control input {
+  min-width: 220px;
+  margin-top: 6px;
+  padding: 9px 10px;
+}
+
+.audit-retention-control input {
+  min-width: 120px;
+  width: 120px;
+}
+
+.audit-toolbar button,
+.audit-table button,
+.audit-detail button {
+  padding: 8px 12px;
+  border: 1px solid #b9c9dd;
+  border-radius: 8px;
+  color: #24476d;
+  background: #f5f8fc;
+  cursor: pointer;
+}
+
+.audit-toolbar button:disabled {
+  cursor: not-allowed;
+  opacity: .5;
+}
+
+.audit-table-wrap {
+  overflow-x: auto;
+}
+
+.audit-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.audit-table th,
+.audit-table td {
+  padding: 12px 10px;
+  border-top: 1px solid #e8edf4;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.audit-table th {
+  color: #6d7b90;
+  font-size: 11px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.audit-table td {
+  color: #314761;
+  font-size: 12px;
+}
+
+.audit-detail {
+  border-color: #b9d6ef;
+  box-shadow: 0 14px 40px #25456e14;
+}
+
+.audit-body-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.audit-body-grid article {
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid #dce5ef;
+  border-radius: 11px;
+  background: #f8fafc;
+}
+
+.audit-body-grid h3 {
+  margin: 0 0 10px;
+  color: #314761;
+  font-size: 13px;
+}
+
+.audit-body-grid pre {
+  max-height: 320px;
+  margin: 0;
+  overflow: auto;
+  color: #253d5c;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--vscode-editor-font-family, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.audit-deleted {
+  display: grid;
+  gap: 7px;
+  padding: 16px;
+  border: 1px solid #e5cf99;
+  border-radius: 10px;
+  color: #79520b;
+  background: #fff8e7;
+}
+
+.admin-audit-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-audit-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 0;
+  border-top: 1px solid #e8edf4;
+}
+
+.admin-audit-list li > div {
+  display: grid;
+  gap: 4px;
+}
+
+.admin-audit-list li span {
+  color: #6d7b90;
+  font-size: 12px;
+}
+
+.audit-outcome {
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-weight: 700;
+}
+
+.audit-outcome.allowed {
+  color: #08714f;
+  background: #e1f7ed;
+}
+
+.audit-outcome.denied,
+.audit-outcome.failed {
+  color: #9a3030;
+  background: #ffecec;
+}
+
 @media (max-width: 720px) {
   .management-layout {
     grid-template-columns: 1fr;
@@ -1511,5 +1732,21 @@ dd {
   .account-import-manual > div {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .audit-hero,
+  .audit-body-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .audit-toolbar,
+  .audit-retention-control {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .audit-toolbar select,
+  .audit-retention-control input {
+    width: 100%;
   }
 }

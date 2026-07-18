@@ -21,6 +21,7 @@ export type ManagementRoute =
   | 'invitations'
   | 'credits'
   | 'usage'
+  | 'audit'
   | 'providers'
   | 'diagnostics'
 
@@ -41,7 +42,8 @@ function navigationForRole(role: AccountRole): readonly ManagementNavigationItem
     ...USER_NAVIGATION,
     { id: 'organization' as const, label: '组织用户' },
     { id: 'invitations' as const, label: '邀请码' },
-    { id: 'credits' as const, label: '积分管理' }
+    { id: 'credits' as const, label: '积分管理' },
+    { id: 'audit' as const, label: '调用审计' }
   ]
   return role === 'level2'
     ? organization

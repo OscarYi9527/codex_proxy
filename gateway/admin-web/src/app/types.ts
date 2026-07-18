@@ -8,6 +8,7 @@ export type ManagementRoute =
   | 'invitations'
   | 'credits'
   | 'usage'
+  | 'audit'
   | 'providers'
   | 'diagnostics'
 
@@ -74,6 +75,7 @@ export interface OrganizationSummary {
   readonly id: string
   readonly name: string
   readonly status: 'active' | 'disabled'
+  readonly auditRetentionDays: number
   readonly updatedAt: string
   readonly version: number
 }
@@ -124,6 +126,47 @@ export interface UsageResponse {
     readonly usageSource: 'upstream' | 'estimated'
     readonly completedAt: string
   }>
+}
+
+export interface ConversationAuditSummary {
+  readonly id: string
+  readonly turnId: string | null
+  readonly accountId: string
+  readonly organizationId: string
+  readonly modelId: string
+  readonly inputTokens: number
+  readonly outputTokens: number
+  readonly createdAt: string
+  readonly bodyExpiresAt: string
+  readonly bodyDeletedAt: string | null
+  readonly redactionVersion: number
+}
+
+export interface ConversationAuditDetail extends ConversationAuditSummary {
+  readonly userText: string | null
+  readonly assistantText: string | null
+}
+
+export interface ConversationAuditListResponse {
+  readonly conversations: readonly ConversationAuditSummary[]
+}
+
+export interface AdminAuditEvent {
+  readonly id: string
+  readonly actorAccountId: string
+  readonly actorRole: AccountRole
+  readonly organizationId: string | null
+  readonly action: string
+  readonly targetType: string
+  readonly targetId: string | null
+  readonly outcome: 'allowed' | 'denied' | 'failed'
+  readonly errorCode: string | null
+  readonly metadata: Readonly<Record<string, unknown>>
+  readonly createdAt: string
+}
+
+export interface AdminAuditEventListResponse {
+  readonly events: readonly AdminAuditEvent[]
 }
 
 export interface ModelRateSummary {

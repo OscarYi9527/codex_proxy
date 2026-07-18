@@ -38,7 +38,8 @@ function clientFor(role: AccountRole): ManagementApiClient {
       { id: 'usage', label: '使用记录' },
       { id: 'organization', label: '组织用户' },
       { id: 'invitations', label: '邀请码' },
-      { id: 'credits', label: '积分管理' }
+      { id: 'credits', label: '积分管理' },
+      { id: 'audit', label: '调用审计' }
     ],
     level1: [
       { id: 'account', label: '我的账号' },
@@ -47,6 +48,7 @@ function clientFor(role: AccountRole): ManagementApiClient {
       { id: 'organization', label: '组织用户' },
       { id: 'invitations', label: '邀请码' },
       { id: 'credits', label: '积分管理' },
+      { id: 'audit', label: '调用审计' },
       { id: 'providers', label: 'Provider 与模型' },
       { id: 'diagnostics', label: '系统诊断' }
     ]
@@ -95,6 +97,7 @@ function clientFor(role: AccountRole): ManagementApiClient {
       id: 'org_test',
       name: '示例组织',
       status: 'active' as const,
+      auditRetentionDays: 30,
       updatedAt: '2026-07-17T01:00:00.000Z',
       version: 1
     }]),
@@ -102,6 +105,7 @@ function clientFor(role: AccountRole): ManagementApiClient {
       id: 'org_created',
       name,
       status: 'active' as const,
+      auditRetentionDays: 30,
       updatedAt: '2026-07-17T01:00:00.000Z',
       version: 1
     })),
@@ -184,6 +188,12 @@ function clientFor(role: AccountRole): ManagementApiClient {
     setMonthlyCredits: jest.fn(async () => undefined),
     setUserCreditAllocation: jest.fn(async () => undefined),
     setRiskPolicy: jest.fn(async () => undefined),
+    conversationAudits: jest.fn(async () => ({ conversations: [] })),
+    conversationAudit: jest.fn(async () => {
+      throw new Error('not used')
+    }),
+    adminAuditEvents: jest.fn(async () => ({ events: [] })),
+    setAuditRetention: jest.fn(async () => undefined),
     providers: jest.fn(async () => ({
       warning: 'plaintext-v1 is for loopback development only',
       accountPool: {
@@ -343,12 +353,13 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
   })
 
   it.each([
-    ['user', false, false],
-    ['level2', true, false],
-    ['level1', true, true]
+    ['user', false, false, false],
+    ['level2', true, true, false],
+    ['level1', true, true, true]
   ] as const)('renders server-authorized navigation for %s', async (
     role,
     seesOrganization,
+    seesAudit,
     seesProviders
   ) => {
     render(<App client={clientFor(role)} />)
@@ -356,6 +367,8 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
     await screen.findByRole('navigation', { name: '管理导航' })
     expect(Boolean(screen.queryByRole('button', { name: '组织用户' })))
       .toBe(seesOrganization)
+    expect(Boolean(screen.queryByRole('button', { name: '调用审计' })))
+      .toBe(seesAudit)
     expect(Boolean(screen.queryByRole('button', { name: 'Provider 与模型' })))
       .toBe(seesProviders)
   })

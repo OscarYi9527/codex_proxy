@@ -12,9 +12,10 @@ import {
 describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
   let fixture: RealGatewayFixture
   let accessToken: string
-  let runtime: GatewayProviderRuntimeConfiguration
-  let importChatgptCredential: ((authJson: string) => Promise<void>) | undefined
-  let loginProviderId: string | undefined
+	let runtime: GatewayProviderRuntimeConfiguration
+	let importChatgptCredential: ((authJson: string) => Promise<void>) | undefined
+	let loginProviderId: string | undefined
+	let refreshedAccountId: string | undefined
 
   beforeEach(async () => {
     const adapter: ProviderRouteAdapter = {
@@ -27,7 +28,7 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
       async configureProviders(value) {
         runtime = value
       },
-      async safeDiagnostics() {
+			async safeDiagnostics() {
         return {
           providers: {
             relay_test: {
@@ -36,10 +37,65 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
             }
           },
           circuits: { relay_test: { state: 'closed' } },
-          recentRouteErrors: []
-        }
-      }
-    }
+					recentRouteErrors: []
+				}
+			},
+			async safeAccountPool() {
+				const account = runtime?.chatgptAccounts?.[0] as
+					Record<string, unknown> | undefined
+				return {
+					strategy: runtime?.chatgptAccountStrategy || 'headroom',
+					accounts: account ? [{
+						id: String(account['id']),
+						label: String(account['label']),
+						accountIdPreview: 'chatgp…t-test',
+						planType: 'plus',
+						status: 'active',
+						routingEnabled: account['routing_enabled'] !== false,
+						routingWeight: Number(account['routing_weight']) || 1,
+						lowQuotaThreshold: Number(account['low_quota_threshold']) || 10,
+						dailyRequestLimit: Number(account['daily_request_limit']) || 0,
+						dailyTokenLimit: Number(account['daily_token_limit']) || 0,
+						reservedModels: Array.isArray(account['reserved_models'])
+							? account['reserved_models'] as string[]
+							: [],
+						quota: {
+							source: 'provider',
+							primary: {
+								usedPercent: 20,
+								remainingPercent: 80,
+								resetsAt: 1_800_000_000,
+								windowMinutes: 300
+							},
+							secondary: null,
+							updatedAt: '2026-07-17T01:00:00.000Z',
+							syncStatus: 'synced',
+							syncError: null
+						},
+						runtime: {
+							activeRequests: 1,
+							concurrencyLimit: 3,
+							cooldownUntil: null,
+							modelCooldowns: 0
+						},
+						health: {
+							requests: 10,
+							successRate: 90,
+							p95LatencyMs: 900,
+							rateLimited: 1,
+							lastRequestAt: '2026-07-17T01:00:00.000Z',
+							lastErrorType: null,
+							lastErrorMessage: null
+						}
+					}] : [],
+					queueDepth: 0,
+					recentRouteDecisions: []
+				}
+			},
+			async refreshChatgptAccountUsage(accountId) {
+				refreshedAccountId = accountId
+			}
+		}
     const chatgptLogin: ChatgptLoginCoordinator = {
       async start(providerId, importCredential) {
         loginProviderId = providerId
@@ -136,7 +192,94 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
         models: ['gpt-5.4-mini']
       })
     ])
-    expect(runtime.modelIds).toContain(`relay-${providerId}-gpt-5.4-mini`)
+		expect(runtime.modelIds).toContain(`relay-${providerId}-gpt-5.4-mini`)
+
+		const budget = await fixture.gateway.app.inject({
+			method: 'PUT',
+			url: `/api/v1/admin/providers/${providerId}/internal-budget`,
+			headers: headers(),
+			payload: { internalBudgetCredits: '250.5' }
+		})
+		expect(budget.statusCode).toBe(200)
+		expect(budget.json()).toMatchObject({
+			config: { internalBudgetCredits: '250.500000' },
+			usage: {
+				requests: 0,
+				settledCredits: '0.000000',
+				internalBudgetCredits: '250.500000',
+				remainingCredits: '250.500000',
+				usedPercent: '0'
+			}
+		})
+		const admin = await fixture.database.db
+			.selectFrom('accounts')
+			.select('id')
+			.where('role', '=', 'level1')
+			.executeTakeFirstOrThrow()
+		await fixture.database.db.insertInto('organizations').values({
+			id: 'org_provider_usage',
+			name: 'Provider Usage Org',
+			status: 'active',
+			billing_timezone: 'Asia/Shanghai',
+			audit_retention_days: 30,
+			overdraft_per_turn_override: null,
+			cumulative_risk_override: null,
+			created_at: '2026-07-01T00:00:00.000Z',
+			updated_at: '2026-07-01T00:00:00.000Z',
+			version: 1
+		}).execute()
+		await fixture.database.db.insertInto('organization_credit_periods').values({
+			id: 'period_provider_usage',
+			organization_id: 'org_provider_usage',
+			period_start: '2026-07-01T00:00:00.000Z',
+			period_end: '2026-08-01T00:00:00.000Z',
+			allocated_credits: '1000.000000',
+			settled_credits: '5.000000',
+			created_at: '2026-07-01T00:00:00.000Z',
+			closed_at: null,
+			version: 1
+		}).execute()
+		await fixture.database.db.insertInto('usage_records').values({
+			id: 'usage_provider_1',
+			turn_id: 'turn_provider_usage_1',
+			account_id: admin.id,
+			organization_id: 'org_provider_usage',
+			period_id: 'period_provider_usage',
+			model_id: `relay-${providerId}-gpt-5.4-mini`,
+			provider_id: providerId,
+			input_tokens: 1200,
+			output_tokens: 300,
+			usage_source: 'upstream',
+			input_credits: '3.000000',
+			output_credits: '2.000000',
+			total_credits: '5.000000',
+			started_at: '2026-07-18T10:00:00.000Z',
+			completed_at: '2026-07-18T10:01:00.000Z',
+			route_error_code: null
+		}).execute()
+		const providerUsage = await fixture.gateway.app.inject({
+			method: 'GET',
+			url: `/api/v1/admin/providers/${providerId}`,
+			headers: headers()
+		})
+		expect(providerUsage.json().usage).toEqual({
+			requests: 1,
+			inputTokens: 1200,
+			outputTokens: 300,
+			settledCredits: '5.000000',
+			internalBudgetCredits: '250.500000',
+			remainingCredits: '245.500000',
+			usedPercent: '1.9',
+			lastUsedAt: '2026-07-18T10:01:00.000Z'
+		})
+		const invalidBudget = await fixture.gateway.app.inject({
+			method: 'PUT',
+			url: `/api/v1/admin/providers/${providerId}/internal-budget`,
+			headers: headers(),
+			payload: { internalBudgetCredits: '-1' }
+		})
+		expect(invalidBudget.statusCode).toBe(400)
+		expect(invalidBudget.json().error.code).toBe('invalid_provider_budget')
 
     const models = await fixture.gateway.app.inject({
       method: 'GET',
@@ -248,13 +391,68 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
     expect(listed.body).not.toContain('chatgpt-refresh-secret')
     expect(listed.json().providers[0].credentials[0].storageFormat)
       .toBe('plaintext-v1')
-    expect(runtime.chatgptAccounts).toEqual([
-      expect.objectContaining({
-        id: 'chatgpt-account-test',
-        access_token: 'chatgpt-access-secret',
-        refresh_token: 'chatgpt-refresh-secret'
-      })
-    ])
+		const credentialId = listed.json().providers[0].credentials[0].id as string
+		expect(runtime.chatgptAccounts).toEqual([
+			expect.objectContaining({
+				id: credentialId,
+				account_id: 'chatgpt-account-test',
+				access_token: 'chatgpt-access-secret',
+				refresh_token: 'chatgpt-refresh-secret'
+			})
+		])
+		expect(listed.json().providers[0].credentials[0]).toMatchObject({
+			label: 'Official ChatGPT',
+			status: 'active',
+			quota: {
+				source: 'provider',
+				primary: { remainingPercent: 80 }
+			},
+			runtime: { activeRequests: 1, concurrencyLimit: 3 },
+			health: { requests: 10, successRate: 90 }
+		})
+
+		const routing = await fixture.gateway.app.inject({
+			method: 'PATCH',
+			url: `/api/v1/admin/providers/${providerId}/credentials/${credentialId}/routing`,
+			headers: headers(),
+			payload: {
+				label: '主订阅账号',
+				routingEnabled: true,
+				routingWeight: 9,
+				lowQuotaThreshold: 15,
+				dailyRequestLimit: 120,
+				dailyTokenLimit: 500_000,
+				reservedModels: ['gpt-5.4']
+			}
+		})
+		expect(routing.statusCode).toBe(200)
+		expect(runtime.chatgptAccounts[0]).toMatchObject({
+			id: credentialId,
+			label: '主订阅账号',
+			routing_enabled: true,
+			routing_weight: 9,
+			low_quota_threshold: 15,
+			daily_request_limit: 120,
+			daily_token_limit: 500_000,
+			reserved_models: ['gpt-5.4']
+		})
+
+		const strategy = await fixture.gateway.app.inject({
+			method: 'PUT',
+			url: `/api/v1/admin/providers/${providerId}/account-routing-strategy`,
+			headers: headers(),
+			payload: { strategy: 'weighted' }
+		})
+		expect(strategy.statusCode).toBe(200)
+		expect(runtime.chatgptAccountStrategy).toBe('weighted')
+
+		const refreshed = await fixture.gateway.app.inject({
+			method: 'POST',
+			url: `/api/v1/admin/providers/${providerId}/credentials/${credentialId}/refresh-usage`,
+			headers: headers()
+		})
+		expect(refreshed.statusCode).toBe(200)
+		expect(refreshedAccountId).toBe(credentialId)
 
     const invalidManualCredential = await fixture.gateway.app.inject({
       method: 'POST',
@@ -276,16 +474,50 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
       url: '/api/v1/admin/providers',
       headers: headers()
     })
-    expect(denied.statusCode).toBe(403)
-    expect(denied.json().error.code).toBe('forbidden')
-    const audit = await fixture.database.db
-      .selectFrom('admin_audit_events')
-      .selectAll()
-      .where('outcome', '=', 'denied')
-      .executeTakeFirstOrThrow()
-    expect(audit.action).toBe('provider.list')
-    expect(audit.safe_metadata_json).toBe('{}')
-  })
+		expect(denied.statusCode).toBe(403)
+		expect(denied.json().error.code).toBe('forbidden')
+		for (const request of [
+			{
+				method: 'PATCH' as const,
+				url: '/api/v1/admin/providers/provider_forbidden/credentials/cred_forbidden/routing',
+				payload: { routingEnabled: false }
+			},
+			{
+				method: 'POST' as const,
+				url: '/api/v1/admin/providers/provider_forbidden/credentials/cred_forbidden/refresh-usage'
+			},
+			{
+				method: 'PUT' as const,
+				url: '/api/v1/admin/providers/provider_forbidden/account-routing-strategy',
+				payload: { strategy: 'weighted' }
+			},
+			{
+				method: 'PUT' as const,
+				url: '/api/v1/admin/providers/provider_forbidden/internal-budget',
+				payload: { internalBudgetCredits: '100' }
+			}
+		]) {
+			const mutation = await fixture.gateway.app.inject({
+				...request,
+				headers: headers()
+			})
+			expect(mutation.statusCode).toBe(403)
+			expect(mutation.json().error.code).toBe('forbidden')
+		}
+		const audits = await fixture.database.db
+			.selectFrom('admin_audit_events')
+			.selectAll()
+			.where('outcome', '=', 'denied')
+			.execute()
+		expect(audits.map(audit => audit.action)).toEqual(expect.arrayContaining([
+			'provider.list',
+			'provider.credential.routing.update',
+			'provider.credential.usage.refresh',
+			'provider.account_strategy.update',
+			'provider.internal_budget.update'
+		]))
+		expect(audits.every(audit => audit.safe_metadata_json === '{}')).toBe(true)
+	})
 
   it('validates Provider kinds, URLs, status and public model identity', async () => {
     const invalidName = await fixture.gateway.app.inject({

@@ -1,6 +1,7 @@
 import type { Kysely, Transaction } from 'kysely'
 import type { GatewayDatabase } from '../schema.js'
 import type { AccountRole } from '../../auth/types.js'
+import { addCredits, formatCredits } from '../../credits/decimal.js'
 
 type DatabaseExecutor = Kysely<GatewayDatabase> | Transaction<GatewayDatabase>
 export type ProviderKind = 'chatgpt' | 'openai' | 'deepseek' | 'relay'
@@ -36,6 +37,15 @@ export interface ModelRouteRecord {
   readonly createdAt: string
   readonly updatedAt: string
   readonly version: number
+}
+
+export interface ProviderUsageSummary {
+  readonly providerId: string
+  readonly requests: number
+  readonly inputTokens: number
+  readonly outputTokens: number
+  readonly settledCredits: string
+  readonly lastUsedAt: string | null
 }
 
 function parseObject(value: string): Record<string, unknown> {
@@ -190,6 +200,52 @@ export class ProviderRepository {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       version: row.version
+    }))
+  }
+
+  async listProviderUsageSummaries(providerId?: string): Promise<ProviderUsageSummary[]> {
+    let query = this.db
+      .selectFrom('usage_records')
+      .select([
+        'provider_id',
+        'input_tokens',
+        'output_tokens',
+        'total_credits',
+        'completed_at'
+      ])
+    if (providerId) query = query.where('provider_id', '=', providerId)
+    const rows = await query.execute()
+    const summaries = new Map<string, {
+      requests: number
+      inputTokens: number
+      outputTokens: number
+      settledCredits: bigint
+      lastUsedAt: string | null
+    }>()
+    for (const row of rows) {
+      const current = summaries.get(row.provider_id) || {
+        requests: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        settledCredits: 0n,
+        lastUsedAt: null
+      }
+      current.requests += 1
+      current.inputTokens += row.input_tokens
+      current.outputTokens += row.output_tokens
+      current.settledCredits = addCredits(current.settledCredits, row.total_credits)
+      if (!current.lastUsedAt || row.completed_at > current.lastUsedAt) {
+        current.lastUsedAt = row.completed_at
+      }
+      summaries.set(row.provider_id, current)
+    }
+    return [...summaries].map(([id, value]) => ({
+      providerId: id,
+      requests: value.requests,
+      inputTokens: value.inputTokens,
+      outputTokens: value.outputTokens,
+      settledCredits: formatCredits(value.settledCredits),
+      lastUsedAt: value.lastUsedAt
     }))
   }
 

@@ -24,7 +24,7 @@ export interface ProviderForwardResult {
 }
 
 export interface ProviderRouteAdapter {
-  listModels(): Promise<SafeModelList>
+	listModels(): Promise<SafeModelList>
   forwardResponses(
     request: FastifyRequest,
     reply: FastifyReply,
@@ -34,9 +34,87 @@ export interface ProviderRouteAdapter {
     request: FastifyRequest,
     reply: FastifyReply,
     body: Record<string, unknown>
-  ): Promise<void | ProviderForwardResult>
-  configureProviders?(configuration: GatewayProviderRuntimeConfiguration): Promise<void>
-  safeDiagnostics?(): Promise<Record<string, unknown>>
+	): Promise<void | ProviderForwardResult>
+	configureProviders?(configuration: GatewayProviderRuntimeConfiguration): Promise<void>
+	safeDiagnostics?(): Promise<Record<string, unknown>>
+	safeAccountPool?(): Promise<SafeAccountPoolSnapshot>
+	refreshChatgptAccountUsage?(accountId: string): Promise<void>
+}
+
+export type AccountRoutingStrategy =
+	| 'priority'
+	| 'round-robin'
+	| 'headroom'
+	| 'least-used'
+	| 'latency'
+	| 'reliable'
+	| 'weighted'
+	| 'random'
+	| 'lkgp'
+
+export interface SafeQuotaWindow {
+	readonly usedPercent: number | null
+	readonly remainingPercent: number | null
+	readonly resetsAt: number | null
+	readonly windowMinutes: number | null
+}
+
+export interface SafeAccountPoolAccount {
+	readonly id: string
+	readonly label: string
+	readonly accountIdPreview: string | null
+	readonly planType: string | null
+	readonly status: string
+	readonly routingEnabled: boolean
+	readonly routingWeight: number
+	readonly lowQuotaThreshold: number
+	readonly dailyRequestLimit: number
+	readonly dailyTokenLimit: number
+	readonly reservedModels: readonly string[]
+	readonly quota: {
+		readonly source: 'provider'
+		readonly primary: SafeQuotaWindow | null
+		readonly secondary: SafeQuotaWindow | null
+		readonly updatedAt: string | null
+		readonly syncStatus: string
+		readonly syncError: string | null
+	}
+	readonly runtime: {
+		readonly activeRequests: number
+		readonly concurrencyLimit: number
+		readonly cooldownUntil: number | null
+		readonly modelCooldowns: number
+	}
+	readonly health: {
+		readonly requests: number
+		readonly successRate: number | null
+		readonly p95LatencyMs: number
+		readonly rateLimited: number
+		readonly lastRequestAt: string | null
+		readonly lastErrorType: string | null
+		readonly lastErrorMessage: string | null
+	}
+}
+
+export interface SafeAccountPoolSnapshot {
+	readonly strategy: AccountRoutingStrategy
+	readonly accounts: readonly SafeAccountPoolAccount[]
+	readonly queueDepth: number
+	readonly recentRouteDecisions: ReadonlyArray<{
+		readonly at: string
+		readonly model: string
+		readonly selectedAccountId: string | null
+		readonly selectedAccountLabel: string | null
+		readonly outcome: string
+		readonly queueWaitMs: number
+		readonly accounts: ReadonlyArray<{
+			readonly id: string
+			readonly label: string
+			readonly result: string
+			readonly reason: string
+			readonly remainingPercent: number | null
+		}>
+	}>
 }
 
 export interface GatewayProviderRuntimeConfiguration {
@@ -44,8 +122,9 @@ export interface GatewayProviderRuntimeConfiguration {
   readonly deepseekUrl: string
   readonly openaiApiKey: string
   readonly openaiApiBaseUrl: string
-  readonly chatgptResponsesUrl: string
-  readonly chatgptAccounts: readonly Record<string, unknown>[]
+	readonly chatgptResponsesUrl: string
+	readonly chatgptAccounts: readonly Record<string, unknown>[]
+	readonly chatgptAccountStrategy: AccountRoutingStrategy
   readonly relays: ReadonlyArray<{
     id: string
     name: string
@@ -243,14 +322,178 @@ function findUsage(value: unknown): ProviderForwardResult['usage'] | undefined {
     const found = findUsage(nested)
     if (found) return found
   }
-  return undefined
+	return undefined
+}
+
+function record(value: unknown): Record<string, unknown> {
+	return value && typeof value === 'object' && !Array.isArray(value)
+		? value as Record<string, unknown>
+		: {}
+}
+
+function finite(value: unknown, fallback = 0): number {
+	const result = Number(value)
+	return Number.isFinite(result) ? result : fallback
+}
+
+function nullableFinite(value: unknown): number | null {
+	if (value === null || value === undefined || value === '') return null
+	const result = Number(value)
+	return Number.isFinite(result) ? result : null
+}
+
+function safeText(value: unknown, max = 300): string | null {
+	if (typeof value !== 'string' || !value.trim()) return null
+	return value.trim().slice(0, max)
+}
+
+function accountIdPreview(value: unknown): string | null {
+	const id = safeText(value, 160)
+	if (!id) return null
+	if (id.length <= 12) return id
+	return `${id.slice(0, 6)}…${id.slice(-6)}`
+}
+
+function safeQuotaWindow(value: unknown): SafeQuotaWindow | null {
+	const window = record(value)
+	if (!Object.keys(window).length) return null
+	const usedPercent = nullableFinite(window['used_percent'])
+	const remaining = nullableFinite(window['remaining_percent'])
+	return {
+		usedPercent,
+		remainingPercent: remaining ?? (usedPercent === null ? null : Math.max(0, 100 - usedPercent)),
+		resetsAt: nullableFinite(window['resets_at']),
+		windowMinutes: nullableFinite(window['window_minutes'])
+	}
+}
+
+export function safeAccountPoolSnapshot(
+	proxyConfig: Record<string, unknown>,
+	runtimeValue: unknown,
+	statsValue: unknown,
+	queueValue: unknown,
+	decisionsValue: unknown
+): SafeAccountPoolSnapshot {
+	const runtime = Array.isArray(runtimeValue) ? runtimeValue.map(record) : []
+	const stats = record(record(statsValue)['accounts'])
+	const configured = Array.isArray(proxyConfig['chatgptAccounts'])
+		? proxyConfig['chatgptAccounts'].map(record)
+		: []
+	const accounts = configured.map<SafeAccountPoolAccount>(account => {
+		const id = String(account['id'] || '')
+		const runtimeAccount = runtime.find(item => item['id'] === id) || {}
+		const health = record(stats[id])
+		const usage = record(account['usage'])
+		return {
+			id,
+			label: safeText(account['label'], 80) || 'ChatGPT 账号',
+			accountIdPreview: accountIdPreview(account['account_id']),
+			planType: safeText(account['plan_type'], 80),
+			status: safeText(runtimeAccount['status'], 40) || safeText(account['status'], 40) || 'active',
+			routingEnabled: account['routing_enabled'] !== false,
+			routingWeight: Math.max(1, Math.min(100, finite(account['routing_weight'], 1))),
+			lowQuotaThreshold: Math.max(0, Math.min(100, finite(
+				account['low_quota_threshold'],
+				finite(proxyConfig['chatgptLowQuotaThreshold'], 10)
+			))),
+			dailyRequestLimit: Math.max(0, Math.floor(finite(account['daily_request_limit']))),
+			dailyTokenLimit: Math.max(0, Math.floor(finite(account['daily_token_limit']))),
+			reservedModels: Array.isArray(account['reserved_models'])
+				? account['reserved_models'].map(value => String(value)).slice(0, 50)
+				: [],
+			quota: {
+				source: 'provider',
+				primary: safeQuotaWindow(usage['primary']),
+				secondary: safeQuotaWindow(usage['secondary']),
+				updatedAt: safeText(account['usage_updated_at'], 80),
+				syncStatus: safeText(account['usage_sync_status'], 40) || 'pending',
+				syncError: safeText(account['usage_sync_error'], 240)
+			},
+			runtime: {
+				activeRequests: Math.max(0, finite(runtimeAccount['active_requests'])),
+				concurrencyLimit: Math.max(1, finite(runtimeAccount['concurrency_limit'], 3)),
+				cooldownUntil: nullableFinite(runtimeAccount['cooldown_until']),
+				modelCooldowns: Math.max(0, finite(runtimeAccount['model_cooldowns']))
+			},
+			health: {
+				requests: Math.max(0, finite(health['requests'])),
+				successRate: nullableFinite(health['success_rate']),
+				p95LatencyMs: Math.max(0, finite(health['p95_latency_ms'])),
+				rateLimited: Math.max(0, finite(health['rate_limited'])),
+				lastRequestAt: safeText(health['last_request_at'], 80),
+				lastErrorType: safeText(health['last_error_type'], 80),
+				lastErrorMessage: safeText(health['last_error_message'], 240)
+			}
+		}
+	})
+	const decisions = Array.isArray(decisionsValue) ? decisionsValue.map(record) : []
+	return {
+		strategy: String(proxyConfig['chatgptAccountStrategy'] || 'headroom') as AccountRoutingStrategy,
+		accounts,
+		queueDepth: Math.max(0, finite(record(queueValue)['depth'])),
+		recentRouteDecisions: decisions.slice(0, 20).map(decision => ({
+			at: safeText(decision['at'], 80) || '',
+			model: safeText(decision['model'], 160) || '',
+			selectedAccountId: safeText(decision['selected_account_id'], 160),
+			selectedAccountLabel: safeText(decision['selected_account_label'], 80),
+			outcome: safeText(decision['outcome'], 80) || 'selected',
+			queueWaitMs: Math.max(0, finite(decision['queue_wait_ms'])),
+			accounts: (Array.isArray(decision['accounts']) ? decision['accounts'] : [])
+				.map(record)
+				.slice(0, 50)
+				.map(item => ({
+					id: safeText(item['id'], 160) || '',
+					label: safeText(item['label'], 80) || '',
+					result: safeText(item['result'], 80) || '',
+					reason: safeText(item['reason'], 160) || '',
+					remainingPercent: nullableFinite(item['remaining_percent'])
+				}))
+		}))
+	}
+}
+
+const CHATGPT_RUNTIME_FIELDS = [
+	'access_token',
+	'refresh_token',
+	'id_token',
+	'expires_at',
+	'plan_type',
+	'usage',
+	'usage_updated_at',
+	'usage_history',
+	'usage_forecast',
+	'usage_sync_status',
+	'usage_sync_error',
+	'cooldown_until',
+	'model_cooldowns',
+	'last_cooldown_model',
+	'last_cooldown_reason',
+	'auth_error',
+	'last_refresh',
+	'added_at',
+	'reset_credits',
+	'reset_credits_error',
+	'status'
+] as const
+
+function preserveChatgptRuntime(
+	incoming: Record<string, unknown>,
+	previous: Record<string, unknown> | undefined
+): Record<string, unknown> {
+	if (!previous) return { ...incoming }
+	const preserved: Record<string, unknown> = {}
+	for (const key of CHATGPT_RUNTIME_FIELDS) {
+		if (previous[key] !== undefined) preserved[key] = previous[key]
+	}
+	return { ...incoming, ...preserved }
 }
 
 export class StandaloneRouteAdapter implements ProviderRouteAdapter {
   #handler: StandaloneHandler | null = null
   #proxyConfig: Record<string, unknown> | null = null
-  #modelIds: readonly string[] = []
-  #diagnostics: (() => Promise<Record<string, unknown>>) | null = null
+	#modelIds: readonly string[] = []
+	#diagnostics: (() => Promise<Record<string, unknown>>) | null = null
+	#accountPool: (() => SafeAccountPoolSnapshot) | null = null
 
   constructor(private readonly options: { storageRoot: string }) {}
 
@@ -367,13 +610,17 @@ export class StandaloneRouteAdapter implements ProviderRouteAdapter {
     return response
   }
 
-  async configureProviders(
+	async configureProviders(
     configuration: GatewayProviderRuntimeConfiguration
   ): Promise<void> {
     if (!this.#proxyConfig) {
       throw new Error('Standalone provider adapter is not initialized')
     }
-    Object.assign(this.#proxyConfig, {
+		const currentAccounts = Array.isArray(this.#proxyConfig['chatgptAccounts'])
+			? this.#proxyConfig['chatgptAccounts'].map(record)
+			: []
+		const currentById = new Map(currentAccounts.map(account => [String(account['id'] || ''), account]))
+		Object.assign(this.#proxyConfig, {
       deepseekApiKey: configuration.deepseekApiKey,
       upstreamUrl: configuration.deepseekUrl,
       openaiApiKey: configuration.openaiApiKey,
@@ -383,7 +630,13 @@ export class StandaloneRouteAdapter implements ProviderRouteAdapter {
         `${configuration.openaiApiBaseUrl.replace(/\/+$/, '')}/chat/completions`,
       openaiApiUpstream: 'official',
       chatgptResponsesUrl: configuration.chatgptResponsesUrl,
-      chatgptAccounts: configuration.chatgptAccounts.map(account => ({ ...account })),
+			chatgptAccounts: configuration.chatgptAccounts.map(account =>
+				preserveChatgptRuntime(
+					{ ...account },
+					currentById.get(String(account['id'] || ''))
+				)
+			),
+			chatgptAccountStrategy: configuration.chatgptAccountStrategy,
       activeChatgptAccountId:
         String(configuration.chatgptAccounts[0]?.['id'] || '') || null,
       relays: configuration.relays.map(relay => ({
@@ -395,10 +648,45 @@ export class StandaloneRouteAdapter implements ProviderRouteAdapter {
     this.#modelIds = [...configuration.modelIds]
   }
 
-  async safeDiagnostics(): Promise<Record<string, unknown>> {
+	async safeDiagnostics(): Promise<Record<string, unknown>> {
     if (!this.#diagnostics) return {}
     return redactValue(await this.#diagnostics()) as Record<string, unknown>
-  }
+	}
+
+	async safeAccountPool(): Promise<SafeAccountPoolSnapshot> {
+		if (!this.#accountPool) {
+			return {
+				strategy: 'headroom',
+				accounts: [],
+				queueDepth: 0,
+				recentRouteDecisions: []
+			}
+		}
+		return this.#accountPool()
+	}
+
+	async refreshChatgptAccountUsage(accountId: string): Promise<void> {
+		const response = await this.requestMemory(
+			'POST',
+			`/admin/api/chatgpt-accounts/${encodeURIComponent(accountId)}/refresh-usage`
+		)
+		const body = response.body()
+		try {
+			if (response.statusCode !== 200) {
+				let message = `Account usage refresh returned ${response.statusCode}`
+				try {
+					const parsed = record(JSON.parse(body.toString('utf8')))
+					message = safeText(record(parsed['error'])['message'], 240) || message
+				} catch {
+					// Preserve the safe status-only fallback for malformed responses.
+				}
+				throw new Error(message)
+			}
+		} finally {
+			body.fill(0)
+			for (const chunk of response.chunks) chunk.fill(0)
+		}
+	}
 
   private handler(): StandaloneHandler {
     if (this.#handler) return this.#handler
@@ -431,10 +719,19 @@ export class StandaloneRouteAdapter implements ProviderRouteAdapter {
     const health = await import(
       pathToFileURL(path.join(repositoryRoot, 'src', 'provider-health.js')).href
     ) as Record<string, unknown>
-    const decisions = await import(
+		const decisions = await import(
       pathToFileURL(path.join(repositoryRoot, 'src', 'route-decisions.js')).href
-    ) as Record<string, unknown>
-    this.#diagnostics = async () => ({
+		) as Record<string, unknown>
+		const accounts = await import(
+			pathToFileURL(path.join(repositoryRoot, 'src', 'chatgpt-accounts.js')).href
+		) as Record<string, unknown>
+		const stats = await import(
+			pathToFileURL(path.join(repositoryRoot, 'src', 'stats.js')).href
+		) as Record<string, unknown>
+		const chatgptRoute = await import(
+			pathToFileURL(path.join(repositoryRoot, 'src', 'routes', 'chatgpt-sub.js')).href
+		) as Record<string, unknown>
+		this.#diagnostics = async () => ({
       providers: typeof health['getProviderHealth'] === 'function'
         ? (health['getProviderHealth'] as () => unknown)()
         : {},
@@ -444,7 +741,22 @@ export class StandaloneRouteAdapter implements ProviderRouteAdapter {
       recentRouteErrors: typeof decisions['getRouteDecisions'] === 'function'
         ? (decisions['getRouteDecisions'] as (limit: number) => unknown)(50)
         : []
-    })
+		})
+		this.#accountPool = () => safeAccountPoolSnapshot(
+			this.#proxyConfig || {},
+			typeof accounts['getAccountRuntimeDiagnostics'] === 'function'
+				? (accounts['getAccountRuntimeDiagnostics'] as () => unknown)()
+				: [],
+			typeof stats['getStats'] === 'function'
+				? (stats['getStats'] as () => unknown)()
+				: {},
+			typeof chatgptRoute['getAccountQueueDiagnostics'] === 'function'
+				? (chatgptRoute['getAccountQueueDiagnostics'] as () => unknown)()
+				: {},
+			typeof decisions['getRouteDecisions'] === 'function'
+				? (decisions['getRouteDecisions'] as (limit: number) => unknown)(20)
+				: []
+		)
     const server = module.createServer()
     const listener = server.listeners('request')[0]
     if (typeof listener !== 'function') throw new Error('Standalone request handler is unavailable')

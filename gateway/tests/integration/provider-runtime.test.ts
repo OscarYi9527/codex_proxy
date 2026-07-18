@@ -86,7 +86,7 @@ describe('database Provider configuration drives the isolated runtime (T084-T087
     }
   })
 
-  it('refreshes models and streams Responses after Level-1 configures a Relay', async () => {
+	it('refreshes models and streams Responses after Level-1 configures a Relay', async () => {
     const initial = await loginBootstrapAndExchange(fixture)
     const changed = await fixture.gateway.app.inject({
       method: 'POST',
@@ -160,12 +160,33 @@ describe('database Provider configuration drives the isolated runtime (T084-T087
     expect(response.body).toContain('response.completed')
     expect(observedUrl).toBe('/v1/chat/completions')
     expect(observedAuthorization).toBe('Bearer database-provider-secret')
-    expect(observedBody).toMatchObject({
-      model: 'gpt-5.4-mini',
-      stream: true
-    })
+		expect(observedBody).toMatchObject({
+			model: 'gpt-5.4-mini',
+			stream: true
+		})
+		const providerHealth = await fixture.gateway.app.inject({
+			method: 'GET',
+			url: `/api/v1/admin/providers/${providerId}`,
+			headers: { authorization: `Bearer ${tokens.accessToken}` }
+		})
+		expect(providerHealth.json()).toMatchObject({
+			runtimeHealth: {
+				state: 'healthy',
+				circuitState: 'closed',
+				lastStatus: 200,
+				requests: 1,
+				successRate: 100
+			},
+			credentials: [{
+				status: 'healthy',
+				health: {
+					requests: 1,
+					successRate: 100
+				}
+			}]
+		})
 
-    const disabled = await fixture.gateway.app.inject({
+		const disabled = await fixture.gateway.app.inject({
       method: 'PATCH',
       url: `/api/v1/admin/providers/${providerId}`,
       headers: { authorization: `Bearer ${tokens.accessToken}` },
@@ -179,10 +200,123 @@ describe('database Provider configuration drives the isolated runtime (T084-T087
       headers: { authorization: `Bearer ${tokens.accessToken}` }
     })
     expect(modelsAfterDisable.statusCode).toBe(200)
-    expect(modelsAfterDisable.json().data).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: publicModelId })
-    ]))
-  })
+		expect(modelsAfterDisable.json().data).not.toEqual(expect.arrayContaining([
+			expect.objectContaining({ id: publicModelId })
+		]))
+	})
+
+	it('projects the embedded Proxy account pool and applies account routing changes', async () => {
+		const initial = await loginBootstrapAndExchange(fixture)
+		const changed = await fixture.gateway.app.inject({
+			method: 'POST',
+			url: '/api/v1/account/password/change',
+			headers: { authorization: `Bearer ${initial.accessToken}` },
+			payload: {
+				currentPassword: fixture.bootstrap.password,
+				newPassword: 'PermanentPassword123',
+				email: 'admin@example.com'
+			}
+		})
+		const accessToken = changed.json().accessToken as string
+		const headers = { authorization: `Bearer ${accessToken}` }
+		const created = await fixture.gateway.app.inject({
+			method: 'POST',
+			url: '/api/v1/admin/providers',
+			headers,
+			payload: {
+				kind: 'chatgpt',
+				displayName: 'Central ChatGPT Pool',
+				config: { models: ['gpt-5.4'] }
+			}
+		})
+		const providerId = created.json().id as string
+		const credential = await fixture.gateway.app.inject({
+			method: 'POST',
+			url: `/api/v1/admin/providers/${providerId}/credentials`,
+			headers,
+			payload: {
+				secret: JSON.stringify({
+					tokens: {
+						access_token: 'runtime-access-token',
+						refresh_token: 'runtime-refresh-token',
+						account_id: 'runtime-account-id'
+					}
+				})
+			}
+		})
+		expect(credential.statusCode).toBe(200)
+		const credentialId = credential.json().id as string
+
+		const listed = await fixture.gateway.app.inject({
+			method: 'GET',
+			url: '/api/v1/admin/providers',
+			headers
+		})
+		expect(listed.statusCode).toBe(200)
+		expect(listed.body).not.toContain('runtime-access-token')
+		expect(listed.body).not.toContain('runtime-refresh-token')
+		expect(listed.json().accountPool).toMatchObject({
+			strategy: 'headroom',
+			queueDepth: 0
+		})
+		expect(listed.json().providers[0].credentials[0]).toMatchObject({
+			id: credentialId,
+			label: 'Central ChatGPT Pool',
+			accountIdPreview: 'runtim…unt-id',
+			status: 'active',
+			routing: {
+				enabled: true,
+				weight: 1,
+				lowQuotaThreshold: 10
+			},
+			quota: {
+				source: 'provider',
+				primary: null,
+				secondary: null
+			}
+		})
+
+		const routing = await fixture.gateway.app.inject({
+			method: 'PATCH',
+			url: `/api/v1/admin/providers/${providerId}/credentials/${credentialId}/routing`,
+			headers,
+			payload: {
+				label: '备用订阅账号',
+				routingEnabled: false,
+				routingWeight: 8,
+				lowQuotaThreshold: 18,
+				dailyRequestLimit: 40,
+				dailyTokenLimit: 200_000,
+				reservedModels: ['gpt-5.4']
+			}
+		})
+		expect(routing.statusCode).toBe(200)
+		expect(routing.json().credentials[0]).toMatchObject({
+			label: '备用订阅账号',
+			routing: {
+				enabled: false,
+				weight: 8,
+				lowQuotaThreshold: 18,
+				dailyRequestLimit: 40,
+				dailyTokenLimit: 200_000,
+				reservedModels: ['gpt-5.4']
+			}
+		})
+
+		const strategy = await fixture.gateway.app.inject({
+			method: 'PUT',
+			url: `/api/v1/admin/providers/${providerId}/account-routing-strategy`,
+			headers,
+			payload: { strategy: 'weighted' }
+		})
+		expect(strategy.statusCode).toBe(200)
+		const afterStrategy = await fixture.gateway.app.inject({
+			method: 'GET',
+			url: '/api/v1/admin/providers',
+			headers
+		})
+		expect(afterStrategy.json().accountPool.strategy).toBe('weighted')
+	})
 })
 
 describe('persisted Provider startup configuration', () => {

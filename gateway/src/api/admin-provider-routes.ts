@@ -77,7 +77,7 @@ export function registerAdminProviderRoutes(app: FastifyInstance, options: {
     asRecord(request.body)
   ))
 
-  app.delete('/api/v1/admin/providers/:providerId/credentials/:credentialId', {
+	app.delete('/api/v1/admin/providers/:providerId/credentials/:credentialId', {
     preHandler: options.authenticate
   }, async (request, reply) => {
     await options.service.removeCredential(
@@ -86,7 +86,40 @@ export function registerAdminProviderRoutes(app: FastifyInstance, options: {
       param(request, 'credentialId')
     )
     await reply.status(204).send()
-  })
+	})
+
+	app.patch('/api/v1/admin/providers/:providerId/credentials/:credentialId/routing', {
+		preHandler: options.authenticate
+	}, request => options.service.updateCredentialRouting(
+		identity(request),
+		param(request, 'providerId'),
+		param(request, 'credentialId'),
+		asRecord(request.body)
+	))
+
+	app.post('/api/v1/admin/providers/:providerId/credentials/:credentialId/refresh-usage', {
+		preHandler: options.authenticate
+	}, request => options.service.refreshCredentialUsage(
+		identity(request),
+		param(request, 'providerId'),
+		param(request, 'credentialId')
+	))
+
+	app.put('/api/v1/admin/providers/:providerId/account-routing-strategy', {
+		preHandler: options.authenticate
+	}, request => options.service.updateAccountStrategy(
+		identity(request),
+		param(request, 'providerId'),
+		asRecord(request.body)
+	))
+
+	app.put('/api/v1/admin/providers/:providerId/internal-budget', {
+		preHandler: options.authenticate
+	}, request => options.service.updateInternalBudget(
+		identity(request),
+		param(request, 'providerId'),
+		asRecord(request.body)
+	))
 
   app.post('/api/v1/admin/providers/:providerId/chatgpt-login/start', {
     preHandler: options.authenticate

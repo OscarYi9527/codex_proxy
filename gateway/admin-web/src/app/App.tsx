@@ -9,6 +9,7 @@ import { DiagnosticsPage } from '../pages/system/DiagnosticsPage'
 import { ProvidersPage } from '../pages/system/ProvidersPage'
 import { managementApi, type ManagementApiClient } from './api-client'
 import { managementBootstrapFromEvent } from './bootstrap'
+import { accountRoleLabel } from './labels'
 import type {
   AccountDetails,
   DeviceSession,
@@ -195,7 +196,7 @@ export function App({
             <p className="eyebrow">安全账号中心</p>
             <h1>AI Editor 管理</h1>
           </div>
-          <span className="role-badge">{data.session.account.role}</span>
+          <span className="role-badge">{accountRoleLabel(data.session.account.role)}</span>
         </header>
         {route === 'account' && (
           <>

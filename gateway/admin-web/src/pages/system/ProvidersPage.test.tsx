@@ -15,6 +15,7 @@ function client(): ManagementApiClient {
     createOrganization: async () => { throw new Error('not used') },
     organizationAccounts: async () => [],
     setAccountStatus: async () => undefined,
+    setAccountRole: async () => { throw new Error('not used') },
     invitations: async () => [],
     createInvitation: async () => { throw new Error('not used') },
     revokeInvitation: async () => undefined,

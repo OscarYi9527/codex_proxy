@@ -202,6 +202,34 @@ dd {
   gap: 4px;
 }
 
+.account-role-controls {
+  flex: 1 0 100%;
+  grid-template-columns: repeat(3, minmax(120px, auto));
+  align-items: center;
+}
+
+.account-list-item {
+  flex-wrap: wrap;
+}
+
+.account-role-controls select,
+.account-role-controls button {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid #b8c5d8;
+  border-radius: 8px;
+  color: #172033;
+  background: #fff;
+  font: inherit;
+}
+
+.account-role-controls button {
+  border-color: #155eb9;
+  color: #fff;
+  background: #1769e0;
+  cursor: pointer;
+}
+
 .warning {
   padding: 12px 14px;
   border: 1px solid #efc46a;
@@ -420,6 +448,10 @@ dd {
   }
 
   .security-form {
+    grid-template-columns: 1fr;
+  }
+
+  .account-role-controls {
     grid-template-columns: 1fr;
   }
 

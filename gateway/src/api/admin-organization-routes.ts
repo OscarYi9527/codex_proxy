@@ -42,6 +42,13 @@ export function registerAdminOrganizationRoutes(app: FastifyInstance, options: {
     await options.service.setAccountStatus(identity(request), param(request, 'accountId'), 'disabled')
     await reply.status(204).send()
   })
+  app.put('/api/v1/admin/accounts/:accountId/role', {
+    preHandler: options.authenticate
+  }, request => options.service.setAccountRole(
+    identity(request),
+    param(request, 'accountId'),
+    body(request)
+  ))
   app.get('/api/v1/admin/invitations', { preHandler: options.authenticate }, request =>
     options.service.invitations(identity(request)))
   app.post('/api/v1/admin/invitations', { preHandler: options.authenticate }, request =>

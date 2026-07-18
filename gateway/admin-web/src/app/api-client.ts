@@ -43,6 +43,10 @@ export interface ManagementApiClient {
   createOrganization(name: string): Promise<OrganizationSummary>
   organizationAccounts(): Promise<readonly OrganizationAccountSummary[]>
   setAccountStatus(accountId: string, status: 'active' | 'disabled'): Promise<void>
+  setAccountRole(accountId: string, input: {
+    role: OrganizationAccountSummary['role']
+    organizationId: string | null
+  }): Promise<OrganizationAccountSummary>
   invitations(): Promise<readonly InvitationSummary[]>
   createInvitation(input: {
     organizationId: string
@@ -122,6 +126,11 @@ export const managementApi: ManagementApiClient = {
       `/api/v1/admin/accounts/${encodeURIComponent(accountId)}/${status === 'active' ? 'enable' : 'disable'}`,
       { method: 'POST' }
     ),
+  setAccountRole: (accountId, input) =>
+    requestJson(`/api/v1/admin/accounts/${encodeURIComponent(accountId)}/role`, {
+      method: 'PUT',
+      body: JSON.stringify(input)
+    }),
   invitations: () => requestJson('/api/v1/admin/invitations'),
   createInvitation: input => requestJson('/api/v1/admin/invitations', {
     method: 'POST',

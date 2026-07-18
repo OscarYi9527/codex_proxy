@@ -1,4 +1,5 @@
 export type AccountRole = 'level1' | 'level2' | 'user'
+export type AccountStatus = 'active' | 'disabled' | 'expired'
 
 export type ManagementRoute =
   | 'account'
@@ -35,7 +36,7 @@ export interface AccountDetails {
     readonly email: string | null
     readonly loginName: string | null
     readonly role: AccountRole
-    readonly status: string
+    readonly status: AccountStatus
     readonly expiresAt: string | null
     readonly organization: { readonly id: string; readonly name: string } | null
     readonly mustChangePassword: boolean
@@ -74,7 +75,7 @@ export interface OrganizationAccountSummary {
   readonly loginName: string | null
   readonly email: string | null
   readonly role: AccountRole
-  readonly status: 'active' | 'disabled' | 'expired'
+  readonly status: AccountStatus
   readonly organizationId: string | null
   readonly expiresAt: string | null
   readonly version: number

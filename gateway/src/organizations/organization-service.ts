@@ -2,7 +2,7 @@ import type { Clock } from '../common/clock.js'
 import type { KeyedDigest } from '../common/digests.js'
 import { SafeError } from '../common/errors.js'
 import type { IdSource } from '../common/ids.js'
-import type { AccessIdentity } from '../auth/types.js'
+import type { AccessIdentity, AccountRole } from '../auth/types.js'
 import {
   assertLevel1CanBeChanged,
   requireAccountManager,
@@ -58,7 +58,7 @@ export class OrganizationService {
         throw new SafeError({ code: 'not_found', message: '账号不存在。', statusCode: 404 })
       }
       requireAccountManager(identity, account)
-      if (status === 'disabled') {
+      if (status === 'disabled' && account.status === 'active') {
         assertLevel1CanBeChanged(account, await repository.countActiveLevel1())
       }
       if (!await repository.updateAccountStatus(
@@ -74,6 +74,72 @@ export class OrganizationService {
           retryable: true
         })
       }
+    })
+  }
+
+  async setAccountRole(
+    identity: AccessIdentity,
+    accountId: string,
+    input: Record<string, unknown>
+  ) {
+    requireLevel1(identity)
+    const role = input.role
+    if (!['level1', 'level2', 'user'].includes(String(role))) {
+      throw invalid('账号角色无效。')
+    }
+    return this.repository.inTransaction(async repository => {
+      const account = await repository.findAccount(accountId)
+      if (!account) {
+        throw new SafeError({ code: 'not_found', message: '账号不存在。', statusCode: 404 })
+      }
+      const targetRole = role as AccountRole
+      if (
+        account.role === 'level1' &&
+        account.status === 'active' &&
+        targetRole !== 'level1'
+      ) {
+        assertLevel1CanBeChanged(account, await repository.countActiveLevel1())
+      }
+
+      let organizationId: string | null = null
+      if (targetRole !== 'level1') {
+        organizationId = typeof input.organizationId === 'string'
+          ? input.organizationId.trim()
+          : input.organizationId === undefined
+            ? account.organizationId
+            : null
+        if (!organizationId) throw invalid('二级管理员和普通用户必须归属组织。')
+        const organization = await repository.findOrganization(organizationId)
+        if (!organization) {
+          throw new SafeError({ code: 'not_found', message: '组织不存在。', statusCode: 404 })
+        }
+        if (organization.status !== 'active') {
+          throw new SafeError({
+            code: 'organization_disabled',
+            message: '组织已被禁用。',
+            statusCode: 409
+          })
+        }
+      }
+
+      if (!await repository.updateAccountRole(
+        accountId,
+        targetRole,
+        organizationId,
+        this.clock.now().toISOString()
+      )) {
+        throw new SafeError({
+          code: 'account_role_conflict',
+          message: '账号角色已经变化，请刷新后重试。',
+          statusCode: 409,
+          retryable: true
+        })
+      }
+      const updated = await repository.findAccount(accountId)
+      if (!updated) {
+        throw new SafeError({ code: 'not_found', message: '账号不存在。', statusCode: 404 })
+      }
+      return updated
     })
   }
 

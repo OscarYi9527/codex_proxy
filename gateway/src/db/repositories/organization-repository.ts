@@ -179,6 +179,24 @@ export class OrganizationRepository {
     return Number(result.numUpdatedRows) === 1
   }
 
+  async updateAccountRole(
+    accountId: string,
+    role: AccountRole,
+    organizationId: string | null,
+    now: string
+  ): Promise<boolean> {
+    const result = await this.db.updateTable('accounts')
+      .set({
+        role,
+        organization_id: organizationId,
+        updated_at: now,
+        version: sql`version + 1`
+      })
+      .where('id', '=', accountId)
+      .executeTakeFirst()
+    return Number(result.numUpdatedRows) === 1
+  }
+
   async createInvitation(input: {
     id: string
     organizationId: string

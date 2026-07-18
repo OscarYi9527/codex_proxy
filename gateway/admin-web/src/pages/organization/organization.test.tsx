@@ -14,6 +14,19 @@ function client() {
       version: 1
     })),
     setAccountStatus: jest.fn(async () => undefined),
+    setAccountRole: jest.fn(async (
+      accountId: string,
+      input: Parameters<ManagementApiClient['setAccountRole']>[1]
+    ) => ({
+      id: accountId,
+      loginName: null,
+      email: 'manager@example.test',
+      role: input.role,
+      status: 'active' as const,
+      organizationId: input.organizationId,
+      expiresAt: null,
+      version: 2
+    })),
     createInvitation: jest.fn(async (
       input: Parameters<ManagementApiClient['createInvitation']>[0]
     ) => ({
@@ -66,8 +79,16 @@ describe('organization administration pages (T062/T068)', () => {
       'acct_level2',
       'disabled'
     ))
-    expect(screen.getByText(/二级管理员/)).toBeInTheDocument()
-    expect(refresh).toHaveBeenCalledTimes(2)
+    fireEvent.change(screen.getByLabelText('角色 manager@example.test'), {
+      target: { value: 'user' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: '保存角色' }))
+    await waitFor(() => expect(api.setAccountRole).toHaveBeenCalledWith(
+      'acct_level2',
+      { role: 'user', organizationId: 'org_a' }
+    ))
+    expect(screen.getByText(/^二级管理员 · org_a$/)).toBeInTheDocument()
+    expect(refresh).toHaveBeenCalledTimes(3)
   })
 
   it('keeps organization creation hidden and limits account controls for Level 2', () => {
@@ -93,6 +114,7 @@ describe('organization administration pages (T062/T068)', () => {
 
     expect(screen.queryByRole('button', { name: '创建组织' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '禁用' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '保存角色' })).not.toBeInTheDocument()
   })
 
   it('shows a newly created invitation once and supports revocation', async () => {

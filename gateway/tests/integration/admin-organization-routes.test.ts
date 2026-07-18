@@ -102,6 +102,50 @@ describe('organization administration routes (T060/T065/T067)', () => {
       .where('id', '=', adminId)
       .executeTakeFirstOrThrow()
     expect(account.status).toBe('active')
+
+    const organizationId = await createOrganization('Last Level-1 Protection')
+    const demotion = await fixture.gateway.app.inject({
+      method: 'PUT',
+      url: `/api/v1/admin/accounts/${adminId}/role`,
+      headers: headers(),
+      payload: { role: 'user', organizationId }
+    })
+    expect(demotion.statusCode).toBe(409)
+    expect(demotion.json().error.code).toBe('last_level1_protected')
+  })
+
+  it('lets Level 1 appoint a scoped Level-2 administrator', async () => {
+    const organizationId = await createOrganization('Managed Organization')
+    await fixture.database.db.insertInto('accounts').values({
+      id: 'acct_promoted_manager',
+      login_name: null,
+      email: 'promoted@example.test',
+      role: 'user',
+      organization_id: organizationId,
+      status: 'active',
+      expires_at: null,
+      must_change_password: 0,
+      must_provide_email: 0,
+      created_at: fixture.clock.now().toISOString(),
+      updated_at: fixture.clock.now().toISOString(),
+      disabled_at: null,
+      disabled_by: null,
+      version: 1
+    }).execute()
+
+    const promoted = await fixture.gateway.app.inject({
+      method: 'PUT',
+      url: '/api/v1/admin/accounts/acct_promoted_manager/role',
+      headers: headers(),
+      payload: { role: 'level2', organizationId }
+    })
+    expect(promoted.statusCode).toBe(200)
+    expect(promoted.json()).toMatchObject({
+      id: 'acct_promoted_manager',
+      role: 'level2',
+      organizationId,
+      version: 2
+    })
   })
 
   it('scopes Level-2 list and mutation APIs to its own organization', async () => {
@@ -169,6 +213,13 @@ describe('organization administration routes (T060/T065/T067)', () => {
       payload: { name: 'Forbidden Organization' }
     })
     expect(createOrganizationDenied.statusCode).toBe(403)
+    const roleChangeDenied = await fixture.gateway.app.inject({
+      method: 'PUT',
+      url: '/api/v1/admin/accounts/acct_org_b_user/role',
+      headers: headers(),
+      payload: { role: 'level2', organizationId: organizationB }
+    })
+    expect(roleChangeDenied.statusCode).toBe(403)
 
     const invitation = await fixture.gateway.app.inject({
       method: 'POST',

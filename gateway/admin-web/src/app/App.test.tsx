@@ -10,7 +10,7 @@ const account = {
     email: 'user@example.test',
     loginName: null,
     role: 'user' as const,
-    status: 'active',
+    status: 'active' as const,
     expiresAt: null,
     organization: { id: 'org_test', name: '示例组织' },
     mustChangePassword: false,
@@ -114,6 +114,19 @@ function clientFor(role: AccountRole): ManagementApiClient {
       version: 1
     }]),
     setAccountStatus: jest.fn(async () => undefined),
+    setAccountRole: jest.fn(async (
+      accountId: string,
+      input: Parameters<ManagementApiClient['setAccountRole']>[1]
+    ) => ({
+      id: accountId,
+      loginName: null,
+      email: 'member@example.test',
+      role: input.role,
+      status: 'active' as const,
+      organizationId: input.organizationId,
+      expiresAt: null,
+      version: 2
+    })),
     invitations: jest.fn(async () => [{
       id: 'inv_test',
       organizationId: 'org_test',

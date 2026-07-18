@@ -95,6 +95,10 @@ describe('原子配置写入和管理 API', () => {
   })
 
   it('管理 API 返回请求 ID、统计和脱敏配置', async () => {
+    // `/health` intentionally reports readiness, so do not let this test
+    // depend on a developer's local credential file being present.
+    const previousDeepseekApiKey = proxyConfig.deepseekApiKey
+    proxyConfig.deepseekApiKey = 'test-readiness-key'
     const server = createServer()
     await new Promise((resolve, reject) => {
       server.once('error', reject)
@@ -106,6 +110,7 @@ describe('原子配置写入和管理 API', () => {
       const health = await fetch(base + '/health')
       assert.strictEqual(health.status, 200)
       assert.match(health.headers.get('x-codex-proxy-request-id'), /^req_/)
+      assert.strictEqual((await health.json()).status, 'ok')
       const live = await fetch(base + '/live')
       assert.strictEqual(live.status, 200)
       assert.strictEqual((await live.json()).status, 'ok')
@@ -178,6 +183,7 @@ describe('原子配置写入和管理 API', () => {
       assert.ok(Array.isArray(diagnosis.issues))
     } finally {
       await new Promise(resolve => server.close(resolve))
+      proxyConfig.deepseekApiKey = previousDeepseekApiKey
     }
   })
 })

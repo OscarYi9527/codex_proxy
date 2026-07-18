@@ -1,6 +1,8 @@
 import type {
   AccountRoutingStrategy,
   AccountDetails,
+  ChatgptAccountImportResult,
+  ChatgptAccountLoginStatus,
   ChatgptLoginStatus,
   DeviceSession,
   ManagementSession,
@@ -75,6 +77,16 @@ export interface ManagementApiClient {
   ): Promise<ProviderSummary>
   deleteProvider(providerId: string): Promise<void>
   addProviderCredential(providerId: string, secret: string): Promise<void>
+  importChatgptAccount(input: {
+    authJson: string
+    label: string
+    routingEnabled: boolean
+  }): Promise<ChatgptAccountImportResult>
+  startChatgptAccountLogin(input: {
+    label: string
+    routingEnabled: boolean
+  }): Promise<ChatgptAccountLoginStatus>
+  chatgptAccountLoginStatus(): Promise<ChatgptAccountLoginStatus>
   deleteProviderCredential(providerId: string, credentialId: string): Promise<void>
   updateProviderCredentialRouting(
     providerId: string,
@@ -220,6 +232,18 @@ export const managementApi: ManagementApiClient = {
       method: 'POST',
       body: JSON.stringify({ secret })
     }),
+  importChatgptAccount: input =>
+    requestJson('/api/v1/admin/chatgpt-accounts/import', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    }),
+  startChatgptAccountLogin: input =>
+    requestJson('/api/v1/admin/chatgpt-accounts/login/start', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    }),
+  chatgptAccountLoginStatus: () =>
+    requestJson('/api/v1/admin/chatgpt-accounts/login/status'),
   deleteProviderCredential: (providerId, credentialId) =>
     requestVoid(
       `/api/v1/admin/providers/${encodeURIComponent(providerId)}/credentials/` +

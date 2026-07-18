@@ -1,8 +1,9 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { ManagementApiClient } from '../../app/api-client'
+import { currentCodexAuthFromEvent } from '../../app/bootstrap'
 import type {
   AccountRoutingStrategy,
-  ChatgptLoginStatus,
+  ChatgptAccountLoginStatus,
   ModelRouteResponse,
   ProviderCredentialSummary,
   ProviderListResponse,
@@ -300,8 +301,17 @@ export function ProvidersPage({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const [loginStatus, setLoginStatus] =
-    useState<Readonly<Record<string, ChatgptLoginStatus>>>({})
+  const [accountDialogOpen, setAccountDialogOpen] = useState(false)
+  const [accountLabel, setAccountLabel] = useState('')
+  const [routingEnabled, setRoutingEnabled] = useState(false)
+  const [accountDialogError, setAccountDialogError] = useState<string | null>(null)
+  const [selectedAuthFile, setSelectedAuthFile] = useState<string | null>(null)
+  const [dragActive, setDragActive] = useState(false)
+  const [nativeImportPending, setNativeImportPending] = useState(false)
+  const [loginStatus, setLoginStatus] = useState<ChatgptAccountLoginStatus | null>(null)
+  const authJsonRef = useRef<HTMLTextAreaElement>(null)
+  const authFileRef = useRef<HTMLInputElement>(null)
+  const loginPollPending = useRef(false)
 
   const run = async (operation: () => Promise<unknown>, success = '设置已保存。') => {
     if (busy) return
@@ -351,6 +361,189 @@ export function ProvidersPage({
     )
   }
 
+  const clearSensitiveAccountInput = () => {
+    if (authJsonRef.current) authJsonRef.current.value = ''
+    if (authFileRef.current) authFileRef.current.value = ''
+    setSelectedAuthFile(null)
+  }
+
+  const closeAccountDialog = () => {
+    clearSensitiveAccountInput()
+    setAccountDialogOpen(false)
+    setAccountDialogError(null)
+    setNativeImportPending(false)
+    setLoginStatus(null)
+    setAccountLabel('')
+    setRoutingEnabled(false)
+  }
+
+  const validateAuthJson = (raw: string): string | null => {
+    if (!raw.trim()) return '请粘贴或选择 auth.json。'
+    if (raw.length > 256 * 1024) return 'auth.json 超过 256 KB，已拒绝读取。'
+    try {
+      const parsed = JSON.parse(raw) as {
+        tokens?: {
+          access_token?: unknown
+          refresh_token?: unknown
+          account_id?: unknown
+        }
+      }
+      if (
+        typeof parsed.tokens?.access_token !== 'string' ||
+        typeof parsed.tokens?.refresh_token !== 'string' ||
+        typeof parsed.tokens?.account_id !== 'string'
+      ) {
+        return 'auth.json 缺少 access_token、refresh_token 或 account_id。'
+      }
+    } catch {
+      return 'auth.json 不是有效的 JSON。'
+    }
+    return null
+  }
+
+  const importAuthJson = async (raw: string) => {
+    if (busy) return
+    const validationError = validateAuthJson(raw)
+    if (validationError) {
+      setAccountDialogError(validationError)
+      setNativeImportPending(false)
+      return
+    }
+    let secret = raw
+    setBusy(true)
+    setError(null)
+    setNotice(null)
+    setAccountDialogError(null)
+    try {
+      const result = await client.importChatgptAccount({
+        authJson: secret,
+        label: accountLabel.trim(),
+        routingEnabled
+      })
+      await onRefresh()
+      closeAccountDialog()
+      setNotice(result.created
+        ? routingEnabled
+          ? '订阅账号已导入并参与自动路由。'
+          : '订阅账号已导入，当前仅保存到账号池。'
+        : '已更新同一订阅账号的登录凭据和路由设置。')
+    } catch {
+      setAccountDialogError('订阅账号导入失败，请确认 auth.json 有效且当前账号具有一级管理员权限。')
+    } finally {
+      secret = ''
+      clearSensitiveAccountInput()
+      setNativeImportPending(false)
+      setBusy(false)
+    }
+  }
+
+  const readAuthFile = async (file: File | undefined) => {
+    if (!file) return
+    setAccountDialogError(null)
+    if (!file.name.toLowerCase().endsWith('.json')) {
+      setAccountDialogError('请选择 auth.json 文件。')
+      return
+    }
+    if (file.size <= 0 || file.size > 256 * 1024) {
+      setAccountDialogError('auth.json 必须是小于 256 KB 的非空文件。')
+      return
+    }
+    let text = ''
+    try {
+      text = await file.text()
+      const validationError = validateAuthJson(text)
+      if (validationError) {
+        setAccountDialogError(validationError)
+        return
+      }
+      if (authJsonRef.current) authJsonRef.current.value = text
+      setSelectedAuthFile(file.name)
+    } catch {
+      setAccountDialogError('无法读取 auth.json 文件。')
+    } finally {
+      text = ''
+    }
+  }
+
+  const requestCurrentCodexAccount = () => {
+    if (busy || nativeImportPending) return
+    setAccountDialogError(null)
+    setNativeImportPending(true)
+    const link = document.createElement('a')
+    link.href = 'ai-editor-code://import-current-codex-account'
+    link.hidden = true
+    document.body.append(link)
+    link.click()
+    link.remove()
+  }
+
+  const startShortcutOfficialLogin = async () => {
+    if (busy) return
+    setBusy(true)
+    setAccountDialogError(null)
+    try {
+      setLoginStatus(await client.startChatgptAccountLogin({
+        label: accountLabel.trim(),
+        routingEnabled
+      }))
+    } catch {
+      setAccountDialogError('OpenAI 官方登录启动失败，请检查 Codex CLI 和管理员权限。')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!accountDialogOpen) return
+    const receive = (event: MessageEvent) => {
+      const message = currentCodexAuthFromEvent(event, window.location.origin)
+      if (!message) return
+      setNativeImportPending(false)
+      if (message.errorId) {
+        setAccountDialogError(message.errorId === 'current_codex_account_import_cancelled'
+          ? '已取消导入当前 Codex 账号。'
+          : '无法读取当前 Codex 账号，请确认本机已登录 Codex。')
+        return
+      }
+      if (message.authJson) void importAuthJson(message.authJson)
+    }
+    window.addEventListener('message', receive)
+    return () => window.removeEventListener('message', receive)
+  })
+
+  useEffect(() => {
+    if (!accountDialogOpen || loginStatus?.status !== 'waiting') return
+    let disposed = false
+    const poll = async () => {
+      if (loginPollPending.current) return
+      loginPollPending.current = true
+      try {
+        const status = await client.chatgptAccountLoginStatus()
+        if (disposed) return
+        setLoginStatus(status)
+        if (status.status === 'success') {
+          await onRefresh()
+          if (disposed) return
+          closeAccountDialog()
+          setNotice(routingEnabled
+            ? 'ChatGPT 官方账号已接入并参与自动路由。'
+            : 'ChatGPT 官方账号已接入，当前仅保存到账号池。')
+        } else if (status.status === 'error' || status.status === 'cancelled') {
+          setAccountDialogError(status.message || 'OpenAI 官方登录未完成。')
+        }
+      } catch {
+        if (!disposed) setAccountDialogError('无法刷新 OpenAI 官方登录状态。')
+      } finally {
+        loginPollPending.current = false
+      }
+    }
+    const timer = window.setInterval(() => void poll(), 1200)
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+    }
+  }, [accountDialogOpen, client, loginStatus?.status, onRefresh, routingEnabled])
+
   const internalBudget = (event: FormEvent<HTMLFormElement>, providerId: string) => {
     event.preventDefault()
     const values = new FormData(event.currentTarget)
@@ -359,27 +552,6 @@ export function ProvidersPage({
       () => client.setProviderInternalBudget(providerId, value || null),
       value ? 'Provider 内部预算已更新。' : 'Provider 内部预算已取消。'
     )
-  }
-
-  const officialLogin = async (providerId: string, refresh = false) => {
-    if (busy) return
-    setBusy(true)
-    setError(null)
-    setNotice(null)
-    try {
-      const status = refresh
-        ? await client.chatgptLoginStatus(providerId)
-        : await client.startChatgptLogin(providerId)
-      setLoginStatus(current => ({ ...current, [providerId]: status }))
-      if (status.status === 'success') {
-        await onRefresh()
-        setNotice('ChatGPT 上游账号已接入。')
-      }
-    } catch {
-      setError('OpenAI 官方登录启动失败，请检查 Codex CLI 和管理员权限。')
-    } finally {
-      setBusy(false)
-    }
   }
 
   const activeProviders = providers.providers.filter(provider => provider.status === 'active')
@@ -393,10 +565,17 @@ export function ProvidersPage({
   return (
     <>
       <section className="provider-hero" aria-labelledby="providers-title">
-        <div>
+        <div className="provider-hero-copy">
           <p className="eyebrow">LEVEL 1 · CENTRAL GATEWAY</p>
           <h2 id="providers-title">Provider 与模型</h2>
           <p>集中管理上游账号、额度、健康状态和模型路由。所有调度行为沿用现有 Proxy。</p>
+          <button
+            type="button"
+            className="provider-primary-action"
+            onClick={() => setAccountDialogOpen(true)}
+          >
+            添加订阅账号
+          </button>
         </div>
         <div className="provider-summary-grid">
           <div><span>Provider</span><strong>{activeProviders.length}/{providers.providers.length}</strong></div>
@@ -543,41 +722,6 @@ export function ProvidersPage({
             </div>
           )}
 
-          {provider.kind === 'chatgpt' && (
-            <div className="official-login">
-              <div className="button-row">
-                <button
-                  type="button"
-                  disabled={busy || loginStatus[provider.id]?.status === 'waiting'}
-                  onClick={() => void officialLogin(provider.id)}
-                >
-                  添加 ChatGPT 官方账号
-                </button>
-                {loginStatus[provider.id] && (
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void officialLogin(provider.id, true)}
-                  >
-                    刷新登录状态
-                  </button>
-                )}
-              </div>
-              {loginStatus[provider.id]?.message && (
-                <p className="muted">{loginStatus[provider.id]?.message}</p>
-              )}
-              {loginStatus[provider.id]?.verificationUrl && (
-                <a
-                  href={loginStatus[provider.id]?.verificationUrl || undefined}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  在浏览器中打开 OpenAI 登录
-                </a>
-              )}
-            </div>
-          )}
-
           <div className="upstream-account-grid">
             {provider.credentials.map(item => (
               <CredentialCard
@@ -595,16 +739,159 @@ export function ProvidersPage({
             <p className="provider-empty">还没有上游账号，请通过官方登录或手动保存凭据。</p>
           )}
 
-          <form className="credential-form provider-manual-credential" onSubmit={event =>
-            credential(event, provider.id)
-          }>
-            <label>手动添加凭据
-              <input name="secret" type="password" required autoComplete="off" aria-label="新凭据" />
-            </label>
-            <button type="submit" disabled={busy}>保存凭据</button>
-          </form>
+          {provider.kind !== 'chatgpt' && (
+            <form className="credential-form provider-manual-credential" onSubmit={event =>
+              credential(event, provider.id)
+            }>
+              <label>手动添加凭据
+                <input name="secret" type="password" required autoComplete="off" aria-label="新凭据" />
+              </label>
+              <button type="submit" disabled={busy}>保存凭据</button>
+            </form>
+          )}
         </section>
       ))}
+
+      {accountDialogOpen && (
+        <div
+          className="account-import-backdrop"
+          onMouseDown={event => {
+            if (event.target === event.currentTarget && !busy) closeAccountDialog()
+          }}
+        >
+          <section
+            className="account-import-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="account-import-title"
+          >
+            <header>
+              <div>
+                <p className="eyebrow">CHATGPT ACCOUNT</p>
+                <h2 id="account-import-title">添加订阅账号</h2>
+                <p>无需预先创建 Provider；系统会自动创建或复用 ChatGPT 订阅池。</p>
+              </div>
+              <button
+                type="button"
+                className="dialog-close"
+                aria-label="关闭"
+                disabled={busy}
+                onClick={closeAccountDialog}
+              >
+                ×
+              </button>
+            </header>
+
+            <div className="account-import-settings">
+              <label>账号名称
+                <input
+                  value={accountLabel}
+                  maxLength={80}
+                  placeholder="例如：主账号、备用账号"
+                  onChange={event => setAccountLabel(event.target.value)}
+                />
+              </label>
+              <label className="routing-toggle">
+                <input
+                  type="checkbox"
+                  checked={routingEnabled}
+                  onChange={event => setRoutingEnabled(event.target.checked)}
+                />
+                导入后立即参与自动路由
+              </label>
+              <small>默认仅保存到账号池，避免新账号被意外消耗额度。</small>
+            </div>
+
+            <div className="account-import-options">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void startShortcutOfficialLogin()}
+              >
+                <strong>OpenAI 官方登录</strong>
+                <span>通过隔离 Codex 登录流程添加新账号</span>
+              </button>
+              <button
+                type="button"
+                disabled={busy || nativeImportPending}
+                onClick={requestCurrentCodexAccount}
+              >
+                <strong>{nativeImportPending ? '等待 Code 确认…' : '一键导入当前 Codex 账号'}</strong>
+                <span>读取本机 CODEX_HOME/auth.json</span>
+              </button>
+              <button
+                type="button"
+                className={dragActive ? 'drag-active' : undefined}
+                disabled={busy}
+                onClick={() => authFileRef.current?.click()}
+                onDragEnter={event => {
+                  event.preventDefault()
+                  setDragActive(true)
+                }}
+                onDragOver={event => event.preventDefault()}
+                onDragLeave={() => setDragActive(false)}
+                onDrop={event => {
+                  event.preventDefault()
+                  setDragActive(false)
+                  void readAuthFile(event.dataTransfer.files[0])
+                }}
+              >
+                <strong>选择或拖入 auth.json</strong>
+                <span>{selectedAuthFile || '从其他 Codex 环境导入登录文件'}</span>
+              </button>
+              <input
+                ref={authFileRef}
+                type="file"
+                hidden
+                accept=".json,application/json"
+                aria-label="选择 auth.json"
+                onChange={event => void readAuthFile(event.target.files?.[0])}
+              />
+            </div>
+
+            {loginStatus && (
+              <div className={`account-login-status ${loginStatus.status}`}>
+                <strong>{loginStatus.message || (
+                  loginStatus.status === 'waiting' ? '等待完成 OpenAI 官方登录…' : loginStatus.status
+                )}</strong>
+                {loginStatus.verificationUrl && (
+                  <a href={loginStatus.verificationUrl} target="_blank" rel="noreferrer">
+                    在系统浏览器中打开 OpenAI 登录
+                  </a>
+                )}
+              </div>
+            )}
+
+            <div className="account-import-divider"><span>或者手动粘贴</span></div>
+            <form
+              className="account-import-manual"
+              onSubmit={event => {
+                event.preventDefault()
+                void importAuthJson(authJsonRef.current?.value || '')
+              }}
+            >
+              <label>auth.json 内容
+                <textarea
+                  ref={authJsonRef}
+                  rows={7}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="粘贴 Codex CLI 生成的完整 auth.json"
+                />
+              </label>
+              <div>
+                <small>凭据只提交给 Gateway，不写入 localStorage，也不会在页面中回显。</small>
+                <button type="submit" disabled={busy}>
+                  {busy ? '正在导入…' : '导入账号'}
+                </button>
+              </div>
+            </form>
+            {accountDialogError && (
+              <p className="warning" role="alert">{accountDialogError}</p>
+            )}
+          </section>
+        </div>
+      )}
 
       <section className="content-card model-route-panel" aria-labelledby="routes-title">
         <div className="panel-heading">

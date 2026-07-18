@@ -38,6 +38,14 @@ const DEFAULTS = {
   chatgptResponsesUrl: 'https://chatgpt.com/backend-api/codex/responses'
 }
 
+const DEFAULT_CHATGPT_PROVIDER_NAME = 'ChatGPT 订阅池'
+const DEFAULT_CHATGPT_MODELS = [
+  'gpt-5.6-sol',
+  'gpt-5.5',
+  'gpt-5.4',
+  'gpt-5.4-mini'
+] as const
+
 const ACCOUNT_ROUTING_STRATEGIES: readonly AccountRoutingStrategy[] = [
 	'priority',
 	'round-robin',
@@ -60,6 +68,70 @@ function requiredText(value: unknown, name: string, max = 240): string {
     })
   }
   return result
+}
+
+function optionalText(value: unknown, max: number): string | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'string' || value.trim().length > max) {
+    throw new SafeError({
+      code: 'invalid_request',
+      message: '请求字段无效。',
+      statusCode: 400
+    })
+  }
+  return value.trim() || undefined
+}
+
+interface ParsedChatgptAuthJson {
+  readonly serialized: string
+  readonly accountId: string
+}
+
+function parseChatgptAuthJson(value: unknown): ParsedChatgptAuthJson {
+  const raw = requiredText(value, 'auth.json', 256 * 1024)
+  let parsed: Record<string, unknown>
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>
+  } catch {
+    throw new SafeError({
+      code: 'invalid_chatgpt_auth_json',
+      message: 'auth.json 不是有效的 JSON。',
+      statusCode: 400
+    })
+  }
+  const tokens = asObject(parsed['tokens'])
+  const accessToken = optionalText(tokens['access_token'], 64 * 1024)
+  const refreshToken = optionalText(tokens['refresh_token'], 64 * 1024)
+  const accountId = optionalText(tokens['account_id'], 512)
+  if (!accessToken || !refreshToken || !accountId) {
+    throw new SafeError({
+      code: 'invalid_chatgpt_auth_json',
+      message: 'auth.json 缺少 access_token、refresh_token 或 account_id。',
+      statusCode: 400
+    })
+  }
+  return {
+    serialized: JSON.stringify(parsed),
+    accountId
+  }
+}
+
+function chatgptCredentialAccountId(
+  credential: ProviderCredentialRecord
+): string | undefined {
+  try {
+    const parsed = JSON.parse(credential.secretPayload) as Record<string, unknown>
+    const tokens = asObject(parsed['tokens'])
+    const value = tokens['account_id']
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function accountIdPreview(accountId: string): string {
+  if (accountId.length <= 12) return accountId
+  return `${accountId.slice(0, 8)}…${accountId.slice(-4)}`
 }
 
 function providerKind(value: unknown): ProviderKind {
@@ -414,6 +486,8 @@ function parseChatgptCredential(
 }
 
 export class ProviderService {
+  private activeChatgptLoginProviderId: string | undefined
+
   constructor(
     private readonly repository: ProviderRepository,
     private readonly adapter: ProviderRouteAdapter,
@@ -593,6 +667,152 @@ export class ProviderService {
     await this.applyRuntimeConfiguration()
     return {
       ...safeCredential(credential),
+      warning: PLAINTEXT_STORAGE_WARNING
+    }
+  }
+
+  async importChatgptAccount(
+    identity: AccessIdentity,
+    body: Record<string, unknown>
+  ) {
+    await this.requireLevel1(identity, 'provider.chatgpt_account.import', null)
+    requireDevelopmentPlaintext(this.config)
+    const auth = parseChatgptAuthJson(body['authJson'] ?? body['auth_json'])
+    const label = optionalText(body['label'], 80)
+    if (body['routingEnabled'] !== undefined && typeof body['routingEnabled'] !== 'boolean') {
+      throw new SafeError({
+        code: 'invalid_request',
+        message: 'routingEnabled 必须是布尔值。',
+        statusCode: 400
+      })
+    }
+    const requestedRoutingEnabled = body['routingEnabled'] === true
+    const now = this.clock.now().toISOString()
+    let result: {
+      providerId: string
+      credentialId: string
+      created: boolean
+      routingEnabled: boolean
+    } | undefined
+
+    await this.repository.inTransaction(async repository => {
+      const providers = await repository.listProviders()
+      const providerById = new Map(providers.map(provider => [provider.id, provider]))
+      const credentials = await repository.listCredentials()
+      const duplicate = credentials.find(credential =>
+        providerById.get(credential.providerId)?.kind === 'chatgpt' &&
+        chatgptCredentialAccountId(credential) === auth.accountId
+      )
+
+      let provider = duplicate
+        ? providerById.get(duplicate.providerId)
+        : providers.find(item => item.kind === 'chatgpt' && item.status === 'active') ||
+          providers.find(item => item.kind === 'chatgpt')
+      let providerCreated = false
+      if (!provider) {
+        providerCreated = true
+        provider = {
+          id: this.ids.opaque('provider'),
+          kind: 'chatgpt',
+          displayName: DEFAULT_CHATGPT_PROVIDER_NAME,
+          status: 'active',
+          config: sanitizeConfig('chatgpt', { models: DEFAULT_CHATGPT_MODELS }),
+          createdAt: now,
+          updatedAt: now,
+          version: 1
+        }
+        await repository.insertProvider(provider)
+        for (const [index, model] of DEFAULT_CHATGPT_MODELS.entries()) {
+          await repository.upsertModelRoute({
+            id: this.ids.opaque('route'),
+            publicModelId: model,
+            providerId: provider.id,
+            upstreamModelId: model,
+            priority: index + 1,
+            enabled: true,
+            policy: {},
+            createdAt: now,
+            updatedAt: now,
+            version: 1
+          })
+        }
+      }
+
+      const credentialId = duplicate?.id || this.ids.opaque('cred')
+      if (duplicate) {
+        if (!await repository.updateCredential(provider.id, credentialId, {
+          storageKind: 'plaintext-v1',
+          secretPayload: auth.serialized,
+          updatedAt: now
+        })) {
+          throw this.notFound()
+        }
+      } else {
+        await repository.insertCredential({
+          id: credentialId,
+          providerId: provider.id,
+          storageKind: 'plaintext-v1',
+          secretPayload: auth.serialized,
+          createdAt: now,
+          updatedAt: now
+        })
+      }
+
+      const settings = credentialSettingsMap(provider.config)
+      const current = settings[credentialId] || {}
+      const routingEnabled = body['routingEnabled'] === undefined
+        ? duplicate
+          ? current['routingEnabled'] !== false
+          : false
+        : requestedRoutingEnabled
+      settings[credentialId] = {
+        ...(current as Record<string, unknown>),
+        ...(label ? { label } : {}),
+        routingEnabled,
+        routingWeight: Math.max(1, Math.min(100, Number(current['routingWeight']) || 1)),
+        lowQuotaThreshold: Math.max(
+          0,
+          Math.min(100, Number.isFinite(Number(current['lowQuotaThreshold']))
+            ? Number(current['lowQuotaThreshold'])
+            : 10)
+        ),
+        dailyRequestLimit: Math.max(0, Math.floor(Number(current['dailyRequestLimit']) || 0)),
+        dailyTokenLimit: Math.max(0, Math.floor(Number(current['dailyTokenLimit']) || 0)),
+        reservedModels: safeStringList(current['reservedModels'])
+      }
+      await repository.updateProvider(provider.id, {
+        config: sanitizeConfig('chatgpt', {
+          ...provider.config,
+          credentialSettings: settings
+        }),
+        updatedAt: now
+      })
+      await this.audit(
+        repository,
+        identity,
+        'provider.chatgpt_account.import',
+        'provider_credential',
+        credentialId,
+        'allowed',
+        {
+          created: !duplicate,
+          providerCreated,
+          routingEnabled
+        }
+      )
+      result = {
+        providerId: provider.id,
+        credentialId,
+        created: !duplicate,
+        routingEnabled
+      }
+    })
+
+    await this.applyRuntimeConfiguration()
+    if (!result) throw new Error('ChatGPT account import transaction produced no result')
+    return {
+      ...result,
+      accountIdPreview: accountIdPreview(auth.accountId),
       warning: PLAINTEXT_STORAGE_WARNING
     }
   }
@@ -881,10 +1101,106 @@ export class ProviderService {
     return result
   }
 
+  async startDefaultChatgptLogin(
+    identity: AccessIdentity,
+    body: Record<string, unknown>
+  ) {
+    await this.requireLevel1(identity, 'provider.chatgpt_account.login.start', null)
+    requireDevelopmentPlaintext(this.config)
+    const label = optionalText(body['label'], 80)
+    if (body['routingEnabled'] !== undefined && typeof body['routingEnabled'] !== 'boolean') {
+      throw new SafeError({
+        code: 'invalid_request',
+        message: 'routingEnabled 必须是布尔值。',
+        statusCode: 400
+      })
+    }
+    const provider = await this.ensureDefaultChatgptProvider(identity)
+    this.activeChatgptLoginProviderId = provider.id
+    const result = await this.chatgptLogin.start(provider.id, async authJson => {
+      await this.importChatgptAccount(identity, {
+        authJson,
+        ...(label ? { label } : {}),
+        routingEnabled: body['routingEnabled'] === true
+      })
+    })
+    await this.recordAllowed(
+      identity,
+      'provider.chatgpt_account.login.start',
+      'provider',
+      provider.id
+    )
+    return { ...result, providerId: provider.id }
+  }
+
+  async defaultChatgptLoginStatus(identity: AccessIdentity) {
+    await this.requireLevel1(identity, 'provider.chatgpt_account.login.status', null)
+    const providerId = this.activeChatgptLoginProviderId ||
+      (await this.repository.listProviders()).find(item => item.kind === 'chatgpt')?.id
+    if (!providerId) {
+      return { status: 'idle' as const }
+    }
+    return {
+      ...await this.chatgptLogin.status(providerId),
+      providerId
+    }
+  }
+
   async chatgptLoginStatus(identity: AccessIdentity, providerId: string) {
     await this.requireLevel1(identity, 'provider.chatgpt_login.status', providerId)
     await this.requireChatgptProvider(providerId)
     return this.chatgptLogin.status(providerId)
+  }
+
+  private async ensureDefaultChatgptProvider(identity: AccessIdentity): Promise<ProviderRecord> {
+    const providers = await this.repository.listProviders()
+    const existing = providers.find(item => item.kind === 'chatgpt' && item.status === 'active') ||
+      providers.find(item => item.kind === 'chatgpt')
+    if (existing) return existing
+
+    const now = this.clock.now().toISOString()
+    const provider = await this.repository.inTransaction(async repository => {
+      const concurrent = (await repository.listProviders())
+        .find(item => item.kind === 'chatgpt')
+      if (concurrent) return concurrent
+      const created: ProviderRecord = {
+        id: this.ids.opaque('provider'),
+        kind: 'chatgpt',
+        displayName: DEFAULT_CHATGPT_PROVIDER_NAME,
+        status: 'active',
+        config: sanitizeConfig('chatgpt', { models: DEFAULT_CHATGPT_MODELS }),
+        createdAt: now,
+        updatedAt: now,
+        version: 1
+      }
+      await repository.insertProvider(created)
+      for (const [index, model] of DEFAULT_CHATGPT_MODELS.entries()) {
+        await repository.upsertModelRoute({
+          id: this.ids.opaque('route'),
+          publicModelId: model,
+          providerId: created.id,
+          upstreamModelId: model,
+          priority: index + 1,
+          enabled: true,
+          policy: {},
+          createdAt: now,
+          updatedAt: now,
+          version: 1
+        })
+      }
+      await this.audit(
+        repository,
+        identity,
+        'provider.create',
+        'provider',
+        created.id,
+        'allowed',
+        { automatic: true, source: 'chatgpt_account_login' }
+      )
+      return created
+    })
+    await this.applyRuntimeConfiguration()
+    return provider
   }
 
   private async applyRuntimeConfiguration(): Promise<void> {
@@ -979,7 +1295,8 @@ export class ProviderService {
     action: string,
     targetType: string,
     targetId: string | null,
-    outcome: 'allowed' | 'denied' | 'failed'
+    outcome: 'allowed' | 'denied' | 'failed',
+    safeMetadata?: Record<string, unknown>
   ): Promise<void> {
     await repository.insertAuditEvent({
       id: this.ids.opaque('audit'),
@@ -989,6 +1306,7 @@ export class ProviderService {
       targetType,
       targetId,
       outcome,
+      ...(safeMetadata ? { safeMetadata } : {}),
       createdAt: this.clock.now().toISOString()
     })
   }

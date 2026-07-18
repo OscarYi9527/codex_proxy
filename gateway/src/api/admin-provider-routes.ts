@@ -14,6 +14,10 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>
 }
 
+function asOptionalRecord(value: unknown): Record<string, unknown> {
+  return value === undefined || value === null ? {} : asRecord(value)
+}
+
 function param(request: FastifyRequest, name: string): string {
   const value = (request.params as Record<string, unknown>)[name]
   if (typeof value !== 'string' || !value) {
@@ -76,6 +80,27 @@ export function registerAdminProviderRoutes(app: FastifyInstance, options: {
     param(request, 'providerId'),
     asRecord(request.body)
   ))
+
+  app.post('/api/v1/admin/chatgpt-accounts/import', {
+    preHandler: options.authenticate
+  }, request => options.service.importChatgptAccount(
+    identity(request),
+    asRecord(request.body)
+  ))
+
+  app.post('/api/v1/admin/chatgpt-accounts/login/start', {
+    preHandler: options.authenticate
+  }, async (request, reply) => {
+    const result = await options.service.startDefaultChatgptLogin(
+      identity(request),
+      asOptionalRecord(request.body)
+    )
+    await reply.status(202).send(result)
+  })
+
+  app.get('/api/v1/admin/chatgpt-accounts/login/status', {
+    preHandler: options.authenticate
+  }, request => options.service.defaultChatgptLoginStatus(identity(request)))
 
 	app.delete('/api/v1/admin/providers/:providerId/credentials/:credentialId', {
     preHandler: options.authenticate

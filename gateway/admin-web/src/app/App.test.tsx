@@ -273,6 +273,22 @@ function clientFor(role: AccountRole): ManagementApiClient {
     })),
     deleteProvider: jest.fn(async () => undefined),
     addProviderCredential: jest.fn(async () => undefined),
+    importChatgptAccount: jest.fn(async () => ({
+      providerId: 'provider_chatgpt',
+      credentialId: 'credential_chatgpt',
+      accountIdPreview: 'account…test',
+      created: true,
+      routingEnabled: false,
+      warning: 'plaintext-v1 is for loopback development only'
+    })),
+    startChatgptAccountLogin: jest.fn(async () => ({
+      providerId: 'provider_chatgpt',
+      status: 'waiting' as const
+    })),
+    chatgptAccountLoginStatus: jest.fn(async () => ({
+      providerId: 'provider_chatgpt',
+      status: 'waiting' as const
+    })),
     deleteProviderCredential: jest.fn(async () => undefined),
     updateProviderCredentialRouting: jest.fn(async () => undefined),
     refreshProviderCredentialUsage: jest.fn(async () => undefined),

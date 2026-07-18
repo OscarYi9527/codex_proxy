@@ -174,6 +174,28 @@ export class ProviderRepository {
     }).execute()
   }
 
+  async updateCredential(
+    providerId: string,
+    credentialId: string,
+    options: {
+      storageKind: ProviderCredentialRecord['storageKind']
+      secretPayload: string
+      updatedAt: string
+    }
+  ): Promise<boolean> {
+    const result = await this.db
+      .updateTable('provider_credentials')
+      .set({
+        storage_kind: options.storageKind,
+        secret_payload: options.secretPayload,
+        updated_at: options.updatedAt
+      })
+      .where('id', '=', credentialId)
+      .where('provider_id', '=', providerId)
+      .executeTakeFirst()
+    return Number(result.numUpdatedRows) === 1
+  }
+
   async deleteCredential(providerId: string, credentialId: string): Promise<boolean> {
     const result = await this.db
       .deleteFrom('provider_credentials')

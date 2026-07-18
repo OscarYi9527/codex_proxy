@@ -464,6 +464,169 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
     expect(runtime.chatgptAccounts).toHaveLength(1)
   })
 
+  it('imports a ChatGPT account through one shortcut, creates the default pool and updates duplicates', async () => {
+    const first = await fixture.gateway.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/chatgpt-accounts/import',
+      headers: headers(),
+      payload: {
+        authJson: JSON.stringify({
+          tokens: {
+            access_token: 'shortcut-access-secret-one',
+            refresh_token: 'shortcut-refresh-secret-one',
+            account_id: 'shortcut-account-id'
+          }
+        }),
+        label: '主订阅账号',
+        routingEnabled: false
+      }
+    })
+    expect(first.statusCode).toBe(200)
+    expect(first.body).not.toContain('shortcut-access-secret-one')
+    expect(first.body).not.toContain('shortcut-refresh-secret-one')
+    expect(first.json()).toMatchObject({
+      created: true,
+      routingEnabled: false,
+      accountIdPreview: 'shortcut…t-id'
+    })
+
+    const providerId = first.json().providerId as string
+    const credentialId = first.json().credentialId as string
+    const listed = await fixture.gateway.app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/providers',
+      headers: headers()
+    })
+    expect(listed.json().providers).toHaveLength(1)
+    expect(listed.json().providers[0]).toMatchObject({
+      id: providerId,
+      kind: 'chatgpt',
+      displayName: 'ChatGPT 订阅池',
+      config: {
+        models: ['gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini']
+      }
+    })
+    expect(listed.json().providers[0].credentials[0]).toMatchObject({
+      id: credentialId,
+      label: '主订阅账号',
+      routing: { enabled: false }
+    })
+    expect(runtime.chatgptAccounts).toEqual([
+      expect.objectContaining({
+        id: credentialId,
+        account_id: 'shortcut-account-id',
+        routing_enabled: false
+      })
+    ])
+
+    const second = await fixture.gateway.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/chatgpt-accounts/import',
+      headers: headers(),
+      payload: {
+        authJson: JSON.stringify({
+          tokens: {
+            access_token: 'shortcut-access-secret-two',
+            refresh_token: 'shortcut-refresh-secret-two',
+            account_id: 'shortcut-account-id'
+          }
+        }),
+        label: '更新后的账号',
+        routingEnabled: true
+      }
+    })
+    expect(second.statusCode).toBe(200)
+    expect(second.body).not.toContain('shortcut-access-secret-two')
+    expect(second.body).not.toContain('shortcut-refresh-secret-two')
+    expect(second.json()).toMatchObject({
+      providerId,
+      credentialId,
+      created: false,
+      routingEnabled: true
+    })
+    expect(runtime.chatgptAccounts).toEqual([
+      expect.objectContaining({
+        id: credentialId,
+        label: '更新后的账号',
+        access_token: 'shortcut-access-secret-two',
+        refresh_token: 'shortcut-refresh-secret-two',
+        routing_enabled: true
+      })
+    ])
+    const stored = await fixture.database.db
+      .selectFrom('provider_credentials')
+      .selectAll()
+      .execute()
+    expect(stored).toHaveLength(1)
+    expect(stored[0].secret_payload).toContain('shortcut-access-secret-two')
+    expect(stored[0].secret_payload).not.toContain('shortcut-access-secret-one')
+  })
+
+  it('starts the shortcut official login without a pre-created Provider', async () => {
+    const started = await fixture.gateway.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/chatgpt-accounts/login/start',
+      headers: headers(),
+      payload: {
+        label: '官方登录账号',
+        routingEnabled: false
+      }
+    })
+    expect(started.statusCode).toBe(202)
+    expect(started.json()).toMatchObject({
+      providerId: loginProviderId,
+      status: 'waiting',
+      verificationUrl: 'https://auth.openai.com/authorize'
+    })
+
+    const status = await fixture.gateway.app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/chatgpt-accounts/login/status',
+      headers: headers()
+    })
+    expect(status.statusCode).toBe(200)
+    expect(status.json()).toMatchObject({
+      providerId: loginProviderId,
+      status: 'waiting'
+    })
+
+    await importChatgptCredential?.(JSON.stringify({
+      tokens: {
+        access_token: 'official-shortcut-access',
+        refresh_token: 'official-shortcut-refresh',
+        account_id: 'official-shortcut-account'
+      }
+    }))
+    expect(runtime.chatgptAccounts).toEqual([
+      expect.objectContaining({
+        label: '官方登录账号',
+        account_id: 'official-shortcut-account',
+        routing_enabled: false
+      })
+    ])
+  })
+
+  it('rejects malformed shortcut auth.json without creating a Provider', async () => {
+    const invalid = await fixture.gateway.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/chatgpt-accounts/import',
+      headers: headers(),
+      payload: {
+        authJson: JSON.stringify({
+          tokens: {
+            access_token: 'access-only'
+          }
+        })
+      }
+    })
+    expect(invalid.statusCode).toBe(400)
+    expect(invalid.json().error.code).toBe('invalid_chatgpt_auth_json')
+    expect(await fixture.database.db
+      .selectFrom('providers')
+      .selectAll()
+      .execute()).toHaveLength(0)
+  })
+
   it('denies Provider APIs after the account loses Level-1 and writes a denied audit event', async () => {
     await fixture.database.db
       .updateTable('accounts')
@@ -491,11 +654,21 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
 				url: '/api/v1/admin/providers/provider_forbidden/account-routing-strategy',
 				payload: { strategy: 'weighted' }
 			},
-			{
-				method: 'PUT' as const,
-				url: '/api/v1/admin/providers/provider_forbidden/internal-budget',
-				payload: { internalBudgetCredits: '100' }
-			}
+      {
+        method: 'PUT' as const,
+        url: '/api/v1/admin/providers/provider_forbidden/internal-budget',
+        payload: { internalBudgetCredits: '100' }
+      },
+      {
+        method: 'POST' as const,
+        url: '/api/v1/admin/chatgpt-accounts/import',
+        payload: { authJson: '{}' }
+      },
+      {
+        method: 'POST' as const,
+        url: '/api/v1/admin/chatgpt-accounts/login/start',
+        payload: {}
+      }
 		]) {
 			const mutation = await fixture.gateway.app.inject({
 				...request,
@@ -512,10 +685,12 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
 		expect(audits.map(audit => audit.action)).toEqual(expect.arrayContaining([
 			'provider.list',
 			'provider.credential.routing.update',
-			'provider.credential.usage.refresh',
-			'provider.account_strategy.update',
-			'provider.internal_budget.update'
-		]))
+      'provider.credential.usage.refresh',
+      'provider.account_strategy.update',
+      'provider.internal_budget.update',
+      'provider.chatgpt_account.import',
+      'provider.chatgpt_account.login.start'
+    ]))
 		expect(audits.every(audit => audit.safe_metadata_json === '{}')).toBe(true)
 	})
 

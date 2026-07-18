@@ -19,6 +19,13 @@ export interface ManagementBootstrapMessage {
   readonly expiresIn: number
 }
 
+export interface CurrentCodexAuthMessage {
+  readonly type: 'ai-editor-current-codex-auth'
+  readonly version: 1
+  readonly authJson?: string
+  readonly errorId?: string
+}
+
 export interface ManagementSession {
   readonly expiresIn: number
   readonly account: {
@@ -305,6 +312,19 @@ export interface ChatgptLoginStatus {
   readonly verificationUrl?: string | null
   readonly codexSource?: string | null
   readonly codexVersion?: string | null
+}
+
+export interface ChatgptAccountLoginStatus extends ChatgptLoginStatus {
+  readonly providerId?: string
+}
+
+export interface ChatgptAccountImportResult {
+  readonly providerId: string
+  readonly credentialId: string
+  readonly accountIdPreview: string
+  readonly created: boolean
+  readonly routingEnabled: boolean
+  readonly warning: string
 }
 
 export type ProviderDiagnostics = Readonly<Record<string, unknown>>

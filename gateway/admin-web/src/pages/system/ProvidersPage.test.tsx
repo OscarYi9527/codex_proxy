@@ -1,5 +1,5 @@
 import { jest } from '@jest/globals'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ManagementApiClient } from '../../app/api-client'
 import { ProvidersPage } from './ProvidersPage'
 
@@ -38,6 +38,25 @@ function client(): ManagementApiClient {
     deleteProvider: async () => undefined,
     addProviderCredential:
       jest.fn<ManagementApiClient['addProviderCredential']>(async () => undefined),
+    importChatgptAccount:
+      jest.fn<ManagementApiClient['importChatgptAccount']>(async input => ({
+        providerId: 'provider_chatgpt',
+        credentialId: 'credential_chatgpt',
+        accountIdPreview: 'account…test',
+        created: true,
+        routingEnabled: input.routingEnabled,
+        warning: 'plaintext-v1 仅允许用于回环开发环境'
+      })),
+    startChatgptAccountLogin:
+      jest.fn<ManagementApiClient['startChatgptAccountLogin']>(async () => ({
+        providerId: 'provider_chatgpt',
+        status: 'waiting'
+      })),
+    chatgptAccountLoginStatus:
+      jest.fn<ManagementApiClient['chatgptAccountLoginStatus']>(async () => ({
+        providerId: 'provider_chatgpt',
+        status: 'waiting'
+      })),
     deleteProviderCredential: async () => undefined,
     updateProviderCredentialRouting:
       jest.fn<ManagementApiClient['updateProviderCredentialRouting']>(async () => undefined),
@@ -171,11 +190,12 @@ describe('Level-1 Provider administration page (T083/T088)', () => {
     })
   })
 
-  it('starts official login only from a ChatGPT Provider and renders the safe URL', async () => {
+  it('starts official login from the unified shortcut without a pre-created ChatGPT Provider', async () => {
     const api = client()
-    api.startChatgptLogin = jest.fn<
-      ManagementApiClient['startChatgptLogin']
+    api.startChatgptAccountLogin = jest.fn<
+      ManagementApiClient['startChatgptAccountLogin']
     >(async () => ({
+      providerId: 'provider_chatgpt',
       id: 'oauth_test',
       status: 'waiting',
       message: '请完成 OpenAI 官方登录',
@@ -198,11 +218,117 @@ describe('Level-1 Provider administration page (T083/T088)', () => {
       />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: '添加 ChatGPT 官方账号' }))
+    fireEvent.click(screen.getByRole('button', { name: '添加订阅账号' }))
+    fireEvent.click(screen.getByRole('button', { name: /OpenAI 官方登录/ }))
     expect(await screen.findByText('请完成 OpenAI 官方登录')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: '在浏览器中打开 OpenAI 登录' }))
+    expect(screen.getByRole('link', { name: '在系统浏览器中打开 OpenAI 登录' }))
       .toHaveAttribute('href', 'https://auth.openai.com/authorize')
-    expect(api.startChatgptLogin).toHaveBeenCalledWith('provider_test')
+    expect(api.startChatgptAccountLogin).toHaveBeenCalledWith({
+      label: '',
+      routingEnabled: false
+    })
+  })
+
+  it('imports pasted auth.json, applies the chosen routing state and clears the secret', async () => {
+    const api = client()
+    const refresh = jest.fn(async () => undefined)
+    render(
+      <ProvidersPage
+        client={api}
+        providers={providers}
+        models={models}
+        onRefresh={refresh}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: '添加订阅账号' }))
+    fireEvent.change(screen.getByLabelText('账号名称'), {
+      target: { value: '主订阅账号' }
+    })
+    fireEvent.click(screen.getByLabelText('导入后立即参与自动路由'))
+    const authJson = JSON.stringify({
+      tokens: {
+        access_token: 'pasted-access-secret',
+        refresh_token: 'pasted-refresh-secret',
+        account_id: 'pasted-account-id'
+      }
+    })
+    fireEvent.change(screen.getByLabelText('auth.json 内容'), {
+      target: { value: authJson }
+    })
+    fireEvent.click(screen.getByRole('button', { name: '导入账号' }))
+
+    await waitFor(() => {
+      expect(api.importChatgptAccount).toHaveBeenCalledWith({
+        authJson,
+        label: '主订阅账号',
+        routingEnabled: true
+      })
+    })
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(document.body.textContent).not.toContain('pasted-access-secret')
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+  })
+
+  it('requests the native Code bridge and imports only a trusted same-origin response', async () => {
+    const api = client()
+    const click = jest.spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => undefined)
+    render(
+      <ProvidersPage
+        client={api}
+        providers={providers}
+        models={models}
+        onRefresh={async () => undefined}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: '添加订阅账号' }))
+    fireEvent.click(screen.getByRole('button', { name: /一键导入当前 Codex 账号/ }))
+    expect(click).toHaveBeenCalledTimes(1)
+    expect((click.mock.contexts[0] as HTMLAnchorElement).href)
+      .toBe('ai-editor-code://import-current-codex-account')
+
+    const authJson = JSON.stringify({
+      tokens: {
+        access_token: 'native-access-secret',
+        refresh_token: 'native-refresh-secret',
+        account_id: 'native-account-id'
+      }
+    })
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent('message', {
+        source: window,
+        origin: 'https://untrusted.example',
+        data: {
+          type: 'ai-editor-current-codex-auth',
+          version: 1,
+          authJson
+        }
+      }))
+    })
+    expect(api.importChatgptAccount).not.toHaveBeenCalled()
+
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent('message', {
+        source: window,
+        origin: window.location.origin,
+        data: {
+          type: 'ai-editor-current-codex-auth',
+          version: 1,
+          authJson
+        }
+      }))
+    })
+    await waitFor(() => {
+      expect(api.importChatgptAccount).toHaveBeenCalledWith({
+        authJson,
+        label: '',
+        routingEnabled: false
+      })
+    })
+    expect(document.body.textContent).not.toContain('native-access-secret')
+    click.mockRestore()
   })
 
   it('renders real quota/health and persists the existing Proxy account policy', async () => {

@@ -120,20 +120,22 @@ export function SecurityPage({
           <button type="submit" disabled={busy}>保存新密码</button>
         </form>
         {notice && (
-          <section
-            className={`security-notice ${notice.kind}`}
-            role={notice.requiresRestart ? 'alertdialog' : 'alert'}
-            aria-modal={notice.requiresRestart ? 'true' : undefined}
-            aria-labelledby="security-notice-title"
-          >
-            <div>
-              <h3 id="security-notice-title">{notice.title}</h3>
-              <p>{notice.message}</p>
-            </div>
-            <button type="button" autoFocus onClick={() => setNotice(null)}>
-              {notice.requiresRestart ? '我知道了' : '关闭提示'}
-            </button>
-          </section>
+          <div className="security-notice-overlay">
+            <section
+              className={`security-notice ${notice.kind}`}
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="security-notice-title"
+            >
+              <div>
+                <h3 id="security-notice-title">{notice.title}</h3>
+                <p>{notice.message}</p>
+              </div>
+              <button type="button" autoFocus onClick={() => setNotice(null)}>
+                {notice.requiresRestart ? '我知道了' : '关闭提示'}
+              </button>
+            </section>
+          </div>
         )}
       </section>
       <section aria-labelledby="devices-title" className="content-card">

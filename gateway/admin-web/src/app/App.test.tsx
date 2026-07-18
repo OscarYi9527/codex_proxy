@@ -265,7 +265,7 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: '保存新密码' }))
 
-    expect(await screen.findByRole('alert', { name: '密码修改失败' }))
+    expect(await screen.findByRole('alertdialog', { name: '密码修改失败' }))
       .toHaveTextContent('密码未被修改')
   })
 

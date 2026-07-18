@@ -253,13 +253,23 @@ dd {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-top: 18px;
+  width: min(540px, calc(100vw - 40px));
   padding: 16px;
   border: 1px solid #b8c5d8;
   border-radius: 10px;
   color: #1c3658;
   background: #f4f8ff;
-  box-shadow: 0 10px 24px #1f34531a;
+  box-shadow: 0 18px 48px #1f34534d;
+}
+
+.security-notice-overlay {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: #10233c66;
 }
 
 .security-notice h3,

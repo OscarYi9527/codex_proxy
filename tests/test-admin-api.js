@@ -1,3 +1,4 @@
+import './helpers/test-storage-root.js'
 import { describe, it } from 'node:test'
 import assert from 'node:assert'
 import { EventEmitter } from 'node:events'

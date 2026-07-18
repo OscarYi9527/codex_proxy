@@ -54,6 +54,10 @@ function responsesInputToMessages(input) {
   return messages
 }
 
+function usesMaxCompletionTokens(model) {
+  return /^(?:gpt-5|o[134])(?:$|[-_.])/i.test(String(model || ''))
+}
+
 export function responsesToChatCompletions(body, upstreamModel) {
   const messages = []
   const instructions = asText(body.instructions)
@@ -66,8 +70,13 @@ export function responsesToChatCompletions(body, upstreamModel) {
   const request = {
     model: upstreamModel,
     messages,
-    max_tokens: body.max_output_tokens || 4096,
     stream: body.stream === true
+  }
+  const maxOutputTokens = body.max_output_tokens || 4096
+  if (usesMaxCompletionTokens(upstreamModel)) {
+    request.max_completion_tokens = maxOutputTokens
+  } else {
+    request.max_tokens = maxOutputTokens
   }
   if (body.temperature != null) request.temperature = body.temperature
   if (body.top_p != null) request.top_p = body.top_p

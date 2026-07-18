@@ -141,14 +141,33 @@ export async function loginBootstrapAndExchange(
   deviceSessionId: string
   accessTokenExpiresIn: number
 }> {
+  return loginAndExchange(fixture, {
+    identifier: fixture.bootstrap.loginName,
+    password: fixture.bootstrap.password
+  })
+}
+
+export async function loginAndExchange(
+  fixture: RealGatewayFixture,
+  options: {
+    identifier: string
+    password: string
+    device?: { name: string; platform: 'windows' | 'macos' | 'other' }
+  }
+): Promise<{
+  accessToken: string
+  refreshToken: string
+  deviceSessionId: string
+  accessTokenExpiresIn: number
+}> {
   const authorization = await beginAuthorization(fixture)
   const login = await fixture.gateway.app.inject({
     method: 'POST',
     url: '/api/v1/oauth/authorize/login',
     payload: {
       authorizationTransactionId: authorization.transactionId,
-      identifier: fixture.bootstrap.loginName,
-      password: fixture.bootstrap.password
+      identifier: options.identifier,
+      password: options.password
     }
   })
   if (login.statusCode !== 303) throw new Error(login.body)
@@ -165,7 +184,7 @@ export async function loginBootstrapAndExchange(
       code,
       codeVerifier: verifier,
       redirectUri: authorization.redirectUri,
-      device: { name: 'Test Windows PC', platform: 'windows' }
+      device: options.device || { name: 'Test Windows PC', platform: 'windows' }
     }
   })
   if (exchange.statusCode !== 200) throw new Error(exchange.body)

@@ -29,6 +29,7 @@ import { TokenService } from './auth/token-service.js'
 import { AccountService } from './auth/account-service.js'
 import { BootstrapService } from './auth/bootstrap-service.js'
 import { registerAuthRoutes } from './api/auth-routes.js'
+import { registerAccountSecurityRoutes } from './api/account-security-routes.js'
 import { loadGatewaySecrets, type GatewaySecrets } from './security/gateway-secrets.js'
 import {
   StandaloneRouteAdapter,
@@ -242,6 +243,10 @@ export async function createGatewayApp(options: {
       accountAuthenticator: authenticateAccount,
       currentModel: () => models.currentModel(),
       issueWebviewTicket: (identity, body) => webviews.issueTicket(identity, body)
+    })
+    registerAccountSecurityRoutes(app, {
+      authenticate: authenticateAccount,
+      accounts
     })
     registerWebviewRoutes(app, webviews)
     registerAccountUsageRoutes(app, {

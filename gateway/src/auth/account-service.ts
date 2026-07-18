@@ -5,6 +5,8 @@ import { PasswordService } from './password-service.js'
 import { TokenService } from './token-service.js'
 import type { AccessIdentity, IssuedTokenSet, ProductAccount } from './types.js'
 
+const TEMPORARY_PASSWORD_TTL_MS = 24 * 60 * 60 * 1000
+
 function validateEmail(value: string | undefined): string | null {
   if (value === undefined) return null
   const email = value.trim().toLowerCase()
@@ -170,6 +172,42 @@ export class AccountService {
         'logout'
       )
     )
+  }
+
+  async issueTemporaryPassword(
+    identity: AccessIdentity,
+    accountId: string
+  ): Promise<{
+    temporaryPassword: string
+    mustChangePassword: true
+    expiresAt: string
+  }> {
+    if (identity.role !== 'level1') {
+      throw new SafeError({
+        code: 'admin_forbidden',
+        message: 'Only Level 1 administrators can reset passwords.',
+        statusCode: 403
+      })
+    }
+    await this.requireAccount(accountId)
+    const temporaryPassword = this.passwords.generateTemporaryPassword()
+    const passwordHash = await this.passwords.hash(temporaryPassword)
+    const now = this.clock.now().toISOString()
+    const expiresAt = new Date(this.clock.nowMs() + TEMPORARY_PASSWORD_TTL_MS).toISOString()
+    await this.repository.inTransaction(async repository => {
+      await repository.replacePasswordWithTemporaryCredential({
+        accountId,
+        passwordHash,
+        expiresAt,
+        now
+      })
+      await repository.revokeAllDeviceSessions(accountId, now, 'temporary_password_issued')
+    })
+    return {
+      temporaryPassword,
+      mustChangePassword: true,
+      expiresAt
+    }
   }
 
   async devices(identity: AccessIdentity): Promise<Array<{

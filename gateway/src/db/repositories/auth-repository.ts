@@ -261,6 +261,39 @@ export class AuthRepository {
     return nextVersion
   }
 
+  async replacePasswordWithTemporaryCredential(options: {
+    accountId: string
+    passwordHash: string
+    expiresAt: string
+    now: string
+  }): Promise<number> {
+    const credential = await this.getPasswordCredential(options.accountId)
+    if (!credential) throw new Error('Password credential is missing')
+    const nextVersion = credential.passwordVersion + 1
+    await this.db
+      .updateTable('password_credentials')
+      .set({
+        password_hash: options.passwordHash,
+        kind: 'temporary',
+        created_at: options.now,
+        used_at: null,
+        expires_at: options.expiresAt,
+        password_version: nextVersion
+      })
+      .where('account_id', '=', options.accountId)
+      .execute()
+    await this.db
+      .updateTable('accounts')
+      .set(expression => ({
+        must_change_password: 1,
+        updated_at: options.now,
+        version: expression('version', '+', 1)
+      }))
+      .where('id', '=', options.accountId)
+      .execute()
+    return nextVersion
+  }
+
   async insertAuthorizationCode(record: AuthorizationCodeRecord): Promise<void> {
     await this.db.insertInto('authorization_codes').values({
       code_digest: record.codeDigest,
@@ -528,6 +561,18 @@ export class AuthRepository {
       .execute()
     for (const session of sessions) {
       await this.revokeDeviceSession(session.id, now, 'password_changed')
+    }
+  }
+
+  async revokeAllDeviceSessions(accountId: string, now: string, reason: string): Promise<void> {
+    const sessions = await this.db
+      .selectFrom('device_sessions')
+      .select('id')
+      .where('account_id', '=', accountId)
+      .where('revoked_at', 'is', null)
+      .execute()
+    for (const session of sessions) {
+      await this.revokeDeviceSession(session.id, now, reason)
     }
   }
 

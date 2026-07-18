@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AccountPage } from '../pages/account/AccountPage'
 import { CreditsPage } from '../pages/account/CreditsPage'
-import { DevicesPage } from '../pages/account/DevicesPage'
+import { SecurityPage } from '../pages/account/SecurityPage'
 import { UsagePage } from '../pages/account/UsagePage'
 import { DiagnosticsPage } from '../pages/system/DiagnosticsPage'
 import { ProvidersPage } from '../pages/system/ProvidersPage'
@@ -134,6 +134,11 @@ export function App({
       : current)
   }
 
+  const refreshDevices = async () => {
+    const devices = await client.devices()
+    setData(current => current ? { ...current, devices } : current)
+  }
+
   return (
     <div className="management-layout">
       <aside>
@@ -167,7 +172,14 @@ export function App({
             <CreditsPage credits={data.account.credits} />
           </>
         )}
-        {route === 'security' && <DevicesPage devices={data.devices} />}
+        {route === 'security' && (
+          <SecurityPage
+            client={client}
+            details={data.account}
+            devices={data.devices}
+            onDevicesChanged={refreshDevices}
+          />
+        )}
         {route === 'usage' && <UsagePage usage={data.usage} />}
         {route === 'providers' && data.providers && data.models && (
           <ProvidersPage

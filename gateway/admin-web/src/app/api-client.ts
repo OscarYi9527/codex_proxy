@@ -28,6 +28,12 @@ export interface ManagementApiClient {
   exchangeTicket(ticket: string): Promise<ManagementSession>
   account(): Promise<AccountDetails>
   devices(): Promise<readonly DeviceSession[]>
+  changePassword(input: {
+    currentPassword: string
+    newPassword: string
+    email?: string
+  }): Promise<void>
+  revokeDevice(deviceSessionId: string, confirmCurrent: boolean): Promise<void>
   usage(accountId: string): Promise<UsageResponse>
   providers(): Promise<ProviderListResponse>
   createProvider(input: {
@@ -77,6 +83,16 @@ export const managementApi: ManagementApiClient = {
   }),
   account: () => requestJson('/api/v1/account/me'),
   devices: () => requestJson('/api/v1/account/devices'),
+  changePassword: input => requestVoid('/api/v1/account/password/change', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  }),
+  revokeDevice: (deviceSessionId, confirmCurrent) =>
+    requestVoid(
+      `/api/v1/account/devices/${encodeURIComponent(deviceSessionId)}` +
+        `?confirmCurrent=${confirmCurrent ? 'true' : 'false'}`,
+      { method: 'DELETE' }
+    ),
   usage: accountId => requestJson(
     `/api/v1/admin/accounts/${encodeURIComponent(accountId)}/usage`
   ),

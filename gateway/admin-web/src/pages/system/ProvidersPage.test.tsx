@@ -8,6 +8,8 @@ function client(): ManagementApiClient {
     exchangeTicket: async () => { throw new Error('not used') },
     account: async () => { throw new Error('not used') },
     devices: async () => [],
+    changePassword: async () => undefined,
+    revokeDevice: async () => undefined,
     usage: async () => { throw new Error('not used') },
     providers: async () => ({ warning: null, providers: [] }),
     createProvider: async () => { throw new Error('not used') },

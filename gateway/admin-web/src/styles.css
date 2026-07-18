@@ -216,6 +216,38 @@ dd {
   gap: 14px;
 }
 
+.security-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.security-form label {
+  display: grid;
+  gap: 6px;
+  color: #43516a;
+  font-weight: 600;
+}
+
+.security-form input {
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid #b8c5d8;
+  border-radius: 8px;
+  color: #172033;
+  background: #fff;
+}
+
+.security-form button {
+  align-self: end;
+  padding: 9px 13px;
+  border: 1px solid #155eb9;
+  border-radius: 8px;
+  color: #fff;
+  background: #1769e0;
+  cursor: pointer;
+}
+
 .provider-form button {
   align-self: end;
 }
@@ -326,6 +358,10 @@ dd {
   }
 
   .provider-form {
+    grid-template-columns: 1fr;
+  }
+
+  .security-form {
     grid-template-columns: 1fr;
   }
 

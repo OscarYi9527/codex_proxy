@@ -69,6 +69,8 @@ function clientFor(role: AccountRole): ManagementApiClient {
       revokedAt: null,
       current: true
     }],
+    changePassword: jest.fn(async () => undefined),
+    revokeDevice: jest.fn(async () => undefined),
     usage: async () => ({
       summary: {
         requests: 1,
@@ -221,6 +223,31 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
     expect(client.providers).not.toHaveBeenCalled()
     expect(client.models).not.toHaveBeenCalled()
     expect(client.diagnostics).not.toHaveBeenCalled()
+  })
+
+  it('submits password changes from the security page without retaining credentials in the DOM', async () => {
+    const client = clientFor('user')
+    const changePassword = jest.spyOn(client, 'changePassword')
+    render(<App client={client} />)
+    bootstrap('security')
+
+    await screen.findByRole('heading', { name: '修改密码' })
+    fireEvent.change(screen.getByLabelText('当前密码'), {
+      target: { value: 'OldPassword123' }
+    })
+    fireEvent.change(screen.getByLabelText('新密码'), {
+      target: { value: 'NewPassword123' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: '保存新密码' }))
+
+    await waitFor(() => expect(changePassword).toHaveBeenCalledWith({
+      currentPassword: 'OldPassword123',
+      newPassword: 'NewPassword123',
+      email: 'user@example.test'
+    }))
+    expect(screen.getByRole('status')).toHaveTextContent('重新登录')
+    expect(document.body.textContent).not.toContain('OldPassword123')
+    expect(document.body.textContent).not.toContain('NewPassword123')
   })
 
   it('loads Provider and redacted diagnostics only for a Level-1 session', async () => {

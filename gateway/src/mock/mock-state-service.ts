@@ -11,6 +11,7 @@ export interface SafeMockStatus {
   }
   readonly currentModel?: string
   readonly availableCredits?: string
+  readonly usedCreditsPercent?: string
   readonly errorId?: string
   readonly actions: ReadonlyArray<'login' | 'openAccount' | 'retry' | 'openDiagnostics'>
 }
@@ -39,6 +40,7 @@ export class MockStateService {
         account: { display: 'mock-user@example.com', role: 'user' },
         currentModel: 'gpt-mock',
         availableCredits: '1000.000000',
+        usedCreditsPercent: '0',
         actions: []
       }
     }

@@ -9,7 +9,7 @@
     {
       "state": "ready",
       "actions": [],
-      "requiredFields": ["account", "currentModel", "availableCredits"],
+      "requiredFields": ["account", "currentModel", "availableCredits", "usedCreditsPercent"],
       "forbiddenFields": ["errorId"],
       "example": {
         "state": "ready",
@@ -20,6 +20,7 @@
         },
         "currentModel": "mock-gpt",
         "availableCredits": "1000.000000",
+        "usedCreditsPercent": "12.5",
         "actions": []
       }
     },
@@ -27,7 +28,7 @@
       "state": "login_required",
       "actions": ["login"],
       "requiredFields": [],
-      "forbiddenFields": ["account", "currentModel", "availableCredits"],
+      "forbiddenFields": ["account", "currentModel", "availableCredits", "usedCreditsPercent"],
       "example": {
         "state": "login_required",
         "checkedAt": "2026-07-17T00:00:00.000Z",
@@ -38,7 +39,7 @@
       "state": "account_unavailable",
       "actions": ["openAccount"],
       "requiredFields": [],
-      "forbiddenFields": ["account", "currentModel", "availableCredits"],
+      "forbiddenFields": ["account", "currentModel", "availableCredits", "usedCreditsPercent"],
       "example": {
         "state": "account_unavailable",
         "checkedAt": "2026-07-17T00:00:00.000Z",
@@ -49,7 +50,7 @@
       "state": "service_unavailable",
       "actions": ["retry"],
       "requiredFields": ["errorId"],
-      "forbiddenFields": ["account", "currentModel", "availableCredits"],
+      "forbiddenFields": ["account", "currentModel", "availableCredits", "usedCreditsPercent"],
       "example": {
         "state": "service_unavailable",
         "checkedAt": "2026-07-17T00:00:00.000Z",
@@ -61,7 +62,7 @@
       "state": "password_change_required",
       "actions": ["openAccount"],
       "requiredFields": [],
-      "forbiddenFields": ["account", "currentModel", "availableCredits"],
+      "forbiddenFields": ["account", "currentModel", "availableCredits", "usedCreditsPercent"],
       "example": {
         "state": "password_change_required",
         "checkedAt": "2026-07-17T00:00:00.000Z",

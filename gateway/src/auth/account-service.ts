@@ -46,11 +46,12 @@ export class AccountService {
   async status(identity: AccessIdentity, currentModel: string | null): Promise<{
     state: 'ready' | 'account_unavailable' | 'password_change_required'
     checkedAt: string
-    accountVersion: number
+      accountVersion: number
     safeSummary: {
       accountDisplay: string
       currentModel: string | null
       availableCredits: string
+      usedCreditsPercent: string
     }
     actions: Array<'openAccount'>
   }> {
@@ -63,7 +64,8 @@ export class AccountService {
       safeSummary: {
         accountDisplay: account.email || account.loginName || 'AI Editor 账号',
         currentModel,
-        availableCredits: '0.000000'
+        availableCredits: '0.000000',
+        usedCreditsPercent: '0'
       },
       actions: state === 'ready' ? [] : ['openAccount']
     }

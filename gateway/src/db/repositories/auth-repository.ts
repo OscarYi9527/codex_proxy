@@ -356,6 +356,24 @@ export class AuthRepository {
     }).execute()
   }
 
+  async revokeActiveSessionsForDevice(
+    accountId: string,
+    device: DeviceDescriptor,
+    now: string
+  ): Promise<void> {
+    const sessions = await this.db
+      .selectFrom('device_sessions')
+      .select('id')
+      .where('account_id', '=', accountId)
+      .where('device_name', '=', device.name)
+      .where('platform', '=', device.platform)
+      .where('revoked_at', 'is', null)
+      .execute()
+    for (const session of sessions) {
+      await this.revokeDeviceSession(session.id, now, 'superseded_same_device_login')
+    }
+  }
+
   async insertRefreshToken(input: NewRefreshTokenInput): Promise<void> {
     await this.db.insertInto('refresh_tokens').values({
       id: input.id,
@@ -597,6 +615,7 @@ export class AuthRepository {
         'revoked_at'
       ])
       .where('account_id', '=', accountId)
+      .where('revoked_at', 'is', null)
       .orderBy('last_used_at', 'desc')
       .execute()
     return rows.map(row => ({

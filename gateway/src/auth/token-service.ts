@@ -302,6 +302,7 @@ export class TokenService {
       this.clock.nowMs() + REFRESH_TOKEN_TTL_SECONDS * 1000
     ).toISOString()
     const sessionId = this.ids.opaque('ds')
+    await repository.revokeActiveSessionsForDevice(account.id, device, now)
     await repository.createDeviceSession({
       id: sessionId,
       accountId: account.id,

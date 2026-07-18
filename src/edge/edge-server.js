@@ -71,6 +71,7 @@ function safeMockStatus(state, requestId) {
       account: { display: 'mock-user@example.com', role: 'user' },
       currentModel: 'gpt-mock',
       availableCredits: '1000.000000',
+      usedCreditsPercent: '0',
       actions: []
     }
   }

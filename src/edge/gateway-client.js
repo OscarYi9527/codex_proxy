@@ -78,6 +78,7 @@ export class GatewayClient {
         },
         currentModel: status.safeSummary?.currentModel || null,
         availableCredits: status.safeSummary?.availableCredits || '0.000000',
+        usedCreditsPercent: status.safeSummary?.usedCreditsPercent || '0',
         actions: []
       }
     } catch (error) {

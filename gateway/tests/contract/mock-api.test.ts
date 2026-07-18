@@ -72,6 +72,7 @@ describe('Gateway safe Mock API contract', () => {
       account: { display: 'mock-user@example.com', role: 'user' },
       currentModel: 'gpt-mock',
       availableCredits: '1000.000000',
+      usedCreditsPercent: '0',
       actions: []
     })
     const models = await gateway.app.inject({

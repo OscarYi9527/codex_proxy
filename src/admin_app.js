@@ -4,6 +4,7 @@ let pingResults = {}, modal = null, loginPoll = null, accountsPoll = null, dragg
 let errorGuideData = []
 let loginPreflightData = null
 let priceCatalogData = { prices: {} }, costReportData = { providers: {} }
+let accountImportFileName = ''
 let accountViewMode = localStorage.getItem('codex-account-view') === 'compact' ? 'compact' : 'cards'
 let healthRange = ['1h','24h','7d'].includes(localStorage.getItem('codex-health-range')) ? localStorage.getItem('codex-health-range') : '24h'
 let usageCalendarMonth = statsDateKey().slice(0,7)
@@ -499,7 +500,8 @@ async function saveRelay(){
 }
 async function removeRelay(id){ if(!confirm('确定删除这个中转节点吗？'))return; try{const r=await fetch(API+'/relays/'+encodeURIComponent(id),{method:'DELETE'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'删除失败');cfg=d.config;render();toast('节点已删除')}catch(e){toast(e.message,'error')} }
 function openAccount(){
-  showModal('快捷导入 ChatGPT 账号',`<div class="quick-import"><button class="quick-option" onclick="importCurrentAccount()">${svg('refresh')}<strong>一键导入当前账号</strong><small>自动读取本机 Codex CLI 的<br>~/.codex/auth.json</small></button><button class="quick-option" id="auth_drop" onclick="document.getElementById('auth_file').click()" ondragover="authDrag(event,true)" ondragleave="authDrag(event,false)" ondrop="authDrop(event)">${svg('download')}<strong>选择或拖拽 auth.json</strong><small>从电脑选择登录文件<br>读取后自动填入</small></button></div><input id="auth_file" type="file" accept=".json,application/json" class="hidden" onchange="loadAuthFile(this.files[0])"><div class="divider">或者手动粘贴</div><div class="form-grid"><div class="field full"><label>账号备注 <span class="hint">可选</span></label><input class="input" id="account_label" placeholder="例如：备用账号"></div><div class="field full"><label style="display:flex;align-items:center;gap:8px"><input id="account_routing_enabled" type="checkbox"> 导入后立即参与自动路由</label><span class="hint">默认仅保存到账号池，需要时可随时启用。</span></div><div class="field full"><label>auth.json 内容</label><textarea id="account_json" style="min-height:150px" placeholder='粘贴 Codex CLI 生成的完整 auth.json'></textarea><span class="hint" id="auth_file_hint">凭据仅保存在当前计算机。</span></div></div>`,'导入账号','saveAccount()')
+  accountImportFileName=''
+  showModal('快捷导入 ChatGPT 账号',`<div class="quick-import"><button class="quick-option" onclick="importCurrentAccount()">${svg('refresh')}<strong>一键导入当前账号</strong><small>自动读取本机 Codex CLI 的<br>~/.codex/auth.json</small></button><button class="quick-option" id="auth_drop" onclick="document.getElementById('auth_file').click()" ondragover="authDrag(event,true)" ondragleave="authDrag(event,false)" ondrop="authDrop(event)">${svg('download')}<strong>选择或拖拽账号文件</strong><small>支持 auth.json、sub2、CPA JSON<br>以及完整凭据 TXT，可批量导入</small></button></div><input id="auth_file" type="file" accept=".json,.txt,application/json,text/plain" class="hidden" onchange="loadAuthFile(this.files[0])"><div class="help-note" style="margin-top:12px"><b>安全默认值</b><p>重复账号会跳过，不覆盖现有 Token；新账号默认仅保存，不参与路由。TXT 必须包含 access_token、refresh_token 和 account_id。</p></div><div class="divider">或者手动粘贴</div><div class="form-grid"><div class="field full"><label>单账号备注 <span class="hint">批量文件会使用文件内名称</span></label><input class="input" id="account_label" maxlength="80" placeholder="例如：备用账号"></div><div class="field full"><label style="display:flex;align-items:center;gap:8px"><input id="account_routing_enabled" type="checkbox"> 导入后立即参与自动路由</label><span class="hint">建议先保持关闭，确认账号和额度后再逐个启用。</span></div><div class="field full"><label>账号文件内容</label><textarea id="account_json" style="min-height:150px" placeholder='粘贴 auth.json、sub2/CPA JSON 或完整凭据 TXT'></textarea><span class="hint" id="auth_file_hint">凭据只发送到本机管理接口，不会访问文件来源网站。</span></div></div>`,'安全导入','saveAccount()')
 }
 function openRenameAccount(id){
   const account=(cfg.chatgptAccounts||[]).find(item=>item.id===id)
@@ -520,13 +522,15 @@ function authDrag(event,on){event.preventDefault();event.stopPropagation();docum
 function authDrop(event){authDrag(event,false);loadAuthFile(event.dataTransfer?.files?.[0])}
 async function loadAuthFile(file){
   if(!file)return
-  if(!file.name.toLowerCase().endsWith('.json'))return toast('请选择 auth.json 文件','error')
+  if(!/\.(json|txt)$/i.test(file.name))return toast('请选择 JSON 或 TXT 账号文件','error')
+  if(file.size>2*1024*1024)return toast('账号文件不能超过 2 MiB','error')
   try{
-    const text=await file.text(),parsed=JSON.parse(text)
-    if(!parsed?.tokens)throw new Error('文件缺少 tokens 字段')
+    const text=await file.text()
+    if(!text.trim())throw new Error('文件内容为空')
+    accountImportFileName=file.name
     document.getElementById('account_json').value=text
-    document.getElementById('auth_file_hint').textContent=`已读取 ${file.name} · 点击“导入账号”完成`
-    toast('auth.json 已读取')
+    document.getElementById('auth_file_hint').textContent=`已读取 ${file.name} · 将自动识别格式、去重并安全导入`
+    toast('账号文件已读取')
   }catch(e){toast('无法读取文件：'+e.message,'error')}
 }
 async function importCurrentAccount(){
@@ -604,7 +608,15 @@ async function checkOfficialLogin(){
   }catch(e){clearInterval(loginPoll);loginPoll=null;toast(e.message,'error')}
 }
 async function cancelOfficialLogin(){await fetch(API+'/chatgpt-login/cancel',{method:'POST'});if(loginPoll)clearInterval(loginPoll);loginPoll=null;const status=document.getElementById('login_status');if(status)status.innerHTML='<span class="status off"><i></i>登录已取消</span>'}
-async function saveAccount(){ const auth_json=document.getElementById('account_json').value.trim(),label=document.getElementById('account_label').value.trim(),routingEnabled=document.getElementById('account_routing_enabled')?.checked===true;if(!auth_json)return toast('请粘贴 auth.json 内容','error');try{JSON.parse(auth_json)}catch{return toast('auth.json 格式无效','error')}try{const r=await fetch(API+'/chatgpt-accounts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({auth_json,label,routingEnabled})}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'导入失败');cfg=d.config;closeModal();render();toast(d.message||(routingEnabled?'账号已导入并启用路由':'账号已导入，仅保存到账号池'))}catch(e){toast(e.message,'error')} }
+async function saveAccount(){
+  const content=document.getElementById('account_json').value.trim(),label=document.getElementById('account_label').value.trim(),routingEnabled=document.getElementById('account_routing_enabled')?.checked===true
+  if(!content)return toast('请粘贴或选择账号文件','error')
+  try{
+    const r=await fetch(API+'/chatgpt-accounts/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({content,label,routingEnabled,sourceName:accountImportFileName})}),d=await r.json()
+    if(!r.ok)throw new Error(d.error?.message||'导入失败')
+    cfg=d.config;closeModal();render();toast(d.message||'账号导入完成')
+  }catch(e){toast(e.message,'error')}
+}
 async function removeAccount(id){const account=(cfg.chatgptAccounts||[]).find(item=>item.id===id);const name=account?.label||account?.email||'未命名账号',shortId=String(account?.account_id||id).slice(0,12);if(!confirm(`确定移除账号「${name}」吗？\n账号 ID：${shortId}…\n\n删除前会自动创建独立账号备份。`))return;try{const r=await fetch(API+'/chatgpt-accounts/'+encodeURIComponent(id),{method:'DELETE'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'移除失败');cfg=d.config;render();toast('账号已移除，删除前数据已备份')}catch(e){toast(e.message,'error')}}
 async function refreshAllUsage(){
   toast('正在刷新全部账号用量…')

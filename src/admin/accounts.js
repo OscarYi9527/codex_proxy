@@ -6,6 +6,7 @@ import { sendJson } from '../server-utils.js'
 import { chinaFetch } from '../china-fetch.js'
 import { getCodexAuthFile, isLocalAdminRequest, killLocalCodexProcesses } from './login.js'
 import { publicProxyConfig } from './shared.js'
+import { parseChatgptAccountImport } from '../account-import.js'
 
 export async function handleChatgptAccountAdd(req, res, body) {
   try {
@@ -26,6 +27,54 @@ export async function handleChatgptAccountAdd(req, res, body) {
     return sendJson(res, 200, { config: publicProxyConfig(proxyConfig), message })
   } catch (error) {
     return sendJson(res, 400, { error: { type: 'invalid_request_error', message: error.message } })
+  }
+}
+
+export function handleChatgptAccountsImport(req, res, body) {
+  try {
+    if (!isLocalAdminRequest(req)) {
+      return sendJson(res, 403, {
+        error: { type: 'permission_error', message: '账号文件只能从本机管理后台导入' }
+      })
+    }
+    const records = parseChatgptAccountImport(body?.content || body?.auth_json || '')
+    const existingIds = new Set(
+      (proxyConfig.chatgptAccounts || []).map(account => account.account_id)
+    )
+    const imported = []
+    const skipped = []
+    const routingEnabled = body?.routingEnabled === true
+    for (const record of records) {
+      if (existingIds.has(record.accountId)) {
+        skipped.push({ accountId: record.accountId, reason: 'duplicate' })
+        continue
+      }
+      const label = records.length === 1 && String(body?.label || '').trim()
+        ? String(body.label).trim().slice(0, 80)
+        : record.label
+      addChatgptAccount(record.authJson, label, { routingEnabled })
+      existingIds.add(record.accountId)
+      imported.push({
+        accountId: record.accountId,
+        label,
+        sourceFormat: record.sourceFormat
+      })
+    }
+    return sendJson(res, 200, {
+      config: publicProxyConfig(proxyConfig),
+      result: {
+        imported: imported.length,
+        skipped: skipped.length,
+        formats: [...new Set(imported.map(item => item.sourceFormat))]
+      },
+      message: imported.length
+        ? `已导入 ${imported.length} 个账号${skipped.length ? `，跳过 ${skipped.length} 个重复账号` : ''}；默认${routingEnabled ? '已启用' : '仅保存'}`
+        : `未导入新账号，已跳过 ${skipped.length} 个重复账号`
+    })
+  } catch (error) {
+    return sendJson(res, 400, {
+      error: { type: 'invalid_request_error', message: error.message }
+    })
   }
 }
 

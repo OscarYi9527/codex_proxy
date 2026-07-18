@@ -186,6 +186,12 @@ function clientFor(role: AccountRole): ManagementApiClient {
     setRiskPolicy: jest.fn(async () => undefined),
     providers: jest.fn(async () => ({
       warning: 'plaintext-v1 is for loopback development only',
+      accountPool: {
+        strategy: 'headroom' as const,
+        accounts: [],
+        queueDepth: 0,
+        recentRouteDecisions: []
+      },
       providers: [{
         id: 'provider_test',
         kind: 'relay' as const,
@@ -202,7 +208,35 @@ function clientFor(role: AccountRole): ManagementApiClient {
           maskedPreview: 'sk-...abcd',
           storageFormat: 'plaintext-v1' as const,
           updatedAt: '2026-07-17T01:00:00.000Z',
-          lastUsedAt: null
+          lastUsedAt: null,
+          label: null,
+          accountIdPreview: null,
+          planType: null,
+          status: 'unknown',
+          routing: null,
+          quota: {
+            source: 'unavailable' as const,
+            primary: null,
+            secondary: null,
+            updatedAt: null,
+            syncStatus: 'unavailable',
+            syncError: null
+          },
+          runtime: {
+            activeRequests: 0,
+            concurrencyLimit: 0,
+            cooldownUntil: null,
+            modelCooldowns: 0
+          },
+          health: {
+            requests: 0,
+            successRate: null,
+            p95LatencyMs: 0,
+            rateLimited: 0,
+            lastRequestAt: null,
+            lastErrorType: null,
+            lastErrorMessage: null
+          }
         }],
         plaintextWarning: 'plaintext-v1 is for loopback development only'
       }]
@@ -240,6 +274,10 @@ function clientFor(role: AccountRole): ManagementApiClient {
     deleteProvider: jest.fn(async () => undefined),
     addProviderCredential: jest.fn(async () => undefined),
     deleteProviderCredential: jest.fn(async () => undefined),
+    updateProviderCredentialRouting: jest.fn(async () => undefined),
+    refreshProviderCredentialUsage: jest.fn(async () => undefined),
+    setProviderAccountStrategy: jest.fn(async () => undefined),
+    setProviderInternalBudget: jest.fn(async () => undefined),
     startChatgptLogin: jest.fn(async () => ({ status: 'waiting' as const })),
     chatgptLoginStatus: jest.fn(async () => ({ status: 'waiting' as const })),
     models: jest.fn(async () => ({
@@ -380,7 +418,7 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
     render(<App client={client} />)
     bootstrap('providers')
 
-    expect(await screen.findByText('Local Relay')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Local Relay' })).toBeInTheDocument()
     expect(screen.getByText(/sk-\.\.\.abcd/)).toBeInTheDocument()
     expect(screen.getByText(/plaintext-v1 is for loopback/)).toBeInTheDocument()
     expect(document.body.textContent).not.toContain('diagnostic-secret')

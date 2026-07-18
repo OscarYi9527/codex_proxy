@@ -1,4 +1,5 @@
 import type {
+  AccountRoutingStrategy,
   AccountDetails,
   ChatgptLoginStatus,
   DeviceSession,
@@ -75,6 +76,28 @@ export interface ManagementApiClient {
   deleteProvider(providerId: string): Promise<void>
   addProviderCredential(providerId: string, secret: string): Promise<void>
   deleteProviderCredential(providerId: string, credentialId: string): Promise<void>
+  updateProviderCredentialRouting(
+    providerId: string,
+    credentialId: string,
+    input: {
+      label: string
+      routingEnabled: boolean
+      routingWeight: number
+      lowQuotaThreshold: number
+      dailyRequestLimit: number
+      dailyTokenLimit: number
+      reservedModels: readonly string[]
+    }
+  ): Promise<void>
+  refreshProviderCredentialUsage(providerId: string, credentialId: string): Promise<void>
+  setProviderAccountStrategy(
+    providerId: string,
+    strategy: AccountRoutingStrategy
+  ): Promise<void>
+  setProviderInternalBudget(
+    providerId: string,
+    internalBudgetCredits: string | null
+  ): Promise<void>
   startChatgptLogin(providerId: string): Promise<ChatgptLoginStatus>
   chatgptLoginStatus(providerId: string): Promise<ChatgptLoginStatus>
   models(): Promise<ModelRouteResponse>
@@ -202,6 +225,37 @@ export const managementApi: ManagementApiClient = {
       `/api/v1/admin/providers/${encodeURIComponent(providerId)}/credentials/` +
         encodeURIComponent(credentialId),
       { method: 'DELETE' }
+    ),
+  updateProviderCredentialRouting: (providerId, credentialId, input) =>
+    requestVoid(
+      `/api/v1/admin/providers/${encodeURIComponent(providerId)}/credentials/` +
+        `${encodeURIComponent(credentialId)}/routing`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(input)
+      }
+    ),
+  refreshProviderCredentialUsage: (providerId, credentialId) =>
+    requestVoid(
+      `/api/v1/admin/providers/${encodeURIComponent(providerId)}/credentials/` +
+        `${encodeURIComponent(credentialId)}/refresh-usage`,
+      { method: 'POST' }
+    ),
+  setProviderAccountStrategy: (providerId, strategy) =>
+    requestVoid(
+      `/api/v1/admin/providers/${encodeURIComponent(providerId)}/account-routing-strategy`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ strategy })
+      }
+    ),
+  setProviderInternalBudget: (providerId, internalBudgetCredits) =>
+    requestVoid(
+      `/api/v1/admin/providers/${encodeURIComponent(providerId)}/internal-budget`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ internalBudgetCredits })
+      }
     ),
   startChatgptLogin: providerId =>
     requestJson(

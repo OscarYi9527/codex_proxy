@@ -166,7 +166,60 @@ export interface ProviderCredentialSummary {
   readonly storageFormat: 'plaintext-v1' | 'envelope-v1'
   readonly updatedAt: string
   readonly lastUsedAt: string | null
+  readonly label: string | null
+  readonly accountIdPreview: string | null
+  readonly planType: string | null
+  readonly status: string
+  readonly routing: {
+    readonly enabled: boolean
+    readonly weight: number
+    readonly lowQuotaThreshold: number
+    readonly dailyRequestLimit: number
+    readonly dailyTokenLimit: number
+    readonly reservedModels: readonly string[]
+  } | null
+  readonly quota: {
+    readonly source: 'provider' | 'unavailable'
+    readonly primary: ProviderQuotaWindow | null
+    readonly secondary: ProviderQuotaWindow | null
+    readonly updatedAt: string | null
+    readonly syncStatus: string
+    readonly syncError: string | null
+  }
+  readonly runtime: {
+    readonly activeRequests: number
+    readonly concurrencyLimit: number
+    readonly cooldownUntil: number | null
+    readonly modelCooldowns: number
+  }
+  readonly health: {
+    readonly requests: number
+    readonly successRate: number | null
+    readonly p95LatencyMs: number
+    readonly rateLimited: number
+    readonly lastRequestAt: string | null
+    readonly lastErrorType: string | null
+    readonly lastErrorMessage: string | null
+  }
 }
+
+export interface ProviderQuotaWindow {
+  readonly usedPercent: number | null
+  readonly remainingPercent: number | null
+  readonly resetsAt: number | null
+  readonly windowMinutes: number | null
+}
+
+export type AccountRoutingStrategy =
+  | 'priority'
+  | 'round-robin'
+  | 'headroom'
+  | 'least-used'
+  | 'latency'
+  | 'reliable'
+  | 'weighted'
+  | 'random'
+  | 'lkgp'
 
 export interface ProviderSummary {
   readonly id: string
@@ -176,15 +229,57 @@ export interface ProviderSummary {
   readonly config: {
     readonly baseUrl?: string
     readonly models?: readonly string[]
+    readonly internalBudgetCredits?: string
   }
   readonly version: number
   readonly updatedAt: string
   readonly credentials: readonly ProviderCredentialSummary[]
+  readonly runtimeHealth?: {
+    readonly state: string
+    readonly circuitState: string
+    readonly lastCheckedAt: string | null
+    readonly lastStatus: number | null
+    readonly lastLatencyMs: number | null
+    readonly lastError: string | null
+    readonly requests: number
+    readonly successRate: number | null
+    readonly p95LatencyMs: number
+  }
+  readonly usage?: {
+    readonly requests: number
+    readonly inputTokens: number
+    readonly outputTokens: number
+    readonly settledCredits: string
+    readonly internalBudgetCredits: string | null
+    readonly remainingCredits: string | null
+    readonly usedPercent: string | null
+    readonly lastUsedAt: string | null
+  }
   readonly plaintextWarning: string | null
 }
 
 export interface ProviderListResponse {
   readonly warning: string | null
+  readonly accountPool: {
+    readonly strategy: AccountRoutingStrategy
+    readonly accounts: readonly unknown[]
+    readonly queueDepth: number
+    readonly recentRouteDecisions: ReadonlyArray<{
+      readonly at: string
+      readonly model: string
+      readonly selectedAccountId: string | null
+      readonly selectedAccountLabel: string | null
+      readonly outcome: string
+      readonly queueWaitMs: number
+      readonly accounts: ReadonlyArray<{
+        readonly id: string
+        readonly label: string
+        readonly result: string
+        readonly reason: string
+        readonly remainingPercent: number | null
+      }>
+    }>
+  }
   readonly providers: readonly ProviderSummary[]
 }
 

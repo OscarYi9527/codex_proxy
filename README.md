@@ -476,6 +476,7 @@ Gateway、macOS Keychain 以及信封加密门禁。
 | `GET` | `/admin/api/runtime-info` | 获取实际运行版本、路径及部署一致性 |
 | `POST` | `/admin/api/deploy-update` | 从本机启动备份、部署、重启、健康检查和自动回滚 |
 | `GET` | `/admin/api/chatgpt-login/preflight` | 检查 Codex CLI、app-server OAuth 和私密浏览器 |
+| `POST` | `/admin/api/chatgpt-accounts/import` | 本机批量解析并导入多种账号文件 |
 | `GET` | `/admin/api/config-snapshots` | 列出最近配置快照 |
 | `POST` | `/admin/api/chatgpt-accounts/:id/reset-credits` | 查询指定账号的 Codex 重置次数 |
 | `POST` | `/admin/api/chatgpt-accounts/refresh-reset-credits-all` | 查询账号池全部账号的重置次数 |
@@ -522,6 +523,9 @@ Gateway、macOS Keychain 以及信封加密门禁。
 功能：
 - 可视化编辑 API 地址、密钥、默认模型和中转节点
 - ChatGPT 官方隔离登录（全局 CLI 损坏时自动回退到 VS Code 内置 Codex）、账号仅保存/启用、拖拽优先级和 9 种路由策略
+- ChatGPT 账号文件快捷导入：支持标准 `auth.json`、sub2 JSON、CPA JSON 和包含完整
+  `access_token`、`refresh_token`、`account_id` 的 TXT；支持批量识别，重复账号默认跳过，
+  新账号默认仅保存、不参与路由
 - 账号改名、首次额度自动同步、独立账号备份以及只补回缺失账号的安全恢复
 - 每账号安全余量、每日请求/Token 上限、模型/会话预留，以及带风险确认和自动到期的紧急继续
 - 5 小时/每周额度、趋势预测、1h/24h/7d 成功率、P50/P95 延迟和双层冷却
@@ -574,6 +578,7 @@ API 端点：
 | GET | /admin/api/runtime-info | 获取实际运行位置、版本、Commit 和安装一致性 |
 | POST | /admin/api/deploy-update | 启动安全部署、重启、健康检查和失败回滚 |
 | GET | /admin/api/chatgpt-login/preflight | 获取官方登录环境预检结果 |
+| POST | /admin/api/chatgpt-accounts/import | 本机解析并批量导入 auth.json、sub2/CPA JSON 或完整凭据 TXT |
 | GET | /admin/api/config-snapshots | 获取设置快照列表 |
 | POST | /admin/api/config-rollback | 仅回滚设置，不回退账号 Token/API Key |
 | GET | /admin/api/account-backups | 获取账号备份列表 |

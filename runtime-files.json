@@ -8,6 +8,7 @@
     "model-prices.json",
     "runtime-files.json",
     "scripts/release-check.mjs",
+    "src/account-import.js",
     "src/config.js",
     "src/credential-store.js",
     "src/logger.js",

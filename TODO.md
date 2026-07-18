@@ -76,6 +76,8 @@
 - [x] 完成 T053 的 Edge 安全状态与 Webview ticket 真实转发。
 - [x] 完成 T055 的普通用户账号、积分、设备和使用记录页面。
 - [x] 管理会话和页面不把 ticket、Token、Provider 凭据写入 URL、Web Storage 或日志。
+- [x] standalone 账号池支持 auth.json、sub2/CPA JSON 和完整凭据 TXT 快捷批量导入，
+  默认跳过重复账号且不自动启用路由。
 
 ### 阶段 5–6：组织、权限、积分和并发风险
 

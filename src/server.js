@@ -25,7 +25,7 @@ import { saveStats } from './stats.js'
 import { initializeProviderHealth, saveProviderHealth } from './provider-health.js'
 import { listHttpErrorGuides } from './error-guide.js'
 import { executeRoutingPlan, VIRTUAL_MODELS } from './smart-routing.js'
-import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginPreflight, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountResetCreditsGet, handleChatgptAccountsRefreshResetCreditsAll, handleChatgptAccountResetQuota, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleAutomaticDiagnosisGet, handlePriceCatalogGet, handlePriceCatalogPut, handleCostReportGet, handleRuntimeInfoGet, handleDeployUpdate, handleAccountBackupsGet, handleConfigSnapshotsGet, handleAccountBackupRestore, handleConfigRollback, handleProviderHealthReset, handleRuntimeRepair, handleProxyRestart } from './admin.js'
+import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountsImport, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginPreflight, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountResetCreditsGet, handleChatgptAccountsRefreshResetCreditsAll, handleChatgptAccountResetQuota, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleAutomaticDiagnosisGet, handlePriceCatalogGet, handlePriceCatalogPut, handleCostReportGet, handleRuntimeInfoGet, handleDeployUpdate, handleAccountBackupsGet, handleConfigSnapshotsGet, handleAccountBackupRestore, handleConfigRollback, handleProviderHealthReset, handleRuntimeRepair, handleProxyRestart } from './admin.js'
 import { parseProxyMode } from './mode.js'
 
 const PORT = Number(process.env.CODEX_PROXY_PORT || 47892)
@@ -300,6 +300,10 @@ export function createServer({ fetchImpl = fetch } = {}) {
     if (req.method === 'POST' && url.pathname === '/admin/api/chatgpt-accounts') {
       const body = await readJson(req)
       return handleChatgptAccountAdd(req, res, body)
+    }
+    if (req.method === 'POST' && url.pathname === '/admin/api/chatgpt-accounts/import') {
+      const body = await readJson(req)
+      return handleChatgptAccountsImport(req, res, body)
     }
     if (req.method === 'POST' && url.pathname === '/admin/api/chatgpt-accounts/import-current') {
       return handleChatgptAccountImportCurrent(req, res)

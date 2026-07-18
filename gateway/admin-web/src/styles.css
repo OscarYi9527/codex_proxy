@@ -248,6 +248,52 @@ dd {
   cursor: pointer;
 }
 
+.security-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid #b8c5d8;
+  border-radius: 10px;
+  color: #1c3658;
+  background: #f4f8ff;
+  box-shadow: 0 10px 24px #1f34531a;
+}
+
+.security-notice h3,
+.security-notice p {
+  margin: 0;
+}
+
+.security-notice p {
+  margin-top: 5px;
+  line-height: 1.55;
+}
+
+.security-notice.success {
+  border-color: #89cfab;
+  color: #075c41;
+  background: #ecfbf2;
+}
+
+.security-notice.error {
+  border-color: #efb5b5;
+  color: #8d2424;
+  background: #fff3f3;
+}
+
+.security-notice button {
+  flex: none;
+  padding: 8px 12px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  color: inherit;
+  background: #fff;
+  cursor: pointer;
+}
+
 .provider-form button {
   align-self: end;
 }
@@ -363,6 +409,11 @@ dd {
 
   .security-form {
     grid-template-columns: 1fr;
+  }
+
+  .security-notice {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .provider-card header,

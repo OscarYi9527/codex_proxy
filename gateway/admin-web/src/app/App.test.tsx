@@ -245,9 +245,28 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
       newPassword: 'NewPassword123',
       email: 'user@example.test'
     }))
-    expect(screen.getByRole('status')).toHaveTextContent('重新登录')
+    expect(screen.getByRole('alertdialog', { name: '密码修改成功' })).toHaveTextContent('重启 AI Editor')
     expect(document.body.textContent).not.toContain('OldPassword123')
     expect(document.body.textContent).not.toContain('NewPassword123')
+  })
+
+  it('shows an explicit failure prompt when a password change is rejected', async () => {
+    const client = clientFor('user')
+    jest.spyOn(client, 'changePassword').mockRejectedValueOnce(new Error('rejected'))
+    render(<App client={client} />)
+    bootstrap('security')
+
+    await screen.findByRole('heading', { name: '修改密码' })
+    fireEvent.change(screen.getByLabelText('当前密码'), {
+      target: { value: 'WrongPassword123' }
+    })
+    fireEvent.change(screen.getByLabelText('新密码'), {
+      target: { value: 'NewPassword123' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: '保存新密码' }))
+
+    expect(await screen.findByRole('alert', { name: '密码修改失败' }))
+      .toHaveTextContent('密码未被修改')
   })
 
   it('loads Provider and redacted diagnostics only for a Level-1 session', async () => {

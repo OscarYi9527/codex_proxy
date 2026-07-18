@@ -206,7 +206,19 @@ export class LocalAccountBindingStore {
     if (this.initialized) return
     await this.exclusive(async () => {
       if (this.initialized) return
-      const persisted = await this.secureStore.load()
+      let persisted = null
+      try {
+        persisted = await this.secureStore.load()
+      } catch {
+        // A Refresh Token that cannot be unsealed must never keep the Edge
+        // process offline. Remove the unusable local binding and fail closed
+        // as login_required so the user can establish a fresh secure handoff.
+        try {
+          await this.secureStore.clear()
+        } catch {
+          // A later successful handoff atomically replaces a stale file.
+        }
+      }
       if (persisted) {
         this.bindingVersion += 1
         this.binding = {

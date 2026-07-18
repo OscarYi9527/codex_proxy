@@ -65,6 +65,25 @@ describe('Edge real handoff and secure storage (T026/T032/T033)', () => {
     assert.equal(snapshot.accessToken, null)
   })
 
+  it('fails closed to login_required when a persisted secure binding cannot be opened', async () => {
+    let clearCalls = 0
+    const binding = new LocalAccountBindingStore({
+      secureStore: {
+        async load() {
+          throw new Error('DPAPI unprotect failed')
+        },
+        async clear() {
+          clearCalls += 1
+        }
+      }
+    })
+
+    await binding.initialize()
+
+    assert.equal(binding.snapshot(), null)
+    assert.equal(clearCalls, 1)
+  })
+
   it('consumes handoff grants once and serializes binding replacement', async () => {
     const binding = new LocalAccountBindingStore({
       secureStore: new MemoryRefreshTokenStore(),

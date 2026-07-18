@@ -117,6 +117,36 @@ describe('organization administration pages (T062/T068)', () => {
     expect(screen.queryByRole('button', { name: '保存角色' })).not.toBeInTheDocument()
   })
 
+  it('restores the current role when the server rejects the last Level-1 demotion', async () => {
+    const api = client()
+    api.setAccountRole.mockRejectedValueOnce(new Error('last_level1_protected'))
+    render(
+      <OrganizationPage
+        client={api as unknown as ManagementApiClient}
+        role="level1"
+        organizations={organizations}
+        accounts={[{
+          id: 'acct_level1',
+          loginName: null,
+          email: 'admin@example.test',
+          role: 'level1',
+          status: 'active',
+          organizationId: null,
+          expiresAt: null,
+          version: 1
+        }]}
+        onRefresh={async () => undefined}
+      />
+    )
+
+    const selector = screen.getByLabelText('角色 admin@example.test')
+    fireEvent.change(selector, { target: { value: 'user' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存角色' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent('最后一级管理员保护')
+    expect(selector).toHaveValue('level1')
+  })
+
   it('shows a newly created invitation once and supports revocation', async () => {
     const api = client()
     const refresh = jest.fn(async () => undefined)

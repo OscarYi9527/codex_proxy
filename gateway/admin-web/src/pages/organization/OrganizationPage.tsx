@@ -63,6 +63,14 @@ export function OrganizationPage({
     organizationId: account.organizationId || organizations.find(item => item.status === 'active')?.id || ''
   }
 
+  const resetRoleDraft = (accountId: string) => {
+    setRoleDrafts(current => {
+      const next = { ...current }
+      delete next[accountId]
+      return next
+    })
+  }
+
   const saveRole = async (account: OrganizationAccountSummary) => {
     const draft = roleDraft(account)
     setBusy(true)
@@ -73,8 +81,10 @@ export function OrganizationPage({
         organizationId: draft.role === 'level1' ? null : draft.organizationId
       })
       await onRefresh()
+      resetRoleDraft(account.id)
       setMessage('账号角色和组织归属已更新。')
     } catch {
+      resetRoleDraft(account.id)
       setMessage('账号角色更新失败，请检查组织归属和最后一级管理员保护。')
     } finally {
       setBusy(false)

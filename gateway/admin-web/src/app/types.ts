@@ -61,6 +61,43 @@ export interface DeviceSession {
   readonly current: boolean
 }
 
+export interface OrganizationSummary {
+  readonly id: string
+  readonly name: string
+  readonly status: 'active' | 'disabled'
+  readonly updatedAt: string
+  readonly version: number
+}
+
+export interface OrganizationAccountSummary {
+  readonly id: string
+  readonly loginName: string | null
+  readonly email: string | null
+  readonly role: AccountRole
+  readonly status: 'active' | 'disabled' | 'expired'
+  readonly organizationId: string | null
+  readonly expiresAt: string | null
+  readonly version: number
+}
+
+export interface InvitationSummary {
+  readonly id: string
+  readonly organizationId: string
+  readonly expiresAt: string
+  readonly maxUses: number
+  readonly useCount: number
+  readonly status: 'active' | 'revoked' | 'exhausted' | 'expired'
+  readonly createdAt: string
+  readonly revokedAt: string | null
+}
+
+export interface InvitationCreation {
+  readonly code: string
+  readonly organizationId: string
+  readonly expiresAt: string
+  readonly maxUses: number
+}
+
 export interface UsageResponse {
   readonly summary: {
     readonly requests: number

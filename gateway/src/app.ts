@@ -207,7 +207,10 @@ export async function createGatewayApp(options: {
       database.db,
       callback => database.inTransaction(callback)
     )
-    const organizationRepository = new OrganizationRepository(database.db)
+    const organizationRepository = new OrganizationRepository(
+      database.db,
+      callback => database.inTransaction(callback)
+    )
     const organizations = new OrganizationService(organizationRepository, digest, clock, ids)
     chatgptLogin = options.chatgptLogin ||
       new ProcessChatgptLoginService(config.dataRoot, ids, () => clock.now())

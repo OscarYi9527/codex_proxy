@@ -4,6 +4,10 @@ import type {
   DeviceSession,
   ManagementSession,
   ModelRouteResponse,
+  InvitationCreation,
+  InvitationSummary,
+  OrganizationAccountSummary,
+  OrganizationSummary,
   ProviderDiagnostics,
   ProviderListResponse,
   ProviderSummary,
@@ -35,6 +39,17 @@ export interface ManagementApiClient {
   }): Promise<void>
   revokeDevice(deviceSessionId: string, confirmCurrent: boolean): Promise<void>
   usage(accountId: string): Promise<UsageResponse>
+  organizations(): Promise<readonly OrganizationSummary[]>
+  createOrganization(name: string): Promise<OrganizationSummary>
+  organizationAccounts(): Promise<readonly OrganizationAccountSummary[]>
+  setAccountStatus(accountId: string, status: 'active' | 'disabled'): Promise<void>
+  invitations(): Promise<readonly InvitationSummary[]>
+  createInvitation(input: {
+    organizationId: string
+    expiresAt: string
+    maxUses: number
+  }): Promise<InvitationCreation>
+  revokeInvitation(invitationId: string): Promise<void>
   providers(): Promise<ProviderListResponse>
   createProvider(input: {
     kind: ProviderSummary['kind']
@@ -96,6 +111,26 @@ export const managementApi: ManagementApiClient = {
   usage: accountId => requestJson(
     `/api/v1/admin/accounts/${encodeURIComponent(accountId)}/usage`
   ),
+  organizations: () => requestJson('/api/v1/admin/organizations'),
+  createOrganization: name => requestJson('/api/v1/admin/organizations', {
+    method: 'POST',
+    body: JSON.stringify({ name })
+  }),
+  organizationAccounts: () => requestJson('/api/v1/admin/accounts'),
+  setAccountStatus: (accountId, status) =>
+    requestVoid(
+      `/api/v1/admin/accounts/${encodeURIComponent(accountId)}/${status === 'active' ? 'enable' : 'disable'}`,
+      { method: 'POST' }
+    ),
+  invitations: () => requestJson('/api/v1/admin/invitations'),
+  createInvitation: input => requestJson('/api/v1/admin/invitations', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  }),
+  revokeInvitation: invitationId =>
+    requestVoid(`/api/v1/admin/invitations/${encodeURIComponent(invitationId)}/revoke`, {
+      method: 'POST'
+    }),
   providers: () => requestJson('/api/v1/admin/providers'),
   createProvider: input => requestJson('/api/v1/admin/providers', {
     method: 'POST',

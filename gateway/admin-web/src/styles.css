@@ -229,13 +229,15 @@ dd {
   font-weight: 600;
 }
 
-.security-form input {
+.security-form input,
+.security-form select {
   min-width: 0;
   padding: 10px 11px;
   border: 1px solid #b8c5d8;
   border-radius: 8px;
   color: #172033;
   background: #fff;
+  font: inherit;
 }
 
 .security-form button {

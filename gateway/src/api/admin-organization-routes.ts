@@ -46,4 +46,10 @@ export function registerAdminOrganizationRoutes(app: FastifyInstance, options: {
     options.service.invitations(identity(request)))
   app.post('/api/v1/admin/invitations', { preHandler: options.authenticate }, request =>
     options.service.createInvitation(identity(request), body(request)))
+  app.post('/api/v1/admin/invitations/:invitationId/revoke', {
+    preHandler: options.authenticate
+  }, async (request, reply) => {
+    await options.service.revokeInvitation(identity(request), param(request, 'invitationId'))
+    await reply.status(204).send()
+  })
 }

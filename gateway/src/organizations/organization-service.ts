@@ -52,21 +52,45 @@ export class OrganizationService {
   }
 
   async setAccountStatus(identity: AccessIdentity, accountId: string, status: 'active' | 'disabled') {
-    const account = await this.repository.findAccount(accountId)
-    if (!account) throw new SafeError({ code: 'not_found', message: '账号不存在。', statusCode: 404 })
-    requireAccountManager(identity, account)
-    if (status === 'disabled') {
-      assertLevel1CanBeChanged(account, await this.repository.countActiveLevel1())
-    }
-    await this.repository.updateAccountStatus(accountId, status, this.clock.now().toISOString(), identity.accountId)
+    await this.repository.inTransaction(async repository => {
+      const account = await repository.findAccount(accountId)
+      if (!account) {
+        throw new SafeError({ code: 'not_found', message: '账号不存在。', statusCode: 404 })
+      }
+      requireAccountManager(identity, account)
+      if (status === 'disabled') {
+        assertLevel1CanBeChanged(account, await repository.countActiveLevel1())
+      }
+      if (!await repository.updateAccountStatus(
+        accountId,
+        status,
+        this.clock.now().toISOString(),
+        identity.accountId
+      )) {
+        throw new SafeError({
+          code: 'account_status_conflict',
+          message: '账号状态已经变化，请刷新后重试。',
+          statusCode: 409,
+          retryable: true
+        })
+      }
+    })
   }
 
   async invitations(identity: AccessIdentity) {
+    let invitations
     if (identity.role === 'level2' && identity.organizationId) {
-      return this.repository.listInvitations(identity.organizationId)
+      invitations = await this.repository.listInvitations(identity.organizationId)
+    } else {
+      requireLevel1(identity)
+      invitations = await this.repository.listInvitations()
     }
-    requireLevel1(identity)
-    return this.repository.listInvitations()
+    return invitations.map(invitation => (
+      invitation.status === 'active' &&
+      Date.parse(invitation.expiresAt) <= this.clock.nowMs()
+        ? { ...invitation, status: 'expired' as const }
+        : invitation
+    ))
   }
 
   async createInvitation(identity: AccessIdentity, input: Record<string, unknown>) {
@@ -74,8 +98,12 @@ export class OrganizationService {
     const organizationId = identity.role === 'level2' ? identity.organizationId : requestedOrganizationId
     if (!organizationId) throw invalid('必须指定组织。')
     requireOrganizationManager(identity, organizationId)
-    if (!await this.repository.findOrganization(organizationId)) {
+    const organization = await this.repository.findOrganization(organizationId)
+    if (!organization) {
       throw new SafeError({ code: 'not_found', message: '组织不存在。', statusCode: 404 })
+    }
+    if (organization.status !== 'active') {
+      throw new SafeError({ code: 'organization_disabled', message: '组织已被禁用。', statusCode: 409 })
     }
     const expiresAt = typeof input.expiresAt === 'string' ? input.expiresAt : ''
     const maxUses = Number(input.maxUses)
@@ -96,5 +124,25 @@ export class OrganizationService {
       now: this.clock.now().toISOString()
     })
     return { code, expiresAt, maxUses, organizationId }
+  }
+
+  async revokeInvitation(identity: AccessIdentity, invitationId: string): Promise<void> {
+    const invitations = await this.invitations(identity)
+    const invitation = invitations.find(candidate => candidate.id === invitationId)
+    if (!invitation) {
+      throw new SafeError({ code: 'not_found', message: '邀请码不存在。', statusCode: 404 })
+    }
+    requireOrganizationManager(identity, invitation.organizationId)
+    if (invitation.status !== 'active') {
+      throw new SafeError({ code: 'invitation_not_active', message: '邀请码已失效。', statusCode: 409 })
+    }
+    const revoked = await this.repository.revokeInvitation(
+      invitationId,
+      this.clock.now().toISOString(),
+      identity.accountId
+    )
+    if (!revoked) {
+      throw new SafeError({ code: 'invitation_not_active', message: '邀请码已失效。', statusCode: 409 })
+    }
   }
 }

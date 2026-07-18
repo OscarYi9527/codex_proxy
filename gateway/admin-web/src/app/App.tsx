@@ -3,6 +3,8 @@ import { AccountPage } from '../pages/account/AccountPage'
 import { CreditsPage } from '../pages/account/CreditsPage'
 import { SecurityPage } from '../pages/account/SecurityPage'
 import { UsagePage } from '../pages/account/UsagePage'
+import { InvitationsPage } from '../pages/organization/InvitationsPage'
+import { OrganizationPage } from '../pages/organization/OrganizationPage'
 import { DiagnosticsPage } from '../pages/system/DiagnosticsPage'
 import { ProvidersPage } from '../pages/system/ProvidersPage'
 import { managementApi, type ManagementApiClient } from './api-client'
@@ -12,7 +14,10 @@ import type {
   DeviceSession,
   ManagementRoute,
   ManagementSession,
+  InvitationSummary,
   ModelRouteResponse,
+  OrganizationAccountSummary,
+  OrganizationSummary,
   ProviderDiagnostics,
   ProviderListResponse,
   UsageResponse
@@ -23,6 +28,9 @@ interface LoadedManagementData {
   readonly account: AccountDetails
   readonly devices: readonly DeviceSession[]
   readonly usage: UsageResponse
+  readonly organizations: readonly OrganizationSummary[]
+  readonly organizationAccounts: readonly OrganizationAccountSummary[]
+  readonly invitations: readonly InvitationSummary[]
   readonly providers: ProviderListResponse | null
   readonly models: ModelRouteResponse | null
   readonly diagnostics: ProviderDiagnostics | null
@@ -71,6 +79,14 @@ export function App({
             client.devices(),
             client.usage(session.account.id)
           ])
+          const [organizations, organizationAccounts, invitations] =
+            session.account.role === 'user'
+              ? [[], [], []]
+              : await Promise.all([
+                  client.organizations(),
+                  client.organizationAccounts(),
+                  client.invitations()
+                ])
           const [providers, models, diagnostics] = session.account.role === 'level1'
             ? await Promise.all([
                 client.providers(),
@@ -84,6 +100,9 @@ export function App({
             account,
             devices,
             usage,
+            organizations,
+            organizationAccounts,
+            invitations,
             providers,
             models,
             diagnostics
@@ -139,6 +158,18 @@ export function App({
     setData(current => current ? { ...current, devices } : current)
   }
 
+  const refreshOrganizationData = async () => {
+    if (data.session.account.role === 'user') return
+    const [organizations, organizationAccounts, invitations] = await Promise.all([
+      client.organizations(),
+      client.organizationAccounts(),
+      client.invitations()
+    ])
+    setData(current => current
+      ? { ...current, organizations, organizationAccounts, invitations }
+      : current)
+  }
+
   return (
     <div className="management-layout">
       <aside>
@@ -181,6 +212,24 @@ export function App({
           />
         )}
         {route === 'usage' && <UsagePage usage={data.usage} />}
+        {route === 'organization' && (
+          <OrganizationPage
+            client={client}
+            role={data.session.account.role}
+            organizations={data.organizations}
+            accounts={data.organizationAccounts}
+            onRefresh={refreshOrganizationData}
+          />
+        )}
+        {route === 'invitations' && (
+          <InvitationsPage
+            client={client}
+            role={data.session.account.role}
+            organizations={data.organizations}
+            invitations={data.invitations}
+            onRefresh={refreshOrganizationData}
+          />
+        )}
         {route === 'providers' && data.providers && data.models && (
           <ProvidersPage
             client={client}
@@ -192,7 +241,7 @@ export function App({
         {route === 'diagnostics' && data.diagnostics && (
           <DiagnosticsPage diagnostics={data.diagnostics} />
         )}
-        {!['account', 'security', 'usage', 'providers', 'diagnostics'].includes(route) && (
+        {!['account', 'security', 'usage', 'organization', 'invitations', 'providers', 'diagnostics'].includes(route) && (
           <PlaceholderPage route={route} />
         )}
       </main>

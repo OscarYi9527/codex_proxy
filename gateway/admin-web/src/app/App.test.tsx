@@ -89,6 +89,48 @@ function clientFor(role: AccountRole): ManagementApiClient {
         completedAt: '2026-07-17T01:00:00.000Z'
       }]
     }),
+    organizations: jest.fn(async () => [{
+      id: 'org_test',
+      name: '示例组织',
+      status: 'active' as const,
+      updatedAt: '2026-07-17T01:00:00.000Z',
+      version: 1
+    }]),
+    createOrganization: jest.fn(async (name: string) => ({
+      id: 'org_created',
+      name,
+      status: 'active' as const,
+      updatedAt: '2026-07-17T01:00:00.000Z',
+      version: 1
+    })),
+    organizationAccounts: jest.fn(async () => [{
+      id: 'acct_org_user',
+      loginName: null,
+      email: 'member@example.test',
+      role: 'user' as const,
+      status: 'active' as const,
+      organizationId: 'org_test',
+      expiresAt: null,
+      version: 1
+    }]),
+    setAccountStatus: jest.fn(async () => undefined),
+    invitations: jest.fn(async () => [{
+      id: 'inv_test',
+      organizationId: 'org_test',
+      expiresAt: '2026-08-01T00:00:00.000Z',
+      maxUses: 10,
+      useCount: 2,
+      status: 'active' as const,
+      createdAt: '2026-07-17T01:00:00.000Z',
+      revokedAt: null
+    }]),
+    createInvitation: jest.fn(async (
+      input: Parameters<ManagementApiClient['createInvitation']>[0]
+    ) => ({
+      code: 'invite-only-once',
+      ...input
+    })),
+    revokeInvitation: jest.fn(async () => undefined),
     providers: jest.fn(async () => ({
       warning: 'plaintext-v1 is for loopback development only',
       providers: [{
@@ -223,6 +265,17 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
     expect(client.providers).not.toHaveBeenCalled()
     expect(client.models).not.toHaveBeenCalled()
     expect(client.diagnostics).not.toHaveBeenCalled()
+  })
+
+  it('shows organization users and invitations only for an authorized administrator', async () => {
+    render(<App client={clientFor('level2')} />)
+    bootstrap('organization')
+    expect(await screen.findByText('member@example.test')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '创建组织' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '邀请码' }))
+    expect(await screen.findByText(/2\/10/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '生成邀请码' })).toBeInTheDocument()
   })
 
   it('submits password changes from the security page without retaining credentials in the DOM', async () => {

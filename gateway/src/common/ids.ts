@@ -5,6 +5,7 @@ export type IdPrefix =
   | 'err'
   | 'acct'
   | 'org'
+  | 'inv'
   | 'ds'
   | 'rt'
   | 'atx'

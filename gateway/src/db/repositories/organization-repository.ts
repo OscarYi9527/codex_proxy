@@ -37,14 +37,18 @@ export interface InvitationSummary {
 export class OrganizationRepository {
   constructor(
     private readonly db: DatabaseExecutor,
-    private readonly transaction?: <T>(
-      operation: (repository: OrganizationRepository) => Promise<T>
+    private readonly transactionRunner?: <T>(
+      operation: (transaction: Transaction<GatewayDatabase>) => Promise<T>
     ) => Promise<T>
   ) {}
 
   inTransaction<T>(operation: (repository: OrganizationRepository) => Promise<T>): Promise<T> {
-    if (!this.transaction) throw new Error('Organization repository transaction is unavailable')
-    return this.transaction(operation)
+    if (!this.transactionRunner) {
+      throw new Error('Organization repository transaction is unavailable')
+    }
+    return this.transactionRunner(transaction =>
+      operation(new OrganizationRepository(transaction))
+    )
   }
 
   async listOrganizations(): Promise<OrganizationSummary[]> {

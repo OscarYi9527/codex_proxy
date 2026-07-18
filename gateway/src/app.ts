@@ -45,14 +45,20 @@ import {
   managementSessionAuthenticator,
   registerWebviewRoutes
 } from './api/webview-routes.js'
-import { registerAccountUsageRoutes } from './api/account-usage-routes.js'
 import { registerManagementShell } from './api/management-shell.js'
 import { ProviderRepository } from './db/repositories/provider-repository.js'
 import { ProviderService } from './providers/provider-service.js'
 import { registerAdminProviderRoutes } from './api/admin-provider-routes.js'
 import { registerAdminOrganizationRoutes } from './api/admin-organization-routes.js'
+import { registerAdminCreditRoutes } from './api/admin-credit-routes.js'
 import { OrganizationRepository } from './db/repositories/organization-repository.js'
 import { OrganizationService } from './organizations/organization-service.js'
+import { CreditRepository } from './db/repositories/credit-repository.js'
+import { CreditService } from './credits/credit-service.js'
+import { RateService } from './credits/rate-service.js'
+import { RiskEstimator } from './credits/risk-estimator.js'
+import { TurnRiskService } from './credits/turn-risk-service.js'
+import { SettlementService } from './credits/settlement-service.js'
 import {
   ProcessChatgptLoginService,
   type ChatgptLoginCoordinator
@@ -198,7 +204,6 @@ export async function createGatewayApp(options: {
       clock,
       ids
     )
-    const accounts = new AccountService(repository, passwords, tokens, clock)
     const providerAdapter = options.providerAdapter || new StandaloneRouteAdapter({
       storageRoot: config.dataRoot
     })
@@ -212,6 +217,20 @@ export async function createGatewayApp(options: {
       callback => database.inTransaction(callback)
     )
     const organizations = new OrganizationService(organizationRepository, digest, clock, ids)
+    const creditRepository = new CreditRepository(
+      database.db,
+      callback => database.inTransaction(callback)
+    )
+    const credits = new CreditService(creditRepository, clock, ids)
+    const rates = new RateService(creditRepository, clock, ids)
+    const risks = new TurnRiskService(
+      creditRepository,
+      credits,
+      new RiskEstimator(rates),
+      clock
+    )
+    const settlements = new SettlementService(creditRepository, rates, clock, ids)
+    const accounts = new AccountService(repository, passwords, tokens, clock, credits)
     chatgptLogin = options.chatgptLogin ||
       new ProcessChatgptLoginService(config.dataRoot, ids, () => clock.now())
     const providerService = new ProviderService(
@@ -226,7 +245,9 @@ export async function createGatewayApp(options: {
     const models = new ModelCatalog(providerAdapter)
     const responses = new ResponsesGateway(
       new RequestPreflight(tokens, models),
-      providerAdapter
+      providerAdapter,
+      risks,
+      settlements
     )
     if (!options.bootstrapSink && await repository.countAccounts() === 0) {
       throw new Error(
@@ -257,17 +278,19 @@ export async function createGatewayApp(options: {
       accounts
     })
     registerWebviewRoutes(app, webviews)
-    registerAccountUsageRoutes(app, {
-      authenticate: authenticateAccount,
-      repository: webviewRepository
-    })
     registerAdminProviderRoutes(app, {
       authenticate: authenticateAccount,
-      service: providerService
+      service: providerService,
+      rates
     })
     registerAdminOrganizationRoutes(app, {
       authenticate: authenticateAccount,
       service: organizations
+    })
+    registerAdminCreditRoutes(app, {
+      authenticate: authenticateAccount,
+      credits,
+      rates
     })
     registerV1Routes(app, { verifier: v1Verifier, models, responses })
   }

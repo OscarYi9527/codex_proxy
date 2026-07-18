@@ -7,6 +7,7 @@ import type {
   InvitationCreation,
   InvitationSummary,
   OrganizationAccountSummary,
+  OrganizationCreditView,
   OrganizationSummary,
   ProviderDiagnostics,
   ProviderListResponse,
@@ -54,6 +55,13 @@ export interface ManagementApiClient {
     maxUses: number
   }): Promise<InvitationCreation>
   revokeInvitation(invitationId: string): Promise<void>
+  organizationCredits(organizationId: string): Promise<OrganizationCreditView>
+  setMonthlyCredits(organizationId: string, allocatedCredits: string): Promise<void>
+  setUserCreditAllocation(accountId: string, allocatedCredits: string): Promise<void>
+  setRiskPolicy(organizationId: string, input: {
+    maxOverdraftPerTurn: string
+    maxCumulativeRisk: string
+  }): Promise<void>
   providers(): Promise<ProviderListResponse>
   createProvider(input: {
     kind: ProviderSummary['kind']
@@ -77,6 +85,9 @@ export interface ManagementApiClient {
       upstreamModelId: string
       priority: number
       enabled: boolean
+      inputCreditPerToken?: string
+      outputCreditPerToken?: string
+      multiplier?: string
     }
   ): Promise<void>
   diagnostics(): Promise<ProviderDiagnostics>
@@ -140,6 +151,33 @@ export const managementApi: ManagementApiClient = {
     requestVoid(`/api/v1/admin/invitations/${encodeURIComponent(invitationId)}/revoke`, {
       method: 'POST'
     }),
+  organizationCredits: organizationId => requestJson(
+    `/api/v1/admin/organizations/${encodeURIComponent(organizationId)}/credit-periods/current`
+  ),
+  setMonthlyCredits: (organizationId, allocatedCredits) =>
+    requestVoid(
+      `/api/v1/admin/organizations/${encodeURIComponent(organizationId)}/monthly-credits`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ allocatedCredits })
+      }
+    ),
+  setUserCreditAllocation: (accountId, allocatedCredits) =>
+    requestVoid(
+      `/api/v1/admin/accounts/${encodeURIComponent(accountId)}/credit-allocation`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ allocatedCredits })
+      }
+    ),
+  setRiskPolicy: (organizationId, input) =>
+    requestVoid(
+      `/api/v1/admin/organizations/${encodeURIComponent(organizationId)}/risk-policy`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(input)
+      }
+    ),
   providers: () => requestJson('/api/v1/admin/providers'),
   createProvider: input => requestJson('/api/v1/admin/providers', {
     method: 'POST',

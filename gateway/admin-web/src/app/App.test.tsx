@@ -37,7 +37,8 @@ function clientFor(role: AccountRole): ManagementApiClient {
       { id: 'security', label: '设备与安全' },
       { id: 'usage', label: '使用记录' },
       { id: 'organization', label: '组织用户' },
-      { id: 'invitations', label: '邀请码' }
+      { id: 'invitations', label: '邀请码' },
+      { id: 'credits', label: '积分管理' }
     ],
     level1: [
       { id: 'account', label: '我的账号' },
@@ -45,6 +46,7 @@ function clientFor(role: AccountRole): ManagementApiClient {
       { id: 'usage', label: '使用记录' },
       { id: 'organization', label: '组织用户' },
       { id: 'invitations', label: '邀请码' },
+      { id: 'credits', label: '积分管理' },
       { id: 'providers', label: 'Provider 与模型' },
       { id: 'diagnostics', label: '系统诊断' }
     ]
@@ -144,6 +146,44 @@ function clientFor(role: AccountRole): ManagementApiClient {
       ...input
     })),
     revokeInvitation: jest.fn(async () => undefined),
+    organizationCredits: jest.fn(async () => ({
+      organization: { id: 'org_test', name: '示例组织' },
+      period: {
+        id: 'period_test',
+        periodStart: '2026-07-01T00:00:00.000Z',
+        periodEnd: '2026-08-01T00:00:00.000Z',
+        allocated: '1000.000000',
+        settled: '12.500000',
+        available: '987.500000'
+      },
+      users: [{
+        accountId: 'acct_org_user',
+        display: 'member@example.test',
+        allocated: '100.000000',
+        settled: '12.500000',
+        available: '87.500000',
+        requests: 1,
+        inputTokens: 20,
+        outputTokens: 10
+      }],
+      usage: {
+        requests: 1,
+        inputTokens: 20,
+        outputTokens: 10,
+        settledCredits: '12.500000'
+      },
+      ...(role === 'level1' ? {
+        riskPolicy: {
+          maxOverdraftPerTurn: '100.000000',
+          maxCumulativeRisk: '500.000000',
+          activeRiskCredits: '0.000000'
+        },
+        modelRates: []
+      } : {})
+    })),
+    setMonthlyCredits: jest.fn(async () => undefined),
+    setUserCreditAllocation: jest.fn(async () => undefined),
+    setRiskPolicy: jest.fn(async () => undefined),
     providers: jest.fn(async () => ({
       warning: 'plaintext-v1 is for loopback development only',
       providers: [{

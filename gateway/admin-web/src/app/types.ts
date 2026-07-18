@@ -6,6 +6,7 @@ export type ManagementRoute =
   | 'security'
   | 'organization'
   | 'invitations'
+  | 'credits'
   | 'usage'
   | 'providers'
   | 'diagnostics'
@@ -118,6 +119,47 @@ export interface UsageResponse {
   }>
 }
 
+export interface ModelRateSummary {
+  readonly modelId: string
+  readonly inputCreditPerToken: string
+  readonly outputCreditPerToken: string
+  readonly multiplier: string
+}
+
+export interface OrganizationCreditView {
+  readonly organization: { readonly id: string; readonly name: string }
+  readonly period: {
+    readonly id: string
+    readonly periodStart: string
+    readonly periodEnd: string
+    readonly allocated: string
+    readonly settled: string
+    readonly available: string
+  }
+  readonly users: ReadonlyArray<{
+    readonly accountId: string
+    readonly display: string
+    readonly allocated: string
+    readonly settled: string
+    readonly available: string
+    readonly requests: number
+    readonly inputTokens: number
+    readonly outputTokens: number
+  }>
+  readonly usage: {
+    readonly requests: number
+    readonly inputTokens: number
+    readonly outputTokens: number
+    readonly settledCredits: string
+  }
+  readonly riskPolicy?: {
+    readonly maxOverdraftPerTurn: string
+    readonly maxCumulativeRisk: string
+    readonly activeRiskCredits: string
+  }
+  readonly modelRates?: readonly ModelRateSummary[]
+}
+
 export interface ProviderCredentialSummary {
   readonly id: string
   readonly maskedPreview: string
@@ -157,6 +199,7 @@ export interface ModelRouteSummary {
 
 export interface ModelRouteResponse {
   readonly models: readonly ModelRouteSummary[]
+  readonly rates?: readonly ModelRateSummary[]
 }
 
 export interface ChatgptLoginStatus {

@@ -19,6 +19,7 @@ export type ManagementRoute =
   | 'security'
   | 'organization'
   | 'invitations'
+  | 'credits'
   | 'usage'
   | 'providers'
   | 'diagnostics'
@@ -39,7 +40,8 @@ function navigationForRole(role: AccountRole): readonly ManagementNavigationItem
   const organization = [
     ...USER_NAVIGATION,
     { id: 'organization' as const, label: '组织用户' },
-    { id: 'invitations' as const, label: '邀请码' }
+    { id: 'invitations' as const, label: '邀请码' },
+    { id: 'credits' as const, label: '积分管理' }
   ]
   return role === 'level2'
     ? organization

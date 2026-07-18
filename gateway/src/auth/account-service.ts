@@ -4,6 +4,8 @@ import { AuthRepository } from '../db/repositories/auth-repository.js'
 import { PasswordService } from './password-service.js'
 import { TokenService } from './token-service.js'
 import type { AccessIdentity, IssuedTokenSet, ProductAccount } from './types.js'
+import type { CreditService } from '../credits/credit-service.js'
+import { percentage } from '../credits/decimal.js'
 
 const TEMPORARY_PASSWORD_TTL_MS = 24 * 60 * 60 * 1000
 
@@ -40,7 +42,8 @@ export class AccountService {
     private readonly repository: AuthRepository,
     private readonly passwords: PasswordService,
     private readonly tokens: TokenService,
-    private readonly clock: Clock
+    private readonly clock: Clock,
+    private readonly credits?: CreditService
   ) {}
 
   async status(identity: AccessIdentity, currentModel: string | null): Promise<{
@@ -57,6 +60,13 @@ export class AccountService {
   }> {
     const account = await this.requireAccount(identity.accountId)
     const state = accountState(account, this.clock.nowMs())
+    const credits = this.credits
+      ? await this.credits.accountCredits(identity.accountId)
+      : {
+          allocated: '0.000000',
+          settled: '0.000000',
+          available: '0.000000'
+        }
     return {
       state,
       checkedAt: this.clock.now().toISOString(),
@@ -64,8 +74,8 @@ export class AccountService {
       safeSummary: {
         accountDisplay: account.email || account.loginName || 'AI Editor 账号',
         currentModel,
-        availableCredits: '0.000000',
-        usedCreditsPercent: '0'
+        availableCredits: credits.available,
+        usedCreditsPercent: percentage(credits.settled, credits.allocated)
       },
       actions: state === 'ready' ? [] : ['openAccount']
     }
@@ -92,6 +102,15 @@ export class AccountService {
     }
   }> {
     const account = await this.requireAccount(identity.accountId)
+    const credits = this.credits
+      ? await this.credits.accountCredits(identity.accountId)
+      : {
+          periodStart: null,
+          periodEnd: null,
+          allocated: '0.000000',
+          settled: '0.000000',
+          available: '0.000000'
+        }
     return {
       account: {
         id: account.id,
@@ -106,13 +125,7 @@ export class AccountService {
         mustChangePassword: account.mustChangePassword,
         mustProvideEmail: account.mustProvideEmail
       },
-      credits: {
-        periodStart: null,
-        periodEnd: null,
-        allocated: '0.000000',
-        settled: '0.000000',
-        available: '0.000000'
-      }
+      credits
     }
   }
 

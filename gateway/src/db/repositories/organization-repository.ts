@@ -154,7 +154,7 @@ export class OrganizationRepository {
       id: input.id,
       name: input.name,
       status: 'active',
-      billing_timezone: 'UTC',
+      billing_timezone: 'Asia/Shanghai',
       audit_retention_days: 30,
       overdraft_per_turn_override: null,
       cumulative_risk_override: null,

@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { SafeError } from '../common/errors.js'
 import type { ProviderService } from '../providers/provider-service.js'
+import type { RateService } from '../credits/rate-service.js'
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -39,6 +40,7 @@ function identity(request: FastifyRequest) {
 export function registerAdminProviderRoutes(app: FastifyInstance, options: {
   authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>
   service: ProviderService
+  rates: RateService
 }): void {
   app.get('/api/v1/admin/providers', {
     preHandler: options.authenticate
@@ -105,15 +107,48 @@ export function registerAdminProviderRoutes(app: FastifyInstance, options: {
 
   app.get('/api/v1/admin/models', {
     preHandler: options.authenticate
-  }, request => options.service.models(identity(request)))
+  }, async request => {
+    const actor = identity(request)
+    return {
+      ...await options.service.models(actor),
+      rates: await options.rates.visibleRates(actor)
+    }
+  })
 
   app.put('/api/v1/admin/models/:modelId', {
     preHandler: options.authenticate
-  }, request => options.service.putModel(
-    identity(request),
-    param(request, 'modelId'),
-    asRecord(request.body)
-  ))
+  }, async request => {
+    const actor = identity(request)
+    const modelId = param(request, 'modelId')
+    const input = asRecord(request.body)
+    const route = await options.service.putModel(actor, modelId, input)
+    const hasRate = [
+      'inputCreditPerToken',
+      'outputCreditPerToken',
+      'multiplier'
+    ].some(key => input[key] !== undefined)
+    const rate = hasRate
+      ? await options.rates.setModelRate(actor, {
+          modelId,
+          inputCreditPerToken:
+            typeof input['inputCreditPerToken'] === 'number' ||
+            typeof input['inputCreditPerToken'] === 'string'
+              ? input['inputCreditPerToken']
+              : '',
+          outputCreditPerToken:
+            typeof input['outputCreditPerToken'] === 'number' ||
+            typeof input['outputCreditPerToken'] === 'string'
+              ? input['outputCreditPerToken']
+              : '',
+          multiplier:
+            typeof input['multiplier'] === 'number' ||
+            typeof input['multiplier'] === 'string'
+              ? input['multiplier']
+              : ''
+        })
+      : undefined
+    return { ...route, ...(rate ? { rate } : {}) }
+  })
 
   app.get('/api/v1/admin/diagnostics', {
     preHandler: options.authenticate

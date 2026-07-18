@@ -5,6 +5,7 @@ import { SecurityPage } from '../pages/account/SecurityPage'
 import { UsagePage } from '../pages/account/UsagePage'
 import { InvitationsPage } from '../pages/organization/InvitationsPage'
 import { OrganizationPage } from '../pages/organization/OrganizationPage'
+import { CreditManagementPage } from '../pages/credits/CreditManagementPage'
 import { DiagnosticsPage } from '../pages/system/DiagnosticsPage'
 import { ProvidersPage } from '../pages/system/ProvidersPage'
 import { managementApi, type ManagementApiClient } from './api-client'
@@ -18,6 +19,7 @@ import type {
   InvitationSummary,
   ModelRouteResponse,
   OrganizationAccountSummary,
+  OrganizationCreditView,
   OrganizationSummary,
   ProviderDiagnostics,
   ProviderListResponse,
@@ -32,6 +34,7 @@ interface LoadedManagementData {
   readonly organizations: readonly OrganizationSummary[]
   readonly organizationAccounts: readonly OrganizationAccountSummary[]
   readonly invitations: readonly InvitationSummary[]
+  readonly creditViews: readonly OrganizationCreditView[]
   readonly providers: ProviderListResponse | null
   readonly models: ModelRouteResponse | null
   readonly diagnostics: ProviderDiagnostics | null
@@ -42,7 +45,8 @@ function PlaceholderPage({ route }: { readonly route: ManagementRoute }) {
     organization: '组织用户',
     invitations: '邀请码',
     providers: 'Provider 与模型',
-    diagnostics: '系统诊断'
+    diagnostics: '系统诊断',
+    credits: '积分管理'
   }
   return (
     <section className="content-card">
@@ -88,6 +92,13 @@ export function App({
                   client.organizationAccounts(),
                   client.invitations()
                 ])
+          const creditViews = session.account.role === 'user'
+            ? []
+            : await Promise.all(
+                organizations.map(organization =>
+                  client.organizationCredits(organization.id)
+                )
+              )
           const [providers, models, diagnostics] = session.account.role === 'level1'
             ? await Promise.all([
                 client.providers(),
@@ -104,6 +115,7 @@ export function App({
             organizations,
             organizationAccounts,
             invitations,
+            creditViews,
             providers,
             models,
             diagnostics
@@ -166,8 +178,17 @@ export function App({
       client.organizationAccounts(),
       client.invitations()
     ])
+    const creditViews = await Promise.all(
+      organizations.map(organization => client.organizationCredits(organization.id))
+    )
     setData(current => current
-      ? { ...current, organizations, organizationAccounts, invitations }
+      ? {
+          ...current,
+          organizations,
+          organizationAccounts,
+          invitations,
+          creditViews
+        }
       : current)
   }
 
@@ -231,6 +252,15 @@ export function App({
             onRefresh={refreshOrganizationData}
           />
         )}
+        {route === 'credits' && (
+          <CreditManagementPage
+            client={client}
+            role={data.session.account.role}
+            views={data.creditViews}
+            models={data.models?.models}
+            onRefresh={refreshOrganizationData}
+          />
+        )}
         {route === 'providers' && data.providers && data.models && (
           <ProvidersPage
             client={client}
@@ -242,7 +272,7 @@ export function App({
         {route === 'diagnostics' && data.diagnostics && (
           <DiagnosticsPage diagnostics={data.diagnostics} />
         )}
-        {!['account', 'security', 'usage', 'organization', 'invitations', 'providers', 'diagnostics'].includes(route) && (
+        {!['account', 'security', 'usage', 'organization', 'invitations', 'credits', 'providers', 'diagnostics'].includes(route) && (
           <PlaceholderPage route={route} />
         )}
       </main>

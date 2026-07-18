@@ -12,6 +12,8 @@ export type IdPrefix =
   | 'lh'
   | 'wv'
   | 'turn'
+  | 'period'
+  | 'rate'
   | 'usage'
   | 'provider'
   | 'cred'

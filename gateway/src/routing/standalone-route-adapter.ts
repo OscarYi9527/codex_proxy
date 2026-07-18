@@ -15,18 +15,26 @@ export interface SafeModelList {
   readonly data: SafeModel[]
 }
 
+export interface ProviderForwardResult {
+  readonly providerId?: string
+  readonly usage?: {
+    readonly inputTokens: number
+    readonly outputTokens: number
+  }
+}
+
 export interface ProviderRouteAdapter {
   listModels(): Promise<SafeModelList>
   forwardResponses(
     request: FastifyRequest,
     reply: FastifyReply,
     body: Record<string, unknown>
-  ): Promise<void>
+  ): Promise<void | ProviderForwardResult>
   forwardChatCompletions?(
     request: FastifyRequest,
     reply: FastifyReply,
     body: Record<string, unknown>
-  ): Promise<void>
+  ): Promise<void | ProviderForwardResult>
   configureProviders?(configuration: GatewayProviderRuntimeConfiguration): Promise<void>
   safeDiagnostics?(): Promise<Record<string, unknown>>
 }
@@ -138,6 +146,8 @@ class MemoryResponse extends ResponseBase {
 }
 
 class ForwardResponse extends ResponseBase {
+  #usageCapture = ''
+
   constructor(private readonly target: FastifyReply['raw']) {
     super()
   }
@@ -162,6 +172,14 @@ class ForwardResponse extends ResponseBase {
     _encoding: BufferEncoding,
     callback: (error?: Error | null) => void
   ): void {
+    if (this.#usageCapture.length < 128 * 1024) {
+      this.#usageCapture += Buffer.isBuffer(chunk)
+        ? chunk.toString('utf8')
+        : chunk
+      if (this.#usageCapture.length > 128 * 1024) {
+        this.#usageCapture = this.#usageCapture.slice(-128 * 1024)
+      }
+    }
     if (this.target.destroyed || this.target.writableEnded) {
       callback()
       return
@@ -173,9 +191,60 @@ class ForwardResponse extends ResponseBase {
     if (!this.target.destroyed && !this.target.writableEnded) this.target.end()
     callback()
   }
+
+  result(): ProviderForwardResult {
+    const candidates: unknown[] = []
+    try {
+      candidates.push(JSON.parse(this.#usageCapture))
+    } catch {
+      for (const line of this.#usageCapture.split(/\r?\n/)) {
+        if (!line.startsWith('data:')) continue
+        const data = line.slice(5).trim()
+        if (!data || data === '[DONE]') continue
+        try {
+          candidates.push(JSON.parse(data))
+        } catch {
+          // Ignore partial or non-JSON SSE data while preserving the stream.
+        }
+      }
+    }
+    for (const candidate of candidates.reverse()) {
+      const usage = findUsage(candidate)
+      if (usage) {
+        this.#usageCapture = ''
+        return { usage }
+      }
+    }
+    this.#usageCapture = ''
+    return {}
+  }
 }
 
 type StandaloneHandler = (request: SyntheticRequest, response: ResponseBase) => Promise<void>
+
+function findUsage(value: unknown): ProviderForwardResult['usage'] | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const object = value as Record<string, unknown>
+  const usage = object['usage']
+  if (usage && typeof usage === 'object') {
+    const record = usage as Record<string, unknown>
+    const inputTokens = Number(record['input_tokens'] ?? record['prompt_tokens'])
+    const outputTokens = Number(record['output_tokens'] ?? record['completion_tokens'])
+    if (
+      Number.isSafeInteger(inputTokens) &&
+      inputTokens >= 0 &&
+      Number.isSafeInteger(outputTokens) &&
+      outputTokens >= 0
+    ) {
+      return { inputTokens, outputTokens }
+    }
+  }
+  for (const nested of Object.values(object)) {
+    const found = findUsage(nested)
+    if (found) return found
+  }
+  return undefined
+}
 
 export class StandaloneRouteAdapter implements ProviderRouteAdapter {
   #handler: StandaloneHandler | null = null
@@ -249,16 +318,16 @@ export class StandaloneRouteAdapter implements ProviderRouteAdapter {
     request: FastifyRequest,
     reply: FastifyReply,
     body: Record<string, unknown>
-  ): Promise<void> {
-    await this.forward('/v1/responses', request, reply, body)
+  ): Promise<ProviderForwardResult> {
+    return this.forward('/v1/responses', request, reply, body)
   }
 
   async forwardChatCompletions(
     request: FastifyRequest,
     reply: FastifyReply,
     body: Record<string, unknown>
-  ): Promise<void> {
-    await this.forward('/v1/chat/completions', request, reply, body)
+  ): Promise<ProviderForwardResult> {
+    return this.forward('/v1/chat/completions', request, reply, body)
   }
 
   private async forward(
@@ -266,7 +335,7 @@ export class StandaloneRouteAdapter implements ProviderRouteAdapter {
     request: FastifyRequest,
     reply: FastifyReply,
     body: Record<string, unknown>
-  ): Promise<void> {
+  ): Promise<ProviderForwardResult> {
     reply.hijack()
     const response = new ForwardResponse(reply.raw)
     await this.handler()(new SyntheticRequest({
@@ -277,6 +346,13 @@ export class StandaloneRouteAdapter implements ProviderRouteAdapter {
       },
       body
     }), response)
+    if (!response.writableEnded) {
+      await new Promise<void>((resolve, reject) => {
+        response.once('finish', resolve)
+        response.once('error', reject)
+      })
+    }
+    return response.result()
   }
 
   private async requestMemory(method: string, url: string): Promise<MemoryResponse> {

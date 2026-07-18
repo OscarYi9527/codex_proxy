@@ -244,6 +244,100 @@ dd {
   gap: 14px;
 }
 
+.credit-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.credit-card-header h2,
+.credit-card-header p {
+  margin: 0;
+}
+
+.credit-card-header p {
+  margin-top: 7px;
+}
+
+.credit-policy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 18px 0 24px;
+  padding: 16px;
+  border: 1px solid #d8e3f2;
+  border-radius: 12px;
+  background: #f6f9fd;
+}
+
+.credit-policy-grid label,
+.credit-allocation-control,
+.rate-controls {
+  display: grid;
+  gap: 8px;
+}
+
+.credit-policy-grid label {
+  color: #43516a;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.credit-policy-grid button,
+.credit-allocation-control button,
+.rate-controls button {
+  padding: 8px 10px;
+  border: 1px solid #155eb9;
+  border-radius: 8px;
+  color: #fff;
+  background: #1769e0;
+  cursor: pointer;
+}
+
+.risk-occupancy {
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 10px;
+  color: #583c00;
+  background: #fff4d8;
+}
+
+.risk-occupancy span {
+  font-size: 12px;
+}
+
+.risk-occupancy strong {
+  font-size: 20px;
+}
+
+.credit-user-list {
+  margin-top: 12px;
+}
+
+.credit-allocation-control {
+  grid-template-columns: minmax(110px, 150px) auto;
+  align-items: end;
+}
+
+.credit-allocation-control input,
+.rate-controls input {
+  margin: 0;
+}
+
+.model-rate-list li {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.rate-controls {
+  width: 100%;
+  grid-template-columns: repeat(3, minmax(120px, 1fr)) auto;
+}
+
 .security-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -452,6 +546,12 @@ dd {
   }
 
   .account-role-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .credit-allocation-control,
+  .rate-controls {
+    width: 100%;
     grid-template-columns: 1fr;
   }
 

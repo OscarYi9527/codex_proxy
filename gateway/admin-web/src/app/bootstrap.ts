@@ -5,6 +5,7 @@ const ROUTES = new Set<ManagementRoute>([
   'security',
   'organization',
   'invitations',
+  'credits',
   'usage',
   'providers',
   'diagnostics'

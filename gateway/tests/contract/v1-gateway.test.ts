@@ -107,9 +107,204 @@ describe('Gateway authenticated model and Responses contract (T039/T043-T046)', 
     expect(unavailable.statusCode).toBe(409)
     expect(unavailable.json().error.code).toBe('provider_unavailable')
   })
+
+  it('rejects invalid bodies, unsupported compatibility routes and safe adapter failures', async () => {
+    const commonHeaders = {
+      authorization: `Bearer ${accessToken}`,
+      'x-ai-editor-device-session': deviceSessionId
+    }
+    const invalidBody = await fixture.gateway.app.inject({
+      method: 'POST',
+      url: '/v1/responses',
+      headers: {
+        ...commonHeaders,
+        'x-ai-editor-turn-id': 'turn_invalid_body_1234'
+      },
+      payload: []
+    })
+    expect(invalidBody.statusCode).toBe(400)
+    expect(invalidBody.json().error.code).toBe('invalid_request')
+
+    const unsupportedChat = await fixture.gateway.app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: {
+        ...commonHeaders,
+        'x-ai-editor-turn-id': 'turn_unsupported_chat_1234'
+      },
+      payload: { model: 'real-test-model', messages: [] }
+    })
+    expect(unsupportedChat.statusCode).toBe(409)
+    expect(unsupportedChat.json().error.code).toBe('provider_unavailable')
+
+    const adapterFailure = await fixture.gateway.app.inject({
+      method: 'POST',
+      url: '/v1/responses',
+      headers: {
+        ...commonHeaders,
+        'x-ai-editor-turn-id': 'turn_adapter_failure_1234'
+      },
+      payload: { model: 'real-test-model', input: 'hello' }
+    })
+    expect(adapterFailure.statusCode).toBe(500)
+    expect(adapterFailure.json().error.code).toBe('internal_error')
+  })
 })
 
 describe('Gateway Responses stream compatibility', () => {
+  it('reserves risk and settles upstream usage for an organization account', async () => {
+    const now = '2026-07-17T00:00:00.000Z'
+    const fixture = await createRealGatewayFixture({
+      providerAdapter: {
+        async listModels() {
+          return {
+            object: 'list',
+            data: [{ id: 'billable-model', object: 'model', owned_by: 'test' }]
+          }
+        },
+        async forwardResponses(_request, reply) {
+          await reply.status(200).send({
+            id: 'response_billable',
+            usage: { input_tokens: 10, output_tokens: 20 }
+          })
+          return {
+            providerId: 'provider_billable',
+            usage: { inputTokens: 10, outputTokens: 20 }
+          }
+        }
+      }
+    })
+    try {
+      const initial = await loginBootstrapAndExchange(fixture)
+      const changed = await fixture.gateway.app.inject({
+        method: 'POST',
+        url: '/api/v1/account/password/change',
+        headers: { authorization: `Bearer ${initial.accessToken}` },
+        payload: {
+          currentPassword: fixture.bootstrap.password,
+          newPassword: 'PermanentPassword123',
+          email: 'billing@example.test'
+        }
+      })
+      const changedTokens = changed.json()
+      const accountId = (await fixture.database.db.selectFrom('accounts')
+        .select('id')
+        .where('role', '=', 'level1')
+        .executeTakeFirstOrThrow()).id
+      await fixture.database.db.insertInto('organizations').values({
+        id: 'org_billable',
+        name: 'Billable organization',
+        status: 'active',
+        billing_timezone: 'Asia/Shanghai',
+        audit_retention_days: 30,
+        overdraft_per_turn_override: null,
+        cumulative_risk_override: null,
+        created_at: now,
+        updated_at: now,
+        version: 1
+      }).execute()
+      await fixture.database.db.updateTable('accounts')
+        .set({ organization_id: 'org_billable', version: 2 })
+        .where('id', '=', accountId)
+        .execute()
+      await fixture.database.db.insertInto('providers').values({
+        id: 'provider_billable',
+        kind: 'relay',
+        display_name: 'Billable provider',
+        status: 'active',
+        config_json: '{}',
+        created_at: now,
+        updated_at: now,
+        version: 1
+      }).execute()
+      await fixture.database.db.insertInto('model_routes').values({
+        id: 'route_billable',
+        public_model_id: 'billable-model',
+        provider_id: 'provider_billable',
+        upstream_model_id: 'billable-model',
+        priority: 1,
+        enabled: 1,
+        policy_json: '{}',
+        created_at: now,
+        updated_at: now,
+        version: 1
+      }).execute()
+      await fixture.database.db.insertInto('model_rates').values({
+        id: 'rate_billable',
+        model_id: 'billable-model',
+        input_credit_per_token: '0.001000',
+        output_credit_per_token: '0.002000',
+        multiplier: '1.000000',
+        effective_from: now,
+        effective_to: null,
+        visible_to: 'level1'
+      }).execute()
+
+      const refreshed = await fixture.gateway.app.inject({
+        method: 'POST',
+        url: '/api/v1/oauth/token',
+        payload: {
+          grantType: 'refresh_token',
+          clientId: 'ai-editor-edge',
+          refreshToken: changedTokens.refreshToken,
+          deviceSessionId: changedTokens.deviceSessionId
+        }
+      })
+      const tokens = refreshed.json()
+      const adminHeaders = {
+        authorization: `Bearer ${tokens.accessToken}`
+      }
+      expect((await fixture.gateway.app.inject({
+        method: 'PUT',
+        url: '/api/v1/admin/organizations/org_billable/monthly-credits',
+        headers: adminHeaders,
+        payload: { allocatedCredits: '100' }
+      })).statusCode).toBe(200)
+      expect((await fixture.gateway.app.inject({
+        method: 'PUT',
+        url: `/api/v1/admin/accounts/${accountId}/credit-allocation`,
+        headers: adminHeaders,
+        payload: { allocatedCredits: '100' }
+      })).statusCode).toBe(204)
+      const response = await fixture.gateway.app.inject({
+        method: 'POST',
+        url: '/v1/responses',
+        headers: {
+          authorization: `Bearer ${tokens.accessToken}`,
+          'x-ai-editor-device-session': tokens.deviceSessionId,
+          'x-ai-editor-turn-id': 'turn_billable_1234'
+        },
+        payload: {
+          model: 'billable-model',
+          input: 'hello',
+          max_output_tokens: 100
+        }
+      })
+      expect(response.statusCode).toBe(200)
+      const usage = await fixture.database.db.selectFrom('usage_records')
+        .selectAll()
+        .where('turn_id', '=', 'turn_billable_1234')
+        .executeTakeFirstOrThrow()
+      expect(usage).toMatchObject({
+        input_tokens: 10,
+        output_tokens: 20,
+        usage_source: 'upstream',
+        total_credits: '0.050000'
+      })
+      const allocation = await fixture.database.db
+        .selectFrom('user_credit_allocations')
+        .select(['settled_credits', 'allocated_credits'])
+        .where('account_id', '=', accountId)
+        .executeTakeFirstOrThrow()
+      expect(allocation).toEqual({
+        settled_credits: '0.050000',
+        allocated_credits: '100.000000'
+      })
+    } finally {
+      await fixture.gateway.close()
+    }
+  })
+
   it('passes a validated request to the Provider adapter and preserves SSE', async () => {
     let forwardedModel: string | undefined
     const fixture = await createRealGatewayFixture({

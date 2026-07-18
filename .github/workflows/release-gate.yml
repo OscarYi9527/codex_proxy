@@ -6,7 +6,11 @@ on:
 
 jobs:
   release-check:
-    runs-on: ubuntu-latest
+    # The release gate exercises the Windows PowerShell development lifecycle
+    # scripts (including Get-NetTCPConnection and Win32_Process checks).
+    # Running it on Ubuntu makes the required `powershell.exe` command fail
+    # before those scripts can be validated.
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

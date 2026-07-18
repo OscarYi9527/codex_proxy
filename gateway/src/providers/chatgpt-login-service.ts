@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { once } from 'node:events'
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { IdSource } from '../common/ids.js'
 import { SafeError } from '../common/errors.js'
@@ -325,8 +325,26 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
     if (child.exitCode !== null) return
     await Promise.race([
       once(child, 'exit'),
-      new Promise(resolve => setTimeout(resolve, 1000))
+      new Promise(resolve => setTimeout(resolve, 2000))
     ])
+    if (child.exitCode === null && process.platform === 'win32' && child.pid) {
+      // A Windows process can survive the regular Node signal briefly while
+      // retaining the isolated CODEX_HOME directory. It is our own child, so
+      // terminate its process tree before deleting credentials from that home.
+      spawnSync('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], {
+        windowsHide: true,
+        stdio: 'ignore'
+      })
+      await Promise.race([
+        once(child, 'exit'),
+        new Promise(resolve => setTimeout(resolve, 2000))
+      ])
+    }
+    // Let Windows release the exited process' file handles before finish()
+    // removes the per-login CODEX_HOME.
+    if (child.exitCode !== null) {
+      await new Promise(resolve => setTimeout(resolve, 25))
+    }
   }
 
   private finish(

@@ -53,12 +53,13 @@ describe('Argon2id bootstrap and invitation registration (T024)', () => {
       version: 1
     }).execute()
     const digest = new HmacSha256Digest(Buffer.alloc(32, 9))
+    const aiAccessExpiresAt = new Date(fixture.clock.nowMs() + 60_000).toISOString()
     await fixture.database.db.insertInto('invitations').values({
       id: 'inv_registration',
       organization_id: 'org_registration',
       code_digest: digest.digest('invitation', 'INVITE-REAL-123'),
       created_by: admin.id,
-      expires_at: new Date(fixture.clock.nowMs() + 60_000).toISOString(),
+      expires_at: aiAccessExpiresAt,
       max_uses: 1,
       use_count: 0,
       status: 'active',
@@ -85,6 +86,7 @@ describe('Argon2id bootstrap and invitation registration (T024)', () => {
       .where('email', '=', 'user@example.com')
       .executeTakeFirstOrThrow()
     expect(account.organization_id).toBe('org_registration')
+    expect(account.expires_at).toBe(aiAccessExpiresAt)
     const credential = await fixture.database.db
       .selectFrom('password_credentials')
       .selectAll()

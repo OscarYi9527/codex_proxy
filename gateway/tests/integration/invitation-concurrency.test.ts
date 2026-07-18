@@ -103,10 +103,12 @@ describe('invitation registration boundaries (T061/T066)', () => {
     expect(invitation).toEqual({ use_count: 1, status: 'exhausted' })
     const registered = await fixture.database.db
       .selectFrom('accounts')
-      .select(({ fn }) => fn.countAll<number>().as('count'))
+      .select(['id', 'expires_at'])
       .where('role', '=', 'user')
-      .executeTakeFirstOrThrow()
-    expect(Number(registered.count)).toBe(1)
+      .execute()
+    expect(registered).toHaveLength(1)
+    expect(registered[0]?.expires_at)
+      .toBe(new Date(fixture.clock.nowMs() + 60_000).toISOString())
   })
 
   it('rejects an expired invitation without consuming it', async () => {

@@ -63,6 +63,7 @@ export interface NewAccountInput {
   readonly mustProvideEmail: boolean
   readonly passwordHash: string
   readonly credentialKind: 'permanent' | 'bootstrap' | 'temporary'
+  readonly accountExpiresAt: string | null
   readonly passwordExpiresAt: string | null
   readonly now: string
 }
@@ -160,7 +161,7 @@ export class AuthRepository {
       role: input.role,
       organization_id: input.organizationId,
       status: 'active',
-      expires_at: null,
+      expires_at: input.accountExpiresAt,
       must_change_password: input.mustChangePassword ? 1 : 0,
       must_provide_email: input.mustProvideEmail ? 1 : 0,
       created_at: input.now,

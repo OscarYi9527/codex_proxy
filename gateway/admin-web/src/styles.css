@@ -351,6 +351,14 @@ dd {
   font-weight: 600;
 }
 
+.form-help {
+  align-self: end;
+  margin: 0;
+  color: #657287;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .security-form input,
 .security-form select {
   min-width: 0;

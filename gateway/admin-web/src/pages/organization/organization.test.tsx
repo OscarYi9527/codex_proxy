@@ -173,7 +173,9 @@ describe('organization administration pages (T062/T068)', () => {
     expect(screen.getAllByText('组织 A')).toHaveLength(2)
     expect(document.body.textContent).not.toContain('INVITE-ONE-TIME')
 
-    fireEvent.change(screen.getByLabelText('失效时间'), {
+    expect(screen.getByText(/注册账号的 AI 使用权限也将在该时间到期/))
+      .toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('AI 权限截止时间'), {
       target: { value: '2026-08-01T00:00' }
     })
     fireEvent.change(screen.getByLabelText('可使用次数'), {

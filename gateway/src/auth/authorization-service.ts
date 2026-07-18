@@ -249,6 +249,7 @@ export class AuthorizationService {
         mustProvideEmail: false,
         passwordHash,
         credentialKind: 'permanent',
+        accountExpiresAt: invitation.expiresAt,
         passwordExpiresAt: null,
         now
       })

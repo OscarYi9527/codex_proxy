@@ -35,6 +35,7 @@ export class BootstrapService {
           mustProvideEmail: true,
           passwordHash,
           credentialKind: 'bootstrap',
+          accountExpiresAt: null,
           passwordExpiresAt: null,
           now
         })

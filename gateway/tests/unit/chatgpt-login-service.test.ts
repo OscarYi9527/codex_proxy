@@ -62,7 +62,15 @@ describe('isolated Codex app-server login adapter (T086)', () => {
     else process.env['CODEX_CLI_JS'] = previousCodexCliJs
     if (previousFakeAuthUrl === undefined) delete process.env['FAKE_CODEX_AUTH_URL']
     else process.env['FAKE_CODEX_AUTH_URL'] = previousFakeAuthUrl
-    fs.rmSync(root, { recursive: true, force: true })
+    // Windows can retain the just-exited fake app-server directory handle for
+    // a few milliseconds. Retry cleanup so the release gate does not fail
+    // after the service has already closed its child successfully.
+    fs.rmSync(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 50
+    })
   })
 
   it('returns only safe status and imports auth.json before deleting the temp home', async () => {

@@ -1,5 +1,6 @@
 import { afterEach, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
@@ -27,17 +28,21 @@ afterEach(() => {
 describe('Edge real handoff and secure storage (T026/T032/T033)', () => {
   it('stores Refresh Token through DPAPI while Access Token remains memory-only', async () => {
     const root = testRoot('dpapi')
+    const protectedBytes = Buffer.from([
+      0xff, 0x00, 0x80, 0x41, 0xc3, 0x28, 0x9f, 0xfe,
+      0x10, 0x7f, 0x81, 0x82, 0xf5, 0x5a, 0x00, 0xaa
+    ])
+    const protectedBase64 = protectedBytes.toString('base64')
     let protectedPlaintext = null
     const runner = (_file, _args, options) => {
-      const input = Buffer.from(options.input, 'base64').toString('utf8')
       if (protectedPlaintext === null) {
-        protectedPlaintext = input
+        protectedPlaintext = Buffer.from(options.input, 'base64').toString('utf8')
         return {
           status: 0,
-          stdout: Buffer.from('opaque-dpapi-ciphertext').toString('base64')
+          stdout: protectedBase64
         }
       }
-      assert.equal(input, 'opaque-dpapi-ciphertext')
+      assert.equal(options.input, protectedBase64)
       return {
         status: 0,
         stdout: Buffer.from(protectedPlaintext).toString('base64')
@@ -57,12 +62,41 @@ describe('Edge real handoff and secure storage (T026/T032/T033)', () => {
     assert.equal(version, 1)
     const onDisk = fs.readFileSync(path.join(root, 'edge-account-binding.dpapi.json'), 'utf8')
     assert.doesNotMatch(onDisk, /refresh-secret-never-plaintext|access-memory-only/)
+    const envelope = JSON.parse(onDisk)
+    assert.equal(envelope.version, 2)
+    assert.equal(envelope.encoding, 'base64')
+    assert.equal(envelope.protectedRefreshToken, protectedBase64)
 
     const restarted = new LocalAccountBindingStore({ secureStore, now: () => 2_000 })
     await restarted.initialize()
     const snapshot = restarted.snapshot()
     assert.equal(snapshot.refreshToken, 'refresh-secret-never-plaintext')
     assert.equal(snapshot.accessToken, null)
+  })
+
+  it('round-trips a Refresh Token through real Windows DPAPI after an Edge restart', {
+    skip: process.platform !== 'win32'
+  }, async () => {
+    const root = testRoot('dpapi-windows')
+    const refreshToken = `refresh-real-dpapi-${crypto.randomUUID()}`
+    const firstStore = new WindowsDpapiRefreshTokenStore({ dataRoot: root })
+    await firstStore.save({
+      deviceSessionId: 'ds_windows_restart',
+      refreshToken
+    })
+
+    const onDisk = fs.readFileSync(path.join(root, 'edge-account-binding.dpapi.json'), 'utf8')
+    assert.doesNotMatch(onDisk, new RegExp(refreshToken))
+    const envelope = JSON.parse(onDisk)
+    assert.equal(envelope.version, 2)
+    assert.equal(envelope.encoding, 'base64')
+
+    const restartedStore = new WindowsDpapiRefreshTokenStore({ dataRoot: root })
+    assert.deepEqual(await restartedStore.load(), {
+      deviceSessionId: 'ds_windows_restart',
+      refreshToken
+    })
+    await restartedStore.clear()
   })
 
   it('fails closed to login_required when a persisted secure binding cannot be opened', async () => {

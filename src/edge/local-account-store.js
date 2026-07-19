@@ -35,18 +35,47 @@ function runDpapi(mode, value, runner = spawnSync) {
     `$result=[System.Security.Cryptography.ProtectedData]::${operation}($bytes,$entropy,[System.Security.Cryptography.DataProtectionScope]::CurrentUser)`,
     '[Console]::Out.Write([Convert]::ToBase64String($result))'
   ].join(';')
-  const input = Buffer.from(value, 'utf8')
+  const protectedValue = mode === 'unprotect' ? String(value).trim() : null
+  if (
+    protectedValue !== null &&
+    (
+      protectedValue.length === 0 ||
+      protectedValue.length % 4 !== 0 ||
+      !/^[A-Za-z0-9+/]+={0,2}$/.test(protectedValue) ||
+      Buffer.from(protectedValue, 'base64').toString('base64') !== protectedValue
+    )
+  ) {
+    throw new Error('Edge DPAPI ciphertext is not valid base64')
+  }
+  const input = Buffer.from(
+    mode === 'protect'
+      ? Buffer.from(value, 'utf8').toString('base64')
+      : protectedValue,
+    'ascii'
+  )
   try {
     const result = runner(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
-      input: input.toString('base64'),
+      input: input.toString('ascii'),
       encoding: 'utf8',
       windowsHide: true,
       timeout: 15_000
     })
-    if (result.status !== 0 || !String(result.stdout || '').trim()) {
+    const output = String(result.stdout || '').trim()
+    if (
+      result.status !== 0 ||
+      output.length === 0 ||
+      output.length % 4 !== 0 ||
+      !/^[A-Za-z0-9+/]+={0,2}$/.test(output) ||
+      Buffer.from(output, 'base64').toString('base64') !== output
+    ) {
       throw new Error(`DPAPI ${mode} failed`)
     }
-    return Buffer.from(String(result.stdout).trim(), 'base64').toString('utf8')
+    // ProtectedData returns arbitrary binary bytes. Persist their canonical
+    // base64 text instead of decoding them as UTF-8, which corrupts most
+    // ciphertext and makes the next Edge process unable to unseal it.
+    return mode === 'protect'
+      ? output
+      : Buffer.from(output, 'base64').toString('utf8')
   } finally {
     input.fill(0)
   }
@@ -62,8 +91,9 @@ export class WindowsDpapiRefreshTokenStore {
     if (!fs.existsSync(this.file)) return null
     const envelope = JSON.parse(fs.readFileSync(this.file, 'utf8'))
     if (
-      envelope?.version !== 1 ||
+      envelope?.version !== 2 ||
       envelope?.protection !== 'Windows DPAPI CurrentUser' ||
+      envelope?.encoding !== 'base64' ||
       typeof envelope.deviceSessionId !== 'string' ||
       typeof envelope.protectedRefreshToken !== 'string'
     ) {
@@ -78,8 +108,9 @@ export class WindowsDpapiRefreshTokenStore {
   async save(binding) {
     const protectedRefreshToken = runDpapi('protect', binding.refreshToken, this.runner)
     atomicWriteJson(this.file, {
-      version: 1,
+      version: 2,
       protection: 'Windows DPAPI CurrentUser',
+      encoding: 'base64',
       deviceSessionId: binding.deviceSessionId,
       protectedRefreshToken
     })

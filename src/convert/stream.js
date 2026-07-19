@@ -2,6 +2,7 @@
 // Anthropic SSE → Responses SSE and Chat Completions SSE → Responses SSE
 
 import { id, asText, anthropicToResponse } from './anthropic.js'
+import { responsesFunctionCallItemId } from './tool-ids.js'
 import { recordUsage, saveStats } from '../stats.js'
 import { proxyMetaHeaders } from '../server-utils.js'
 
@@ -80,7 +81,8 @@ export function onAnthropicEvent(res, state, event) {
     if (block.type === 'tool_use') {
       const isCustom = state.customTools.has(block.name)
       const item = {
-        id: id('tool'),
+        // Responses requires function_call output-item IDs to begin with `fc`.
+        id: isCustom ? id('tool') : responsesFunctionCallItemId(block.id),
         type: isCustom ? 'custom_tool_call' : 'function_call',
         status: 'in_progress',
         call_id: block.id,
@@ -222,7 +224,8 @@ export function createChatStreamState(body) {
     contentPart: null,
     contentText: '',
     outputIndex: -1,
-    contentIndex: -1
+    contentIndex: -1,
+    toolCalls: new Map()
   }
 }
 
@@ -269,21 +272,27 @@ export function onChatCompletionChunk(res, state, chunk) {
 
   if (delta.tool_calls) {
     for (const tc of delta.tool_calls) {
+      const key = tc.index ?? tc.id
+      let current = key == null ? undefined : state.toolCalls.get(key)
       if (tc.id && tc.function) {
         const item = {
-          id: tc.id, type: 'function_call', status: 'in_progress',
+          // Chat Completions tool IDs belong in call_id; Responses item IDs must be `fc_*`.
+          id: responsesFunctionCallItemId(tc.id), type: 'function_call', status: 'in_progress',
           call_id: tc.id, name: tc.function.name || '', arguments: tc.function.arguments || ''
         }
         state.response.output.push(item)
         const idx = state.response.output.length - 1
+        current = { item, outputIndex: idx }
+        if (key != null) state.toolCalls.set(key, current)
         writeEvent(res, state, 'response.output_item.added', { output_index: idx, item: structuredClone(item) })
       }
-      if (tc.function?.arguments) {
-        const lastItem = state.response.output[state.response.output.length - 1]
-        if (lastItem?.type === 'function_call') {
-          lastItem.arguments += tc.function.arguments
+      if (tc.function?.arguments && current?.item?.type === 'function_call') {
+        // The first chunk can already contain arguments. They were copied
+        // while creating the item above, so append only continuation chunks.
+        if (!tc.id) {
+          current.item.arguments += tc.function.arguments
           writeEvent(res, state, 'response.function_call_arguments.delta', {
-            item_id: lastItem.id, output_index: state.response.output.length - 1,
+            item_id: current.item.id, output_index: current.outputIndex,
             delta: tc.function.arguments
           })
         }

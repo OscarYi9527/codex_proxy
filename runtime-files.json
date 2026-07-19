@@ -52,6 +52,7 @@
     "src/convert/anthropic.js",
     "src/convert/chat-completions.js",
     "src/convert/stream.js",
+    "src/convert/tool-ids.js",
     "src/routes/chatgpt-sub.js",
     "src/routes/deepseek.js",
     "src/routes/openai-api.js",

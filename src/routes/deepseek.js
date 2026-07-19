@@ -2,11 +2,41 @@
 // Handles all non-gpt, non-openai-api models via Anthropic-compatible API
 
 import { proxyConfig } from '../config.js'
-import { requestLog } from '../logger.js'
+import { requestLog, summarizeUpstreamErrorBody } from '../logger.js'
 import { sendJson, readJson, fetchWithRetry, id, setProxyMeta, proxyMetaHeaders } from '../server-utils.js'
 import { recordUsage, saveStats } from '../stats.js'
 import { responsesToAnthropic, anthropicToResponse } from '../convert/anthropic.js'
 import { streamAnthropicToResponses } from '../convert/stream.js'
+
+export function summarizeDeepSeekRequestShape(request) {
+  let toolUses = 0
+  let toolResults = 0
+  for (const message of request?.messages || []) {
+    for (const block of Array.isArray(message?.content) ? message.content : []) {
+      if (block?.type === 'tool_use') toolUses++
+      if (block?.type === 'tool_result') toolResults++
+    }
+  }
+  return [
+    `messages=${Array.isArray(request?.messages) ? request.messages.length : 0}`,
+    `tools=${Array.isArray(request?.tools) ? request.tools.length : 0}`,
+    `tool_uses=${toolUses}`,
+    `tool_results=${toolResults}`,
+    `stream=${request?.stream === true}`
+  ].join(',')
+}
+
+async function sendDeepSeekUpstreamError(req, res, upstream, request) {
+  const rawDetail = await upstream.text().catch(() => '')
+  const detail = summarizeUpstreamErrorBody(rawDetail)
+  requestLog(
+    req,
+    `deepseek_upstream_error status=${upstream.status} shape=${summarizeDeepSeekRequestShape(request)} diagnostic=${detail}`
+  )
+  return sendJson(res, upstream.status, {
+    error: { type: 'upstream_error', message: `DeepSeek returned HTTP ${upstream.status}`, detail }
+  })
+}
 
 export async function handleDeepSeek(req, res, body, resolved) {
   setProxyMeta(res, { provider: 'deepseek', model: resolved.model })
@@ -33,10 +63,7 @@ export async function handleDeepSeek(req, res, body, resolved) {
   requestLog(req, `model=${resolved.model} body_model=${resolved.bodyModel || '-'} thread=${resolved.threadId || '-'} deepseek=1 stream=${body.stream} status=${upstream.status}`)
 
   if (!upstream.ok) {
-    const detail = (await upstream.text().catch(() => '')).slice(0, 2000)
-    return sendJson(res, upstream.status, {
-      error: { type: 'upstream_error', message: `DeepSeek returned HTTP ${upstream.status}`, detail }
-    })
+    return sendDeepSeekUpstreamError(req, res, upstream, request)
   }
 
   if (body.stream) {
@@ -103,10 +130,7 @@ export async function handleDeepSeekChatCompletions(req, res, body, resolved) {
   })
 
   if (!upstream.ok) {
-    const detail = (await upstream.text().catch(() => '')).slice(0, 2000)
-    return sendJson(res, upstream.status, {
-      error: { type: 'upstream_error', message: `DeepSeek returned HTTP ${upstream.status}`, detail }
-    })
+    return sendDeepSeekUpstreamError(req, res, upstream, request)
   }
 
   if (body.stream) {

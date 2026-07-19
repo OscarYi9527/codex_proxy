@@ -8,6 +8,7 @@ import { recordUsage, recordAccountOutcome, recordOperationalEvent, saveStats } 
 import { chinaFetch, withChinaDispatcher } from '../china-fetch.js'
 import { pickActiveAccount, ensureFreshToken, markAccountCooldown, markAccountAuthFailure, extractUsageFromHeaders, applyAccountUsage, accountSessionKey, noteAccountSuccess, reserveAccountRequest, renewAccountRequestLease, releaseAccountRequest, accountActiveRequestCount, accountConcurrencyLimit, accountRemainingPercent, accountPolicyState, noteAccountAdaptiveOutcome, refreshAccountUsage } from '../chatgpt-accounts.js'
 import { recordRouteDecision } from '../route-decisions.js'
+import { normalizeResponsesFunctionCallIds } from '../convert/tool-ids.js'
 
 const RESPONSES_LITE_HEADER = 'x-openai-internal-codex-responses-lite'
 const responsesLiteUnsupportedModels = new Set()
@@ -19,6 +20,17 @@ const BUSY_ACCOUNT_RETRY_MS = 500
 const BUSY_ACCOUNT_RETRY_COUNT = 120
 const QUOTA_RECHECK_MIN_AGE_MS = 2 * 60 * 1000
 const accountWaitQueue = []
+
+export function buildChatGptResponsesBody(body, resolved) {
+  const normalizedBody = normalizeResponsesFunctionCallIds(body)
+  return {
+    ...normalizedBody,
+    model: resolved.model,
+    ...(resolved.reasoningEffort
+      ? { reasoning: { ...(normalizedBody.reasoning || {}), effort: resolved.reasoningEffort } }
+      : {})
+  }
+}
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -467,11 +479,7 @@ export async function handleChatGptSub(req, res, body, resolved, {
     })
   }
 
-  const upstreamBody = JSON.stringify({
-    ...body,
-    model: resolved.model,
-    ...(resolved.reasoningEffort ? { reasoning: { ...(body.reasoning || {}), effort: resolved.reasoningEffort } } : {})
-  })
+  const upstreamBody = JSON.stringify(buildChatGptResponsesBody(body, resolved))
 
   const requestedResponsesLite = Boolean(req.headers[RESPONSES_LITE_HEADER])
   const tryResponsesLite = requestedResponsesLite && !responsesLiteUnsupportedModels.has(resolved.model)

@@ -1,4 +1,5 @@
 // Request logging
+import crypto from 'crypto'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -39,7 +40,39 @@ export function redactSecrets(value) {
     .replace(/\b(sk-[A-Za-z0-9._-]{8,}|rt\.[A-Za-z0-9._-]{8,})\b/g, '[REDACTED]')
     .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, '[REDACTED]')
     .replace(/([?&](?:api_?key|access_?token|refresh_?token|authorization)=)[^&\s]+/gi, '$1[REDACTED]')
-    .replace(/("(?:api_?key|access_?token|refresh_?token|authorization)"\s*:\s*")[^"]+(")/gi, '$1[REDACTED]$2')
+    .replace(/("(?:api_?key|access_?token|refresh_?token|authorization|password|secret|token)"\s*:\s*")[^"]+(")/gi, '$1[REDACTED]$2')
+    .replace(/\b(password|secret|token)\s*[=:]\s*[^\s|,;]+/gi, '$1=[REDACTED]')
+}
+
+export function summarizeUpstreamErrorBody(value) {
+  const raw = String(value ?? '')
+  if (!raw.trim()) return 'empty_body'
+
+  try {
+    const payload = JSON.parse(raw)
+    const source = payload?.error && typeof payload.error === 'object'
+      ? payload.error
+      : payload
+    if (!source || typeof source !== 'object' || Array.isArray(source)) {
+      return 'json_body_without_error_fields'
+    }
+
+    const fields = []
+    for (const key of ['type', 'code', 'param', 'message']) {
+      const field = source[key]
+      if (typeof field === 'string' || typeof field === 'number' || typeof field === 'boolean') {
+        fields.push(`${key}=${String(field).replace(/\s+/g, ' ').slice(0, 500)}`)
+      }
+    }
+    if (!fields.length) {
+      return `json_error_keys=${Object.keys(source).slice(0, 12).join(',') || 'none'}`
+    }
+    return redactSecrets(fields.join(' | ')).slice(0, 1200)
+  } catch {
+    const bytes = Buffer.byteLength(raw)
+    const digest = crypto.createHash('sha256').update(raw).digest('hex').slice(0, 16)
+    return `non_json_body bytes=${bytes} sha256=${digest}`
+  }
 }
 
 export function requestLog(req, extra = '') {

@@ -131,6 +131,54 @@ describe('账号文件快捷导入 API', () => {
       assert.equal(incompatibleAccount.credential_compatibility, 'incompatible_oauth_client')
       assert.equal(incompatibleAccount.routing_enabled, false)
       assert.equal(incompatibleAccount.status, 'auth_error')
+
+      const enableIncompatibleResponse = await fetch(
+        `${base}/admin/api/chatgpt-accounts/${encodeURIComponent(incompatibleAccount.id)}/routing`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ enabled: true })
+        }
+      )
+      const enableIncompatible = await enableIncompatibleResponse.json()
+      assert.equal(enableIncompatibleResponse.status, 400)
+      assert.match(enableIncompatible.error.message, /不能启用订阅路由/)
+      const configAfterRejectedEnable = await (
+        await fetch(`${base}/admin/api/config`)
+      ).json()
+      assert.equal(configAfterRejectedEnable.config.chatgptAccounts.find(
+        account => account.id === incompatibleAccount.id
+      ).routing_enabled, false)
+
+      const expiredPayload = Buffer.from(JSON.stringify({
+        exp: Math.floor(Date.now() / 1000) - 60,
+        client_id: 'app_EMoamEEZ73f0CkXaXp7hrann'
+      })).toString('base64url')
+      const mixedResponse = await fetch(`${base}/admin/api/chatgpt-accounts/import`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          content: JSON.stringify([
+            {
+              access_token: `header.${expiredPayload}.expired`,
+              account_id: 'account-import-expired'
+            },
+            {
+              access_token: `header.${payloadSegment}.valid`,
+              account_id: 'account-import-valid-after-expired'
+            }
+          ])
+        })
+      })
+      const mixed = await mixedResponse.json()
+      assert.equal(mixedResponse.status, 200)
+      assert.equal(mixed.result.imported, 1)
+      assert.equal(mixed.result.rejected, 1)
+      assert.equal(mixed.result.rejections[0].accountId, 'account-import-expired')
+      assert.match(mixed.result.rejections[0].reason, /已过期/)
+      assert.ok(mixed.config.chatgptAccounts.some(
+        account => account.account_id === 'account-import-valid-after-expired'
+      ))
     } finally {
       await new Promise(resolve => server.close(resolve))
       fs.rmSync(storageRoot, { recursive: true, force: true })

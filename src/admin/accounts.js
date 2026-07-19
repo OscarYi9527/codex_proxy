@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { proxyConfig, setActiveChatgptAccount, reorderChatgptAccounts, renameChatgptAccount, setChatgptAccountRouting } from '../config.js'
-import { addChatgptAccount, consumeAccountResetCredit, deleteChatgptAccount, ensureFreshToken, parseAuthJson, refreshAccountResetCredits, refreshAccountUsage } from '../chatgpt-accounts.js'
+import { accountCredentialLifecycle, addChatgptAccount, consumeAccountResetCredit, deleteChatgptAccount, ensureFreshToken, parseAuthJson, refreshAccountResetCredits, refreshAccountUsage } from '../chatgpt-accounts.js'
 import { sendJson } from '../server-utils.js'
 import { chinaFetch } from '../china-fetch.js'
 import { getCodexAuthFile, isLocalAdminRequest, killLocalCodexProcesses } from './login.js'
@@ -43,6 +43,7 @@ export function handleChatgptAccountsImport(req, res, body) {
     )
     const imported = []
     const skipped = []
+    const rejected = []
     const routingEnabled = body?.routingEnabled === true
     for (const record of records) {
       const existing = existingById.get(record.accountId)
@@ -56,13 +57,22 @@ export function handleChatgptAccountsImport(req, res, body) {
       const label = records.length === 1 && String(body?.label || '').trim()
         ? String(body.label).trim().slice(0, 80)
         : record.label
-      addChatgptAccount(record.authJson, label, {
-        routingEnabled,
-        allowAccessOnly: record.credentialMode === 'temporary_access',
-        sourceFormat: record.sourceFormat,
-        email: record.email,
-        planType: record.planType
-      })
+      try {
+        addChatgptAccount(record.authJson, label, {
+          routingEnabled,
+          allowAccessOnly: record.credentialMode === 'temporary_access',
+          sourceFormat: record.sourceFormat,
+          email: record.email,
+          planType: record.planType
+        })
+      } catch (error) {
+        rejected.push({
+          accountId: record.accountId,
+          label,
+          reason: error.message
+        })
+        continue
+      }
       const savedAccount = (proxyConfig.chatgptAccounts || []).find(
         account => account.account_id === record.accountId
       )
@@ -88,16 +98,20 @@ export function handleChatgptAccountsImport(req, res, body) {
       result: {
         imported: imported.length,
         skipped: skipped.length,
+        rejected: rejected.length,
         temporary,
         refreshable,
         upgraded,
         incompatible,
         formats: [...new Set(imported.map(item => item.sourceFormat))],
-        credential_modes: [...new Set(imported.map(item => item.credentialMode))]
+        credential_modes: [...new Set(imported.map(item => item.credentialMode))],
+        rejections: rejected
       },
       message: imported.length
-        ? `已导入 ${imported.length} 个账号（临时 ${temporary}，可续约 ${refreshable}${incompatible ? `，不兼容 ${incompatible}` : ''}${upgraded ? `，其中升级 ${upgraded}` : ''}）${skipped.length ? `，跳过 ${skipped.length} 个重复账号` : ''}；${incompatible ? '不兼容账号已强制设为仅保存' : `默认${routingEnabled ? '已启用' : '仅保存'}`}`
-        : `未导入新账号，已跳过 ${skipped.length} 个重复账号`
+        ? `已导入 ${imported.length} 个账号（临时 ${temporary}，可续约 ${refreshable}${incompatible ? `，不兼容 ${incompatible}` : ''}${upgraded ? `，其中升级 ${upgraded}` : ''}）${skipped.length ? `，跳过 ${skipped.length} 个重复账号` : ''}${rejected.length ? `，拒绝 ${rejected.length} 个无效账号` : ''}；${incompatible ? '不兼容账号已强制设为仅保存' : `默认${routingEnabled ? '已启用' : '仅保存'}`}`
+        : rejected.length
+          ? `未导入新账号；拒绝 ${rejected.length} 个无效账号：${rejected[0].reason}${skipped.length ? `，另跳过 ${skipped.length} 个重复账号` : ''}`
+          : `未导入新账号，已跳过 ${skipped.length} 个重复账号`
     })
   } catch (error) {
     return sendJson(res, 400, {
@@ -177,6 +191,23 @@ export function handleChatgptAccountRename(req, res, accountId, body) {
 
 export function handleChatgptAccountRouting(req, res, accountId, body) {
   try {
+    const account = (proxyConfig.chatgptAccounts || []).find(item => item.id === accountId)
+    if (!account) {
+      return sendJson(res, 404, {
+        error: { type: 'not_found_error', message: '账号不存在' }
+      })
+    }
+    if (body?.enabled === true) {
+      const credential = accountCredentialLifecycle(account)
+      if (!credential.routable) {
+        const message = credential.compatible
+          ? '临时 Access Token 已到期或即将到期，不能启用路由；请完成官方登录'
+          : '该 Token 不是 Codex 官方 OAuth 客户端签发，不能启用订阅路由；请完成官方登录'
+        return sendJson(res, 400, {
+          error: { type: 'invalid_request_error', message }
+        })
+      }
+    }
     const newCfg = setChatgptAccountRouting(accountId, {
       weight: body?.weight,
       enabled: body?.enabled,

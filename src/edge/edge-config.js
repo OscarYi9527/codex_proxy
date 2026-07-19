@@ -12,12 +12,12 @@ export const EDGE_ALLOWED_STATES = Object.freeze([
   'password_change_required'
 ])
 
-function parsePort(value, fallback) {
+function parsePort(value, fallback, environment) {
   const port = value ? Number(value) : fallback
-  if (!Number.isInteger(port) || port < 1024 || port > 65535 || port === 47892) {
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
     throw new Error(`Invalid isolated Edge port: ${value}`)
   }
-  if (port !== EDGE_DEVELOPMENT_PORT) {
+  if (environment !== 'production' && port !== EDGE_DEVELOPMENT_PORT) {
     throw new Error(`Development Edge must use port ${EDGE_DEVELOPMENT_PORT}`)
   }
   return port
@@ -73,7 +73,11 @@ export function loadEdgeConfig(env = process.env, options = {}) {
   }
   return Object.freeze({
     host,
-    port: parsePort(env.AI_EDITOR_EDGE_PORT, EDGE_DEVELOPMENT_PORT),
+    port: parsePort(
+      env.AI_EDITOR_EDGE_PORT,
+      environment === 'production' ? 47892 : EDGE_DEVELOPMENT_PORT,
+      environment
+    ),
     gatewayOrigin: gatewayOrigin.origin,
     dataRoot: isolatedDataRoot(
       env.AI_EDITOR_EDGE_DATA_ROOT || path.join(repositoryRoot, '.ai-editor-dev', 'edge'),

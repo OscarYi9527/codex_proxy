@@ -32,6 +32,7 @@ function renderAccounts(){
     const isActive=a.id===activeId
     const routeEnabled=a.routing_enabled!==false
     const credential=credentialOf(a)
+    const canEnableRoute=credential.compatible&&!credential.expired
     const remaining=remainingOf(a)
     const accountReserve=Number(a.low_quota_threshold??threshold),atReserve=remaining!=null&&remaining<=accountReserve
     const usageStale=!a.usage_updated_at||(Date.now()-new Date(a.usage_updated_at).getTime()>30*60*1000)
@@ -73,7 +74,7 @@ function renderAccounts(){
         <div class="account-head-actions">
           <span class="account-local-badge" style="${credential.temporary?'background:color-mix(in srgb,var(--amber) 12%,var(--surface));color:var(--amber)':''}">${!credential.compatible?`OAuth 不兼容 · ${esc(credential.countdown)}`:credential.temporary?`临时 · ${esc(credential.countdown)}`:'可自动续约'}</span>
           ${isActive?'<span class="account-local-badge">本机账号</span>':credential.temporary?'':button('切换本机','arrow',`switchAccount('${esc(a.id)}')`,'btn-sm')}
-          ${button(routeEnabled?'停用路由':'启用路由',routeEnabled?'x':'check',`toggleAccountRouting('${esc(a.id)}',${routeEnabled?'false':'true'})`,'btn-sm')}
+          ${!routeEnabled&&!canEnableRoute?'<button class="btn btn-sm" disabled title="请先完成官方登录">不可启用</button>':button(routeEnabled?'停用路由':'启用路由',routeEnabled?'x':'check',`toggleAccountRouting('${esc(a.id)}',${routeEnabled?'false':'true'})`,'btn-sm')}
         </div>
       </header>
       <div class="account-profile-body">
@@ -135,6 +136,7 @@ function renderAccounts(){
     const isActive=a.id===activeId
     const routeEnabled=a.routing_enabled!==false
     const credential=credentialOf(a)
+    const canEnableRoute=credential.compatible&&!credential.expired
     const remaining=remainingOf(a)
     const accountReserve=Number(a.low_quota_threshold??threshold),atReserve=remaining!=null&&remaining<=accountReserve
     const runtime=(diagnosticsData.accounts||[]).find(item=>item.id===a.id)||{}
@@ -181,7 +183,9 @@ function renderAccounts(){
         <button title="查询重置次数" onclick="refreshAccountResetCreditsOne('${esc(a.id)}')">${svg('pulse')}</button>
         <button title="额度与预留策略" onclick="openAccountPolicy('${esc(a.id)}')">${svg('shield')}</button>
         ${resetCount>0?`<button class="danger" title="高风险：消耗 1 次并重置额度（不可撤销）" onclick="openResetQuota('${esc(a.id)}')">${svg('refresh')}</button>`:''}
-        <button title="${routeEnabled?'停用路由':'启用路由'}" onclick="toggleAccountRouting('${esc(a.id)}',${routeEnabled?'false':'true'})">${svg(routeEnabled?'x':'check')}</button>
+        ${!routeEnabled&&!canEnableRoute
+          ? `<button disabled title="请先完成官方登录">${svg('x')}</button>`
+          : `<button title="${routeEnabled?'停用路由':'启用路由'}" onclick="toggleAccountRouting('${esc(a.id)}',${routeEnabled?'false':'true'})">${svg(routeEnabled?'x':'check')}</button>`}
       </div>
     </article>`
   }).join('')

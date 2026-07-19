@@ -850,21 +850,21 @@ async function saveAccount(){
   const payloads=accountImportFiles.length?accountImportFiles:(content?[{name:accountImportFileName,content}]:[])
   if(!payloads.length)return toast('请粘贴或选择账号文件','error')
   try{
-    let imported=0,skipped=0,temporary=0,refreshable=0,incompatible=0
+    let imported=0,skipped=0,rejected=0,temporary=0,refreshable=0,incompatible=0
     const errors=[]
     for(const payload of payloads){
       const r=await fetch(API+'/chatgpt-accounts/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({content:payload.content,label:payloads.length===1?label:'',routingEnabled,sourceName:payload.name})}),d=await r.json()
       if(!r.ok){errors.push(`${payload.name||'手动内容'}：${d.error?.message||'导入失败'}`);continue}
       cfg=d.config
-      imported+=Number(d.result?.imported||0);skipped+=Number(d.result?.skipped||0)
+      imported+=Number(d.result?.imported||0);skipped+=Number(d.result?.skipped||0);rejected+=Number(d.result?.rejected||0)
       temporary+=Number(d.result?.temporary||0);refreshable+=Number(d.result?.refreshable||0)
       incompatible+=Number(d.result?.incompatible||0)
     }
-    if(!imported&&!skipped)throw new Error(errors.join('；')||'没有可导入账号')
+    if(!imported&&!skipped&&!rejected)throw new Error(errors.join('；')||'没有可导入账号')
     for(const payload of payloads)payload.content=''
     accountImportFiles=[]
     closeModal();render()
-    toast(`导入完成：新增 ${imported}（临时 ${temporary} / 可续约 ${refreshable}${incompatible?` / 不兼容 ${incompatible}`:''}），重复 ${skipped}${errors.length?`，${errors.length} 个文件无法导入`:''}`,errors.length||incompatible?'error':'')
+    toast(`导入完成：新增 ${imported}（临时 ${temporary} / 可续约 ${refreshable}${incompatible?` / 不兼容 ${incompatible}`:''}），重复 ${skipped}${rejected?`，无效 ${rejected}`:''}${errors.length?`，${errors.length} 个文件无法解析`:''}`,errors.length||rejected||incompatible?'error':'')
   }catch(e){toast(e.message,'error')}
 }
 async function removeAccount(id){const account=(cfg.chatgptAccounts||[]).find(item=>item.id===id);const name=account?.label||account?.email||'未命名账号',shortId=String(account?.account_id||id).slice(0,12);if(!confirm(`确定移除账号「${name}」吗？\n账号 ID：${shortId}…\n\n删除前会自动创建独立账号备份。`))return;try{const r=await fetch(API+'/chatgpt-accounts/'+encodeURIComponent(id),{method:'DELETE'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'移除失败');cfg=d.config;render();toast('账号已移除，删除前数据已备份')}catch(e){toast(e.message,'error')}}

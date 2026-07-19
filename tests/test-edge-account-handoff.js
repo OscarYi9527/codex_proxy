@@ -96,7 +96,38 @@ describe('Edge real handoff and secure storage (T026/T032/T033)', () => {
       deviceSessionId: 'ds_windows_restart',
       refreshToken
     })
-    await restartedStore.clear()
+
+    const restartedBinding = new LocalAccountBindingStore({
+      secureStore: restartedStore,
+      now: () => 50_000
+    })
+    const client = new GatewayClient({
+      gatewayOrigin: 'http://127.0.0.1:47920',
+      bindingStore: restartedBinding,
+      now: () => 50_000,
+      fetchImpl: async (_url, options) => {
+        assert.equal(JSON.parse(options.body.toString()).refreshToken, refreshToken)
+        return new Response(JSON.stringify({
+          accessToken: 'access-after-edge-restart',
+          accessTokenExpiresIn: 300,
+          refreshToken: 'rotated-refresh-after-edge-restart',
+          deviceSessionId: 'ds_windows_restart'
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+    })
+    await client.initialize()
+    const authenticated = await client.getAuthenticatedSnapshot()
+    assert.equal(authenticated.accessToken, 'access-after-edge-restart')
+
+    const thirdProcessStore = new WindowsDpapiRefreshTokenStore({ dataRoot: root })
+    assert.deepEqual(await thirdProcessStore.load(), {
+      deviceSessionId: 'ds_windows_restart',
+      refreshToken: 'rotated-refresh-after-edge-restart'
+    })
+    await thirdProcessStore.clear()
   })
 
   it('fails closed to login_required when a persisted secure binding cannot be opened', async () => {

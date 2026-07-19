@@ -40,7 +40,8 @@ function Wait-HttpReady {
 }
 
 try {
-    $valid = & $start -Mode all -DataRoot $testRoot -GatewayPort 47920 -EdgePort 47921 -ValidateOnly
+    $valid = & $start -Mode all -DataRoot $testRoot -GatewayPort 47920 -EdgePort 47921 `
+        -ProviderWorkerPort 47930 -ValidateOnly
     if (-not $valid.valid) {
         throw 'Expected valid isolated configuration'
     }
@@ -52,7 +53,11 @@ try {
         & $start -Mode gateway -DataRoot $repo -ValidateOnly
     }
     Assert-Throws -Message 'Equal Gateway and Edge ports must be rejected' -Action {
-        & $start -Mode all -DataRoot $testRoot -GatewayPort 47920 -EdgePort 47920 -ValidateOnly
+        & $start -Mode all -DataRoot $testRoot -GatewayPort 47920 -EdgePort 47920 `
+            -ProviderWorkerPort 47930 -ValidateOnly
+    }
+    Assert-Throws -Message 'Provider Worker must use isolated port 47930' -Action {
+        & $start -Mode provider-worker -DataRoot $testRoot -ProviderWorkerPort 47892 -ValidateOnly
     }
 
     New-Item -ItemType Directory -Force -Path $testRoot | Out-Null
@@ -84,23 +89,30 @@ try {
     Remove-Item -LiteralPath (Join-Path $pidGuardRoot 'gateway.pid.json') -Force
     & $reset -DataRoot $pidGuardRoot -ConfirmDataRoot $pidGuardRoot -Force
 
-    foreach ($port in @(47920, 47921)) {
+    foreach ($port in @(47920, 47921, 47930)) {
         if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
             throw "Lifecycle test requires unused development port $port"
         }
     }
     $sharedBefore = Get-NetTCPConnection -LocalPort 47892 -State Listen -ErrorAction SilentlyContinue |
         Select-Object -First 1
-    & $start -Mode all -DataRoot $lifecycleRoot -GatewayPort 47920 -EdgePort 47921 -AuthenticationMode mock
+    & $start -Mode all -DataRoot $lifecycleRoot -GatewayPort 47920 -EdgePort 47921 `
+        -ProviderWorkerPort 47930 -AuthenticationMode mock
     Assert-Throws -Message 'A second start must not overwrite live PID metadata' -Action {
-        & $start -Mode all -DataRoot $lifecycleRoot -GatewayPort 47920 -EdgePort 47921 -AuthenticationMode mock
+        & $start -Mode all -DataRoot $lifecycleRoot -GatewayPort 47920 -EdgePort 47921 `
+            -ProviderWorkerPort 47930 -AuthenticationMode mock
     }
     $gatewayLive = Wait-HttpReady -Uri 'http://127.0.0.1:47920/live'
     $edgeLive = Wait-HttpReady -Uri 'http://127.0.0.1:47921/live'
-    if ($gatewayLive.mode -ne 'gateway' -or $edgeLive.mode -ne 'edge') {
+    $workerLive = Wait-HttpReady -Uri 'http://127.0.0.1:47930/live'
+    if (
+        $gatewayLive.mode -ne 'gateway' -or
+        $edgeLive.mode -ne 'edge' -or
+        $workerLive.mode -ne 'provider-worker'
+    ) {
         throw 'Lifecycle test started an unexpected service mode'
     }
-    foreach ($mode in @('gateway', 'edge')) {
+    foreach ($mode in @('gateway', 'edge', 'provider-worker')) {
         $metadata = Get-Content -LiteralPath (Join-Path $lifecycleRoot "$mode.pid.json") -Raw |
             ConvertFrom-Json
         $process = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$metadata.pid)"
@@ -110,7 +122,7 @@ try {
     }
     & $stop -Mode all -DataRoot $lifecycleRoot
     Start-Sleep -Milliseconds 500
-    foreach ($port in @(47920, 47921)) {
+    foreach ($port in @(47920, 47921, 47930)) {
         if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
             throw "Lifecycle stop left port $port listening"
         }

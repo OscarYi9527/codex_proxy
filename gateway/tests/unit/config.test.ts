@@ -44,6 +44,52 @@ describe('Gateway fixed development configuration', () => {
     }, { repositoryRoot })).toThrow(/Unsupported mock account state/)
   })
 
+  it('accepts only the fixed local Provider Worker contract in development', () => {
+    const config = loadGatewayConfig({
+      NODE_ENV: 'test',
+      AI_EDITOR_PROVIDER_WORKER_ORIGIN: 'http://127.0.0.1:47930',
+      AI_EDITOR_PROVIDER_WORKER_GATEWAY_ID: 'gateway-test',
+      AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET:
+        'provider-worker-config-test-secret-32bytes-minimum'
+    }, { repositoryRoot })
+    expect(config.providerWorker).toEqual({
+      origin: 'http://127.0.0.1:47930',
+      gatewayId: 'gateway-test',
+      signingSecret: 'provider-worker-config-test-secret-32bytes-minimum',
+      tls: null
+    })
+    expect(() => loadGatewayConfig({
+      NODE_ENV: 'test',
+      AI_EDITOR_PROVIDER_WORKER_ORIGIN: 'http://127.0.0.1:47931',
+      AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET:
+        'provider-worker-config-test-secret-32bytes-minimum'
+    }, { repositoryRoot })).toThrow(/47930/)
+    expect(() => loadGatewayConfig({
+      NODE_ENV: 'test',
+      AI_EDITOR_PROVIDER_WORKER_ORIGIN: 'http://127.0.0.1:47930',
+      AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET: 'short'
+    }, { repositoryRoot })).toThrow(/at least 32 bytes/)
+  })
+
+  it('requires HTTPS and mTLS client credentials for a production Worker', () => {
+    const dataRoot = path.resolve('F:/production-gateway-data')
+    const base = {
+      NODE_ENV: 'production',
+      AI_EDITOR_GATEWAY_DATA_ROOT: dataRoot,
+      AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: 'https://gateway.example.test',
+      AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET:
+        'provider-worker-config-test-secret-32bytes-minimum'
+    }
+    expect(() => loadGatewayConfig({
+      ...base,
+      AI_EDITOR_PROVIDER_WORKER_ORIGIN: 'http://worker.example.test'
+    }, { repositoryRoot })).toThrow(/HTTPS origin/)
+    expect(() => loadGatewayConfig({
+      ...base,
+      AI_EDITOR_PROVIDER_WORKER_ORIGIN: 'https://worker.example.test'
+    }, { repositoryRoot })).toThrow(/mTLS client credentials/)
+  })
+
   it('supports explicit production PostgreSQL configuration', () => {
     const dataRoot = path.resolve('F:/production-gateway-data')
     const production = loadGatewayConfig({

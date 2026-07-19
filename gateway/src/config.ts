@@ -1,9 +1,22 @@
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const GATEWAY_DEVELOPMENT_HOST = '127.0.0.1'
 export const GATEWAY_DEVELOPMENT_PORT = 47920
 export const EDGE_DEVELOPMENT_PORT = 47921
+export const PROVIDER_WORKER_DEVELOPMENT_PORT = 47930
+
+export interface ProviderWorkerGatewayConfig {
+  readonly origin: string
+  readonly gatewayId: string
+  readonly signingSecret: string
+  readonly tls: {
+    readonly keyFile: string
+    readonly certFile: string
+    readonly caFile: string
+  } | null
+}
 
 export interface GatewayConfig {
   readonly environment: 'development' | 'test' | 'production'
@@ -18,6 +31,7 @@ export interface GatewayConfig {
   }
   readonly authMode: 'real' | 'mock'
   readonly mockState: MockAccountState
+  readonly providerWorker?: ProviderWorkerGatewayConfig
 }
 
 export type MockAccountState =
@@ -62,6 +76,72 @@ function parseMockState(value: string | undefined): MockAccountState {
   const state = (value || 'ready') as MockAccountState
   if (!allowedMockStates.has(state)) throw new Error(`Unsupported mock account state: ${value}`)
   return state
+}
+
+function parseProviderWorker(
+  env: NodeJS.ProcessEnv,
+  environment: GatewayConfig['environment']
+): ProviderWorkerGatewayConfig | undefined {
+  const candidate = env.AI_EDITOR_PROVIDER_WORKER_ORIGIN
+  if (!candidate) return undefined
+  const url = new URL(candidate)
+  if (
+    url.origin !== candidate ||
+    url.pathname !== '/' ||
+    url.search ||
+    url.hash ||
+    url.username ||
+    url.password ||
+    (environment === 'production' && url.protocol !== 'https:') ||
+    (
+      environment !== 'production' &&
+      url.origin !== `http://127.0.0.1:${PROVIDER_WORKER_DEVELOPMENT_PORT}`
+    )
+  ) {
+    throw new Error(environment === 'production'
+      ? 'Production Provider Worker origin must be an HTTPS origin'
+      : `Development Provider Worker origin must be http://127.0.0.1:${PROVIDER_WORKER_DEVELOPMENT_PORT}`)
+  }
+  const signingSecret = String(env.AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET || '')
+  if (Buffer.byteLength(signingSecret, 'utf8') < 32) {
+    throw new Error('Provider Worker signing secret must contain at least 32 bytes')
+  }
+  const gatewayId = String(env.AI_EDITOR_PROVIDER_WORKER_GATEWAY_ID || 'gateway-local')
+  if (!/^[A-Za-z0-9._:-]{1,80}$/.test(gatewayId)) {
+    throw new Error('Provider Worker Gateway ID is invalid')
+  }
+  const tlsValues = [
+    env.AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_KEY,
+    env.AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_CERT,
+    env.AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_CA
+  ]
+  const supplied = tlsValues.filter(Boolean).length
+  if (supplied !== 0 && supplied !== 3) {
+    throw new Error('Provider Worker client TLS key, certificate, and CA must be configured together')
+  }
+  if (environment === 'production' && supplied !== 3) {
+    throw new Error('Production Gateway requires Provider Worker mTLS client credentials')
+  }
+  const tls = supplied === 3
+    ? {
+        keyFile: path.resolve(tlsValues[0]!),
+        certFile: path.resolve(tlsValues[1]!),
+        caFile: path.resolve(tlsValues[2]!)
+      }
+    : null
+  if (tls) {
+    for (const file of [tls.keyFile, tls.certFile, tls.caFile]) {
+      if (!fs.existsSync(file)) {
+        throw new Error(`Provider Worker client TLS file does not exist: ${file}`)
+      }
+    }
+  }
+  return {
+    origin: url.origin,
+    gatewayId,
+    signingSecret,
+    tls
+  }
 }
 
 function ensureIsolatedDataRoot(
@@ -133,6 +213,7 @@ export function loadGatewayConfig(
       ? 'Production Gateway public origin must be an HTTPS origin'
       : 'Development Gateway public origin must match its fixed listener')
   }
+  const providerWorker = parseProviderWorker(env, environment)
   return {
     environment,
     host,
@@ -145,6 +226,7 @@ export function loadGatewayConfig(
       ...(postgresUrl ? { postgresUrl } : {})
     },
     authMode,
-    mockState: parseMockState(env.AI_EDITOR_MOCK_STATE)
+    mockState: parseMockState(env.AI_EDITOR_MOCK_STATE),
+    ...(providerWorker ? { providerWorker } : {})
   }
 }

@@ -187,6 +187,42 @@ flowchart TD
    显示倒计时并在到期后自动停止路由；非 Codex OAuth 客户端签发的 Token 会标记为
    不兼容且禁止路由，不会将邮箱 OAuth 或仅能查额度的 Token 误当作可用订阅凭据。
 
+## Provider Worker（PW0/PW1）
+
+`provider-worker` 是与 standalone、Edge 和 Gateway 并列的独立运行模式。开发端口固定
+为 `127.0.0.1:47930`，只执行 Gateway 已授权的 Provider 调用，不是通用代理。
+
+当前 PW1 本地链路：
+
+```text
+Gateway ProviderWorkerClient
+  → HMAC-SHA256 请求签名
+  → timestamp + nonce 防重放
+  → Provider Worker
+      ├─ /internal/v1/models
+      ├─ /internal/v1/responses
+      ├─ /internal/v1/chat/completions
+      ├─ /internal/v1/turns/:turnId
+      └─ /internal/v1/turns/:turnId/cancel
+```
+
+安全边界：
+
+- 开发环境无测试证书时只允许 `127.0.0.1`；生产环境缺少服务端证书、私钥或客户端 CA
+  时拒绝启动。
+- 生产 Gateway 缺少 Worker 客户端证书、私钥或 CA 时拒绝启用 Worker origin。
+- 每个内部请求同时绑定 method、request target、Gateway ID、request ID、Turn ID、
+  timestamp、nonce 和正文 SHA-256。
+- nonce 只能使用一次；Turn ID 相同但正文不同返回冲突，正文相同时可安全重放已完成
+  SSE，不再次调用 Provider。
+- Worker 状态不包含用户邮箱、密码、邀请码、产品 Refresh Token 或请求原文。
+- 当前执行器为本地 Mock；真实 Provider Runtime、凭据下沉、KMS、持久化用量 outbox
+  和境外部署属于 PW2/PW3。
+
+`provider-worker-runtime-files.json` 是独立 Worker 制品白名单。
+`npm run provider-worker:build-release` 只生成 Worker 入口和运行模块，禁止携带 Gateway、
+Admin、Edge、用户数据库或 standalone 服务器。
+
 ## 调度与请求连续性
 
 - 路由策略：`priority`、`round-robin`、`headroom`、`least-used`、`latency`、

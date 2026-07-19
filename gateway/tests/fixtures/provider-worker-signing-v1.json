@@ -1,0 +1,14 @@
+{
+  "version": "aieditor-v1",
+  "method": "POST",
+  "requestTarget": "/internal/v1/responses?attempt=1",
+  "gatewayId": "gateway-contract",
+  "requestId": "req_contract",
+  "turnId": "turn_contract",
+  "timestamp": 1800000000000,
+  "nonce": "nonce_contract_1234567890",
+  "body": "{\"model\":\"gpt-worker-mock\",\"input\":\"hello\"}",
+  "signingSecret": "provider-worker-contract-secret-32bytes-minimum",
+  "bodySha256": "9eb6b8b128c933db077c50fb3cd2964b01e38f83a814f05119bbf3a79625573a",
+  "signature": "v1=c98c3086bf7a1ad1222eabb48a0a39ef9f7f847bcc86683e87e2bfec3355c448"
+}

@@ -25,7 +25,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $resolved '.ai-editor-dev-root'))) {
     throw 'Reset target is missing the AI Editor development marker'
 }
 
-foreach ($mode in @('edge', 'gateway')) {
+foreach ($mode in @('edge', 'gateway', 'provider-worker')) {
     [void](Stop-AiEditorProcess -Mode $mode -DataRoot $resolved)
 }
 

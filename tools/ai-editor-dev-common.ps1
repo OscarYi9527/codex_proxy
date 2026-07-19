@@ -24,7 +24,12 @@ function Assert-AiEditorPort {
         [Parameter(Mandatory = $true)][int]$Port,
         [Parameter(Mandatory = $true)][string]$Name
     )
-    $expected = if ($Name -eq 'Gateway') { 47920 } else { 47921 }
+    $expected = switch ($Name) {
+        'Gateway' { 47920 }
+        'Edge' { 47921 }
+        'Provider Worker' { 47930 }
+        default { throw "Unknown AI Editor service name: $Name" }
+    }
     if ($Port -ne $expected) {
         throw "$Name development port must be fixed at $expected and cannot use shared port 47892"
     }
@@ -38,7 +43,7 @@ function Test-AiEditorPortAvailable {
 
 function Assert-AiEditorProcessSlotAvailable {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet('gateway', 'edge')][string]$Mode,
+        [Parameter(Mandatory = $true)][ValidateSet('gateway', 'edge', 'provider-worker')][string]$Mode,
         [Parameter(Mandatory = $true)][string]$DataRoot
     )
 
@@ -73,7 +78,7 @@ function Initialize-AiEditorDataRoot {
 
 function Wait-AiEditorServiceHealthy {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet('gateway', 'edge')][string]$Mode,
+        [Parameter(Mandatory = $true)][ValidateSet('gateway', 'edge', 'provider-worker')][string]$Mode,
         [Parameter(Mandatory = $true)][int]$Port,
         [Parameter(Mandatory = $true)][int]$ProcessId,
         [Parameter(Mandatory = $true)][string]$DataRoot,
@@ -103,7 +108,7 @@ function Wait-AiEditorServiceHealthy {
 
 function Start-AiEditorProcess {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet('gateway', 'edge')][string]$Mode,
+        [Parameter(Mandatory = $true)][ValidateSet('gateway', 'edge', 'provider-worker')][string]$Mode,
         [Parameter(Mandatory = $true)][string]$NodePath,
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [Parameter(Mandatory = $true)][hashtable]$Environment,
@@ -205,7 +210,7 @@ function Invoke-AiEditorForegroundProcess {
 
 function Stop-AiEditorProcess {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet('gateway', 'edge')][string]$Mode,
+        [Parameter(Mandatory = $true)][ValidateSet('gateway', 'edge', 'provider-worker')][string]$Mode,
         [Parameter(Mandatory = $true)][string]$DataRoot
     )
     $pidFile = Join-Path $DataRoot "$Mode.pid.json"

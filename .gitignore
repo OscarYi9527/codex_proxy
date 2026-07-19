@@ -49,6 +49,7 @@ node_modules/
 
 # AI Editor Gateway/Edge isolated development state
 .ai-editor-dev/
+.ai-editor-release/
 gateway/dist/
 gateway/coverage/
 gateway/*.sqlite

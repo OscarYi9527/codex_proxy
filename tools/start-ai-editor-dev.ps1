@@ -1,10 +1,11 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('all', 'gateway', 'edge')]
+    [ValidateSet('all', 'gateway', 'edge', 'provider-worker')]
     [string]$Mode = 'all',
     [string]$DataRoot,
     [int]$GatewayPort = 47920,
     [int]$EdgePort = 47921,
+    [int]$ProviderWorkerPort = 47930,
     [ValidateSet('ready', 'login_required', 'account_unavailable', 'service_unavailable', 'password_change_required')]
     [string]$MockState = 'ready',
     [ValidateSet('real', 'mock')]
@@ -26,8 +27,9 @@ $AuthenticationMode = if ([string]::IsNullOrWhiteSpace($AuthenticationMode)) {
 }
 Assert-AiEditorPort -Port $GatewayPort -Name 'Gateway'
 Assert-AiEditorPort -Port $EdgePort -Name 'Edge'
-if ($GatewayPort -eq $EdgePort) {
-    throw 'Gateway and Edge ports must be different'
+Assert-AiEditorPort -Port $ProviderWorkerPort -Name 'Provider Worker'
+if (@(@($GatewayPort, $EdgePort, $ProviderWorkerPort) | Select-Object -Unique).Count -ne 3) {
+    throw 'Gateway, Edge, and Provider Worker ports must be different'
 }
 
 $node = (Get-Command node -ErrorAction Stop).Source
@@ -44,15 +46,17 @@ if ($ValidateOnly) {
         dataRoot = $DataRoot
         gateway = "http://127.0.0.1:$GatewayPort"
         edge = "http://127.0.0.1:$EdgePort"
+        providerWorker = "http://127.0.0.1:$ProviderWorkerPort"
         authenticationMode = $AuthenticationMode
     }
     return
 }
 
-foreach ($port in @($GatewayPort, $EdgePort)) {
+foreach ($port in @($GatewayPort, $EdgePort, $ProviderWorkerPort)) {
     if (($Mode -eq 'all') -or
         ($Mode -eq 'gateway' -and $port -eq $GatewayPort) -or
-        ($Mode -eq 'edge' -and $port -eq $EdgePort)) {
+        ($Mode -eq 'edge' -and $port -eq $EdgePort) -or
+        ($Mode -eq 'provider-worker' -and $port -eq $ProviderWorkerPort)) {
         if (-not (Test-AiEditorPortAvailable -Port $port)) {
             throw "Port $port is already in use"
         }
@@ -66,6 +70,9 @@ if ($Mode -in @('all', 'gateway')) {
 if ($Mode -in @('all', 'edge')) {
     Assert-AiEditorProcessSlotAvailable -Mode edge -DataRoot $DataRoot
 }
+if ($Mode -in @('all', 'provider-worker')) {
+    Assert-AiEditorProcessSlotAvailable -Mode provider-worker -DataRoot $DataRoot
+}
 $localNonceBytes = [byte[]](1..32 | ForEach-Object { Get-Random -Maximum 256 })
 $localNonce = [Convert]::ToBase64String($localNonceBytes)
 [IO.File]::WriteAllText(
@@ -73,9 +80,43 @@ $localNonce = [Convert]::ToBase64String($localNonceBytes)
     $localNonce,
     (New-Object Text.UTF8Encoding($false))
 )
+$providerWorkerSecretBytes = New-Object byte[] 48
+$random = [Security.Cryptography.RandomNumberGenerator]::Create()
+try {
+    $random.GetBytes($providerWorkerSecretBytes)
+} finally {
+    $random.Dispose()
+}
+$providerWorkerSigningSecret = [Convert]::ToBase64String($providerWorkerSecretBytes)
 
 $startedModes = New-Object 'System.Collections.Generic.List[string]'
 try {
+    if ($Mode -in @('all', 'provider-worker')) {
+        $providerWorkerRoot = Join-Path $DataRoot 'provider-worker'
+        Initialize-AiEditorDataRoot -DataRoot $providerWorkerRoot
+        $processId = Start-AiEditorProcess `
+            -Mode provider-worker `
+            -NodePath $node `
+            -Arguments @((Join-Path $repo 'src\launcher.js'), '--mode', 'provider-worker') `
+            -Environment @{
+                NODE_ENV = 'development'
+                CODEX_PROXY_MODE = 'provider-worker'
+                AI_EDITOR_PROVIDER_WORKER_HOST = '127.0.0.1'
+                AI_EDITOR_PROVIDER_WORKER_PORT = $ProviderWorkerPort
+                AI_EDITOR_PROVIDER_WORKER_DATA_ROOT = $providerWorkerRoot
+                AI_EDITOR_PROVIDER_WORKER_GATEWAY_IDS = 'gateway-local'
+                AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET = $providerWorkerSigningSecret
+            } `
+            -DataRoot $DataRoot
+        $startedModes.Add('provider-worker')
+        Wait-AiEditorServiceHealthy `
+            -Mode provider-worker `
+            -Port $ProviderWorkerPort `
+            -ProcessId $processId `
+            -DataRoot $DataRoot
+        Write-Host "Provider Worker healthy: PID $processId, http://127.0.0.1:$ProviderWorkerPort"
+    }
+
     if ($Mode -in @('all', 'gateway')) {
         $gatewayRoot = Join-Path $DataRoot 'gateway'
         Initialize-AiEditorDataRoot -DataRoot $gatewayRoot
@@ -86,6 +127,13 @@ try {
             AI_EDITOR_GATEWAY_DATA_ROOT = $gatewayRoot
             AI_EDITOR_GATEWAY_AUTH_MODE = $AuthenticationMode
             AI_EDITOR_MOCK_STATE = $MockState
+        }
+        if ($Mode -eq 'all') {
+            $gatewayEnvironment.AI_EDITOR_PROVIDER_WORKER_ORIGIN =
+                "http://127.0.0.1:$ProviderWorkerPort"
+            $gatewayEnvironment.AI_EDITOR_PROVIDER_WORKER_GATEWAY_ID = 'gateway-local'
+            $gatewayEnvironment.AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET =
+                $providerWorkerSigningSecret
         }
         if ($AuthenticationMode -eq 'real') {
             Invoke-AiEditorForegroundProcess `

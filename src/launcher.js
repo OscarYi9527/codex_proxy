@@ -13,6 +13,10 @@ export async function startSelectedMode(options = {}) {
     const { startEdgeServer } = await import('./edge/edge-server.js')
     return startEdgeServer()
   }
+  if (mode === 'provider-worker') {
+    const { startProviderWorkerServer } = await import('./provider-worker/server.js')
+    return startProviderWorkerServer()
+  }
   const compiled = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'gateway', 'dist', 'server.js')
   try {
     const { startGatewayServer } = await import(pathToFileURL(compiled).href)

@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('all', 'gateway', 'edge')]
+    [ValidateSet('all', 'gateway', 'edge', 'provider-worker')]
     [string]$Mode = 'all',
     [string]$DataRoot
 )
@@ -25,5 +25,10 @@ if ($Mode -in @('all', 'edge')) {
 if ($Mode -in @('all', 'gateway')) {
     if (Stop-AiEditorProcess -Mode gateway -DataRoot $DataRoot) {
         Write-Host 'Gateway stopped'
+    }
+}
+if ($Mode -in @('all', 'provider-worker')) {
+    if (Stop-AiEditorProcess -Mode provider-worker -DataRoot $DataRoot) {
+        Write-Host 'Provider Worker stopped'
     }
 }

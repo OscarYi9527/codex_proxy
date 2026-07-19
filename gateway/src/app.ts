@@ -67,6 +67,7 @@ import { AuditRepository } from './db/repositories/audit-repository.js'
 import { AuditService } from './audit/audit-service.js'
 import { RetentionService } from './audit/retention-service.js'
 import { registerAuditRoutes } from './api/audit-routes.js'
+import { ProviderWorkerClient } from './provider-worker/provider-worker-client.js'
 
 export interface GatewayApp {
   readonly app: FastifyInstance
@@ -209,9 +210,10 @@ export async function createGatewayApp(options: {
       clock,
       ids
     )
-    const providerAdapter = options.providerAdapter || new StandaloneRouteAdapter({
-      storageRoot: config.dataRoot
-    })
+    const providerAdapter = options.providerAdapter ||
+      (config.providerWorker
+        ? new ProviderWorkerClient(config.providerWorker)
+        : new StandaloneRouteAdapter({ storageRoot: config.dataRoot }))
     if (providerAdapter instanceof StandaloneRouteAdapter) await providerAdapter.initialize()
     const providerRepository = new ProviderRepository(
       database.db,

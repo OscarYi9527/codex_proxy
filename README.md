@@ -754,9 +754,12 @@ npm test
 npm run gateway:test
 npm run admin:test
 npm run test:dev-scripts
+npm run test:provider-worker
 npm run check
 npm run gateway:build
 npm run admin:build
+npm run provider-worker:release-check
+npm run provider-worker:build-release
 npm run release:check
 git diff --check
 ```
@@ -872,12 +875,15 @@ VS Code 兼容层会把 `chatgpt.cliExecutable` 指向 `codex-vscode-launcher.ex
 ## 仓库结构
 
 - `src/server.js`：HTTP 服务、模型路由和管理 API 入口。
-- `src/launcher.js` / `src/mode.js`：默认 standalone 与隔离 Edge 运行模式入口。
+- `src/launcher.js` / `src/mode.js`：standalone、Edge、Gateway 与 Provider Worker
+  显式模式入口。
 - `src/edge/`：仅监听本机的 AI Editor Edge、OS 安全存储、真实 handoff 与兼容 Mock。
+- `src/provider-worker/`：Gateway 签名验证、防重放、Turn 幂等、SSE、取消和本地 Mock。
 - `gateway/`：Fastify/TypeScript Gateway、真实产品认证、模型/Responses 路由、
   Kysely 双数据库边界、迁移和测试。
+- `gateway/src/provider-worker/`：Gateway 到 Worker 的签名客户端和 Provider adapter。
 - `gateway/admin-web/`：React/Vite 专用管理外壳、角色导航和普通用户账号页面。
-- `tools/*-ai-editor-dev.ps1`：47920/47921 隔离启动、停止和确认式数据重置。
+- `tools/*-ai-editor-dev.ps1`：47920/47921/47930 隔离启动、停止和确认式数据重置。
 - `src/chatgpt-accounts.js`：账号池、额度、Token、并发租约和冷却。
 - `src/routes/`：ChatGPT、OpenAI API、DeepSeek 和中转节点处理器。
 - `src/admin.html` / `src/admin_app.js` / `src/admin_modules/`：本地管理后台、账号池、分析、设置和新手教程。
@@ -900,6 +906,7 @@ VS Code 兼容层会把 `chatgpt.cliExecutable` 指向 `codex-vscode-launcher.ex
 - [后续计划](TODO.md)
 - [Oscar 第一轮 Gateway/Edge Mock 联调交接](docs/AI_EDITOR_GATEWAY_OSCAR_HANDOFF.md)
 - [Oscar 真实认证与 Responses 联调交接](docs/AI_EDITOR_GATEWAY_REAL_AUTH_RESPONSES_HANDOFF.md)
+- [Provider Worker PW0/PW1 交接](docs/AI_EDITOR_PROVIDER_WORKER_PW0_PW1_HANDOFF.md)
 
 ## 安全说明
 

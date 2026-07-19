@@ -15,16 +15,20 @@
     "start": "node src/launcher.js",
     "start:standalone": "node src/launcher.js --mode standalone",
     "start:edge": "node src/launcher.js --mode edge",
+    "start:provider-worker": "node src/launcher.js --mode provider-worker",
     "gateway:dev": "npm run dev --workspace @ai-editor/gateway",
     "gateway:build": "npm run build --workspace @ai-editor/gateway",
     "gateway:test": "npm run test --workspace @ai-editor/gateway",
     "admin:dev": "npm run dev --workspace @ai-editor/admin-web",
     "admin:build": "npm run build --workspace @ai-editor/admin-web",
     "admin:test": "npm run test --workspace @ai-editor/admin-web",
-    "check": "node --check src/server.js && node --check src/launcher.js && node --check src/mode.js && node --check src/edge/edge-config.js && node --check src/edge/edge-server.js && node --check src/edge/gateway-client.js && node --check src/edge/local-account-store.js && node --check src/edge/local-handoff.js && node --check index.js && npm run check --workspace @ai-editor/gateway && npm run check --workspace @ai-editor/admin-web",
+    "check": "node --check src/server.js && node --check src/launcher.js && node --check src/mode.js && node --check src/edge/edge-config.js && node --check src/edge/edge-server.js && node --check src/edge/gateway-client.js && node --check src/edge/local-account-store.js && node --check src/edge/local-handoff.js && node --check src/provider-worker/config.js && node --check src/provider-worker/protocol.js && node --check src/provider-worker/nonce-store.js && node --check src/provider-worker/turn-store.js && node --check src/provider-worker/mock-executor.js && node --check src/provider-worker/server.js && node --check index.js && npm run check --workspace @ai-editor/gateway && npm run check --workspace @ai-editor/admin-web",
     "test": "node --test tests/*.js tests/*.cjs",
     "test:gateway-stack": "npm run gateway:test && npm run admin:test",
     "test:dev-scripts": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test-dev-scripts.ps1",
+    "test:provider-worker": "node --test tests/test-provider-worker.js",
+    "provider-worker:release-check": "node scripts/provider-worker-release-check.mjs",
+    "provider-worker:build-release": "node scripts/build-provider-worker-release.mjs",
     "release:check": "node scripts/release-check.mjs"
   },
   "engines": {
@@ -44,6 +48,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "5.1.1",
+    "node-forge": "^1.4.0",
     "vite": "7.3.6"
   }
 }

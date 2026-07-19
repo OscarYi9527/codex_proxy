@@ -33,11 +33,15 @@
   到期自动停止路由；账号池支持可续约、临时、24 小时内到期和已失效分类。
 - 临时导入新增 OAuth 客户端兼容性校验；能查询额度但不是由 Codex 官方客户端签发的
   Token 会归入“不兼容”分类并强制仅保存，避免导入后请求持续返回 401。
+- 新增独立 `provider-worker` 模式和 `127.0.0.1:47930` 本地 Mock，覆盖 Gateway HMAC
+  请求签名、时间窗口、nonce 防重放、Turn 幂等、SSE、取消和安全状态查询。
+- 新增 Gateway `ProviderWorkerClient`、共享签名合同 fixture、真实 mTLS 握手测试和
+  Provider Worker 独立发布清单；Worker 制品不包含 Gateway、Edge、管理页或用户数据库。
 
 ### Changed
 
-- 根入口支持 standalone（默认）与 Edge 显式模式，发布门禁扩展为 Gateway、React、
-  隔离脚本测试及两个生产构建。
+- 根入口支持 standalone（默认）、Edge、Gateway 与 Provider Worker 显式模式，发布
+  门禁扩展为 Gateway、React、隔离脚本测试及独立 Worker 制品检查。
 - Node.js 工程基线调整为 22.19 及以上，以匹配 Vite 7 和 Gateway 工具链。
 - Gateway Provider 配置、统计、线程路由和健康数据改用隔离存储根，standalone 未设置
   `CODEX_PROXY_STORAGE_ROOT` 时保持原有仓库根行为。

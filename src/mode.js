@@ -1,4 +1,4 @@
-export const PROXY_MODES = Object.freeze(['standalone', 'edge', 'gateway'])
+export const PROXY_MODES = Object.freeze(['standalone', 'edge', 'gateway', 'provider-worker'])
 
 export function parseProxyMode(options = {}) {
   const argv = options.argv || process.argv.slice(2)
@@ -6,7 +6,9 @@ export function parseProxyMode(options = {}) {
   let value = env.CODEX_PROXY_MODE || 'standalone'
   const index = argv.findIndex(item => item === '--mode')
   if (index >= 0) {
-    if (!argv[index + 1]) throw new Error('--mode requires standalone, edge, or gateway')
+    if (!argv[index + 1]) {
+      throw new Error('--mode requires standalone, edge, gateway, or provider-worker')
+    }
     value = argv[index + 1]
   }
   const inline = argv.find(item => item.startsWith('--mode='))

@@ -84,6 +84,7 @@ for (const [script, label] of [
   ['gateway:test', 'Gateway tests'],
   ['admin:test', 'admin-web tests'],
   ['test:dev-scripts', 'isolated development script tests'],
+  ['provider-worker:release-check', 'Provider Worker release boundary'],
   ['check', 'workspace type and syntax checks'],
   ['gateway:build', 'Gateway production build'],
   ['admin:build', 'admin-web production build']

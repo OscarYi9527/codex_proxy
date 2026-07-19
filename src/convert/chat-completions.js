@@ -2,6 +2,7 @@
 // Used when upstream only supports /v1/chat/completions (OpenAI API channel)
 
 import { id, asText } from './anthropic.js'
+import { responsesFunctionCallItemId } from './tool-ids.js'
 
 function contentBlockToText(content) {
   if (typeof content === 'string') return content
@@ -135,7 +136,8 @@ export function chatCompletionToResponse(data, originalBody) {
   if (message.tool_calls) {
     for (const tc of message.tool_calls) {
       response.output.push({
-        id: tc.id || id('tool'),
+        // Responses function_call item IDs must begin with `fc`; retain the upstream ID in call_id.
+        id: responsesFunctionCallItemId(tc.id),
         type: 'function_call',
         status: 'completed',
         call_id: tc.id,

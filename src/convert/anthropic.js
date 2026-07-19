@@ -2,6 +2,7 @@
 // Used for DeepSeek upstream (Anthropic-compatible API)
 
 import { recordUsage, saveStats } from '../stats.js'
+import { responsesFunctionCallItemId } from './tool-ids.js'
 
 
 export function id(prefix = 'resp') {
@@ -235,7 +236,8 @@ export function anthropicToResponse(data, originalBody, customTools = new Set())
     if (block.type === 'tool_use') {
       const isCustom = customTools.has(block.name)
       return [{
-        id: id(`tool${index}`),
+        // Responses validates function_call item IDs as `fc_*`; keep the upstream ID as call_id.
+        id: isCustom ? id(`tool${index}`) : responsesFunctionCallItemId(block.id),
         type: isCustom ? 'custom_tool_call' : 'function_call',
         status: 'completed',
         call_id: block.id,

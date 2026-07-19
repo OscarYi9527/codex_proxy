@@ -11,13 +11,195 @@ import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurren
 import { proxyConfig, atomicWriteJson, configForSettingsSnapshot, mergeAccountBackup, mergeSettingsSnapshot, orderChatgptAccounts, renameChatgptAccountInList } from '../src/config.js'
 import { assertCircuitAvailable, getCircuitStates, recordCircuitResult, resetCircuits } from '../src/circuit-breaker.js'
 import { fetchWithRetry, proxyMetaHeaders, retryAfterMs } from '../src/server-utils.js'
-import { redactSecrets, summarizeError } from '../src/logger.js'
+import { redactSecrets, summarizeError, summarizeUpstreamErrorBody } from '../src/logger.js'
 import { createServer } from '../src/server.js'
 import { findDuplicateAccount, findPrivateBrowser, parseDeviceAuthOutput, privateBrowserArgs, publicProxyConfig } from '../src/admin.js'
-import { acquireActiveAccountWithRetry, chatGptAccountCircuitKey, refreshBelowReserveAccounts } from '../src/routes/chatgpt-sub.js'
+import { acquireActiveAccountWithRetry, buildChatGptResponsesBody, chatGptAccountCircuitKey, refreshBelowReserveAccounts } from '../src/routes/chatgpt-sub.js'
 import { getRouteDecisions, recordRouteDecision, resetRouteDecisions } from '../src/route-decisions.js'
 import { decryptConfigSecrets, encryptConfigSecrets, isEncryptedSecret } from '../src/credential-store.js'
 import { getProviderHealth, recordProviderOutcome, resetProviderHealth } from '../src/provider-health.js'
+import { anthropicToResponse, responsesToAnthropic } from '../src/convert/anthropic.js'
+import { chatCompletionToResponse } from '../src/convert/chat-completions.js'
+import { createChatStreamState, createStreamState, onAnthropicEvent, onChatCompletionChunk } from '../src/convert/stream.js'
+import { normalizeResponsesFunctionCallIds, responsesFunctionCallItemId } from '../src/convert/tool-ids.js'
+import { summarizeDeepSeekRequestShape } from '../src/routes/deepseek.js'
+
+describe('跨 Provider 工具调用 ID', () => {
+  it('为 Responses function_call 生成稳定且有界的 fc_ ID', () => {
+    assert.strictEqual(
+      responsesFunctionCallItemId('tool_mrrmem914mxsqfk7'),
+      'fc_tool_mrrmem914mxsqfk7'
+    )
+    assert.strictEqual(responsesFunctionCallItemId('fc_existing'), 'fc_existing')
+
+    const longId = `tool_${'x'.repeat(200)}`
+    assert.strictEqual(responsesFunctionCallItemId(longId), responsesFunctionCallItemId(longId))
+    assert.ok(responsesFunctionCallItemId(longId).startsWith('fc_'))
+    assert.ok(responsesFunctionCallItemId(longId).length <= 64)
+  })
+
+  it('发送 GPT Responses 前修复旧历史但保留 call_id 关联', () => {
+    const original = {
+      input: [
+        {
+          type: 'function_call',
+          id: 'tool_mrrmem914mxsqfk7',
+          call_id: 'tool_mrrmem914mxsqfk7',
+          name: 'read_file',
+          arguments: '{}'
+        },
+        {
+          type: 'function_call_output',
+          call_id: 'tool_mrrmem914mxsqfk7',
+          output: 'ok'
+        }
+      ]
+    }
+
+    const normalized = normalizeResponsesFunctionCallIds(original)
+    assert.strictEqual(normalized.input[0].id, 'fc_tool_mrrmem914mxsqfk7')
+    assert.strictEqual(normalized.input[0].call_id, 'tool_mrrmem914mxsqfk7')
+    assert.strictEqual(normalized.input[1].call_id, 'tool_mrrmem914mxsqfk7')
+    assert.strictEqual(original.input[0].id, 'tool_mrrmem914mxsqfk7')
+
+    const upstream = buildChatGptResponsesBody(original, {
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'high'
+    })
+    assert.strictEqual(upstream.input[0].id, 'fc_tool_mrrmem914mxsqfk7')
+    assert.strictEqual(upstream.input[0].call_id, 'tool_mrrmem914mxsqfk7')
+    assert.strictEqual(upstream.model, 'gpt-5.6-sol')
+    assert.strictEqual(upstream.reasoning.effort, 'high')
+  })
+
+  it('普通 Chat Completions 与 Anthropic 回复分离 id 和 call_id', () => {
+    const chatResponse = chatCompletionToResponse({
+      choices: [{
+        message: {
+          tool_calls: [{
+            id: 'tool_chat_1',
+            function: { name: 'read_file', arguments: '{"path":"a"}' }
+          }]
+        }
+      }]
+    }, { model: 'openai-api-gpt-5.6-sol' })
+    assert.strictEqual(chatResponse.output[0].id, 'fc_tool_chat_1')
+    assert.strictEqual(chatResponse.output[0].call_id, 'tool_chat_1')
+
+    const anthropicResponse = anthropicToResponse({
+      content: [{
+        type: 'tool_use',
+        id: 'toolu_deepseek_1',
+        name: 'read_file',
+        input: { path: 'a' }
+      }]
+    }, { model: 'deepseek-v4-pro' })
+    assert.strictEqual(anthropicResponse.output[0].id, 'fc_toolu_deepseek_1')
+    assert.strictEqual(anthropicResponse.output[0].call_id, 'toolu_deepseek_1')
+  })
+
+  it('DeepSeek Anthropic 请求保留并配对原 call_id', () => {
+    const { request } = responsesToAnthropic({
+      input: [
+        {
+          type: 'function_call',
+          id: 'fc_old_item',
+          call_id: 'tool_original_1',
+          name: 'read_file',
+          arguments: '{"path":"a"}'
+        },
+        {
+          type: 'function_call_output',
+          call_id: 'tool_original_1',
+          output: 'ok'
+        }
+      ]
+    }, 'deepseek-v4-pro')
+
+    const toolUse = request.messages
+      .flatMap(message => message.content)
+      .find(block => block.type === 'tool_use')
+    const toolResult = request.messages
+      .flatMap(message => message.content)
+      .find(block => block.type === 'tool_result')
+    assert.strictEqual(toolUse.id, 'tool_original_1')
+    assert.strictEqual(toolResult.tool_use_id, 'tool_original_1')
+  })
+
+  it('流式 Anthropic 和交错 Chat 工具调用保持正确关联', () => {
+    const writes = []
+    const res = {
+      write: value => writes.push(value),
+      end: value => { if (value) writes.push(value) }
+    }
+
+    const anthropicState = createStreamState({ model: 'deepseek-v4-pro' }, new Set())
+    onAnthropicEvent(res, anthropicState, {
+      type: 'content_block_start',
+      index: 0,
+      content_block: { type: 'tool_use', id: 'toolu_stream_1', name: 'read_file' }
+    })
+    assert.strictEqual(anthropicState.response.output[0].id, 'fc_toolu_stream_1')
+    assert.strictEqual(anthropicState.response.output[0].call_id, 'toolu_stream_1')
+
+    const chatState = createChatStreamState({ model: 'openai-api-gpt-5.6-sol' })
+    onChatCompletionChunk(res, chatState, {
+      choices: [{
+        delta: {
+          tool_calls: [
+            { index: 0, id: 'tool_a', function: { name: 'first', arguments: '{"a":' } },
+            { index: 1, id: 'tool_b', function: { name: 'second', arguments: '{"b":' } }
+          ]
+        }
+      }]
+    })
+    onChatCompletionChunk(res, chatState, {
+      choices: [{ delta: { tool_calls: [{ index: 1, function: { arguments: '2}' } }] } }]
+    })
+    onChatCompletionChunk(res, chatState, {
+      choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '1}' } }] } }]
+    })
+
+    assert.strictEqual(chatState.response.output[0].id, 'fc_tool_a')
+    assert.strictEqual(chatState.response.output[0].call_id, 'tool_a')
+    assert.strictEqual(chatState.response.output[0].arguments, '{"a":1}')
+    assert.strictEqual(chatState.response.output[1].id, 'fc_tool_b')
+    assert.strictEqual(chatState.response.output[1].call_id, 'tool_b')
+    assert.strictEqual(chatState.response.output[1].arguments, '{"b":2}')
+    assert.ok(writes.length > 0)
+  })
+
+  it('DeepSeek 400 诊断只保留脱敏错误字段和请求结构', () => {
+    const diagnostic = summarizeUpstreamErrorBody(JSON.stringify({
+      error: {
+        type: 'invalid_request_error',
+        code: 'invalid_tool_history',
+        param: 'messages.3.content.0.tool_use_id',
+        message: 'bad key sk-secret123456 password=hunter2'
+      },
+      request_body: 'must not be logged'
+    }))
+    assert.match(diagnostic, /type=invalid_request_error/)
+    assert.match(diagnostic, /param=messages\.3/)
+    assert.doesNotMatch(diagnostic, /sk-secret|hunter2|request_body/)
+
+    const nonJson = summarizeUpstreamErrorBody('private user content')
+    assert.match(nonJson, /^non_json_body bytes=/)
+    assert.doesNotMatch(nonJson, /private user content/)
+
+    assert.strictEqual(
+      summarizeDeepSeekRequestShape({
+        messages: [
+          { content: [{ type: 'tool_use' }] },
+          { content: [{ type: 'tool_result' }] }
+        ],
+        tools: [{ name: 'read_file' }],
+        stream: true
+      }),
+      'messages=2,tools=1,tool_uses=1,tool_results=1,stream=true'
+    )
+  })
+})
 
 describe('模型解析', () => {
   it('解析 body.model', () => {

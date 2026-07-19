@@ -7,7 +7,7 @@ import { syncRelayModels } from './sync-models.js'
 import { publicProxyConfig } from './admin/shared.js'
 
 export { publicProxyConfig } from './admin/shared.js'
-export { summarizeCodexLaunchFailure, resolveCodexLaunch, getChatgptLoginPreflight, isLocalAdminRequest, parseDeviceAuthOutput, privateBrowserArgs, findPrivateBrowser, findDuplicateAccount, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginPreflight, handleChatgptLoginCancel } from './admin/login.js'
+export { summarizeCodexLaunchFailure, resolveCodexLaunch, getChatgptLoginPreflight, isLocalAdminRequest, parseDeviceAuthOutput, privateBrowserArgs, officialLoginUrlWithHint, findPrivateBrowser, findDuplicateAccount, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginPreflight, handleChatgptLoginCancel } from './admin/login.js'
 export { handleChatgptAccountAdd, handleChatgptAccountsImport, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountSwitch, handleCodexRestart, handleChatgptAccountResetCreditsGet, handleChatgptAccountsRefreshResetCreditsAll, handleChatgptAccountResetQuota } from './admin/accounts.js'
 export { handleStatsGet, handleStatsDelete, handleDiagnosticsGet, handleAutomaticDiagnosisGet, handlePriceCatalogGet, handlePriceCatalogPut, handleCostReportGet, handleConfigSnapshotsGet } from './admin/diagnostics.js'
 export { handleRuntimeInfoGet, handleDeployUpdate, handleAccountBackupsGet, handleAccountBackupRestore, handleConfigRollback, handleRuntimeRepair, handleProviderHealthReset, handleProxyRestart } from './admin/operations.js'

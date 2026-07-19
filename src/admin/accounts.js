@@ -38,37 +38,65 @@ export function handleChatgptAccountsImport(req, res, body) {
       })
     }
     const records = parseChatgptAccountImport(body?.content || body?.auth_json || '')
-    const existingIds = new Set(
-      (proxyConfig.chatgptAccounts || []).map(account => account.account_id)
+    const existingById = new Map(
+      (proxyConfig.chatgptAccounts || []).map(account => [account.account_id, account])
     )
     const imported = []
     const skipped = []
     const routingEnabled = body?.routingEnabled === true
     for (const record of records) {
-      if (existingIds.has(record.accountId)) {
+      const existing = existingById.get(record.accountId)
+      const upgradesTemporary = existing &&
+        (existing.credential_mode === 'temporary_access' || !existing.refresh_token) &&
+        record.credentialMode === 'refreshable'
+      if (existing && !upgradesTemporary) {
         skipped.push({ accountId: record.accountId, reason: 'duplicate' })
         continue
       }
       const label = records.length === 1 && String(body?.label || '').trim()
         ? String(body.label).trim().slice(0, 80)
         : record.label
-      addChatgptAccount(record.authJson, label, { routingEnabled })
-      existingIds.add(record.accountId)
+      addChatgptAccount(record.authJson, label, {
+        routingEnabled,
+        allowAccessOnly: record.credentialMode === 'temporary_access',
+        sourceFormat: record.sourceFormat,
+        email: record.email,
+        planType: record.planType
+      })
+      const savedAccount = (proxyConfig.chatgptAccounts || []).find(
+        account => account.account_id === record.accountId
+      )
+      existingById.set(record.accountId, savedAccount)
       imported.push({
         accountId: record.accountId,
         label,
-        sourceFormat: record.sourceFormat
+        sourceFormat: record.sourceFormat,
+        credentialMode: record.credentialMode,
+        credentialCompatibility: savedAccount?.credential_compatibility || null,
+        upgraded: Boolean(upgradesTemporary)
       })
     }
+    const temporary = imported.filter(item => item.credentialMode === 'temporary_access').length
+    const refreshable = imported.length - temporary
+    const upgraded = imported.filter(item => item.upgraded).length
+    const incompatible = imported.filter(
+      item => item.credentialMode === 'temporary_access' &&
+        item.credentialCompatibility !== 'codex_subscription'
+    ).length
     return sendJson(res, 200, {
       config: publicProxyConfig(proxyConfig),
       result: {
         imported: imported.length,
         skipped: skipped.length,
-        formats: [...new Set(imported.map(item => item.sourceFormat))]
+        temporary,
+        refreshable,
+        upgraded,
+        incompatible,
+        formats: [...new Set(imported.map(item => item.sourceFormat))],
+        credential_modes: [...new Set(imported.map(item => item.credentialMode))]
       },
       message: imported.length
-        ? `已导入 ${imported.length} 个账号${skipped.length ? `，跳过 ${skipped.length} 个重复账号` : ''}；默认${routingEnabled ? '已启用' : '仅保存'}`
+        ? `已导入 ${imported.length} 个账号（临时 ${temporary}，可续约 ${refreshable}${incompatible ? `，不兼容 ${incompatible}` : ''}${upgraded ? `，其中升级 ${upgraded}` : ''}）${skipped.length ? `，跳过 ${skipped.length} 个重复账号` : ''}；${incompatible ? '不兼容账号已强制设为仅保存' : `默认${routingEnabled ? '已启用' : '仅保存'}`}`
         : `未导入新账号，已跳过 ${skipped.length} 个重复账号`
     })
   } catch (error) {
@@ -219,6 +247,14 @@ export async function handleChatgptAccountSwitch(req, res, accountId) {
     const account = (proxyConfig.chatgptAccounts || []).find(a => a.id === accountId)
     if (!account) {
       return sendJson(res, 404, { error: { type: 'not_found_error', message: '账号不存在' } })
+    }
+    if (account.credential_mode === 'temporary_access' || !account.refresh_token) {
+      return sendJson(res, 400, {
+        error: {
+          type: 'invalid_request_error',
+          message: '临时账号不能切换为本机 Codex 登录；可在账号池中直接参与路由，或先完成官方登录'
+        }
+      })
     }
     await ensureFreshToken(account, chinaFetch(fetch))
 

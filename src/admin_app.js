@@ -5,7 +5,10 @@ let errorGuideData = []
 let loginPreflightData = null
 let priceCatalogData = { prices: {} }, costReportData = { providers: {} }
 let accountImportFileName = ''
+let accountImportFiles = []
+let batchLoginQueue = [], batchLoginIndex = 0, batchLoginPreflightData = null
 let accountViewMode = localStorage.getItem('codex-account-view') === 'compact' ? 'compact' : 'cards'
+let accountCategory = ['all','refreshable','temporary','expiring','expired','incompatible'].includes(localStorage.getItem('codex-account-category')) ? localStorage.getItem('codex-account-category') : 'all'
 let healthRange = ['1h','24h','7d'].includes(localStorage.getItem('codex-health-range')) ? localStorage.getItem('codex-health-range') : '24h'
 let usageCalendarMonth = statsDateKey().slice(0,7)
 let animateNextRender = true
@@ -211,6 +214,12 @@ function toggleTheme(){ const dark=document.documentElement.dataset.theme!=='dar
 function setAccountViewMode(mode){
   accountViewMode=mode==='compact'?'compact':'cards'
   localStorage.setItem('codex-account-view',accountViewMode)
+  render()
+}
+function setAccountCategory(category){
+  if(!['all','refreshable','temporary','expiring','expired','incompatible'].includes(category))return
+  accountCategory=category
+  localStorage.setItem('codex-account-category',category)
   render()
 }
 function setHealthRange(range){
@@ -440,7 +449,23 @@ function showModal(title,body,saveText,saveFn){
   closeModal(); const el=document.createElement('div'); el.className='modal-overlay'; el.onclick=e=>{if(e.target===el)closeModal()}
   el.innerHTML=`<div class="modal"><div class="modal-head"><strong>${title}</strong><button class="icon-btn" onclick="closeModal()">${svg('x')}</button></div><div class="modal-body">${body}</div><div class="modal-foot">${button('取消','','closeModal()')}${button(saveText,'check',saveFn,'btn-primary')}</div></div>`; document.body.appendChild(el); modal=el
 }
-function closeModal(){ if(loginPoll)clearInterval(loginPoll);loginPoll=null;if(modal)modal.remove(); modal=null }
+function clearBatchLoginSecrets(cancelWaiting=false){
+  const current=batchLoginQueue[batchLoginIndex]
+  if(cancelWaiting&&current?.status==='waiting'){
+    fetch(API+'/chatgpt-login/cancel',{method:'POST'}).catch(()=>{})
+  }
+  for(const item of batchLoginQueue)item.password=''
+  batchLoginQueue=[];batchLoginIndex=0;batchLoginPreflightData=null
+}
+function closeModal(){
+  if(loginPoll)clearInterval(loginPoll)
+  loginPoll=null
+  for(const file of accountImportFiles)file.content=''
+  accountImportFiles=[];accountImportFileName=''
+  clearBatchLoginSecrets(true)
+  if(modal)modal.remove()
+  modal=null
+}
 function openRelay(id=''){
   const r=(cfg.relays||[]).find(x=>x.id===id)||{id:'',name:'',base_url:'https://api.openai.com/v1',api_key:'',models:['gpt-5.4','gpt-5.4-mini']}
   const quick=id?'':`<div class="field full"><label>CC Switch 快捷导入链接 <span class="hint">兼容 ccswitch://v1/import</span></label><div class="input-wrap"><input class="input" id="relay_deeplink" placeholder="粘贴供应商提供的 ccswitch:// 快捷链接"><button class="btn" onclick="readRelayLink()">${svg('download')}读取剪贴板</button><button class="btn" onclick="parseRelayLink()">解析</button></div><span class="hint" id="relay_link_hint">链接只在本地解析，不会访问供应商网站。</span></div><div class="divider full">或者手动填写</div>`
@@ -500,8 +525,10 @@ async function saveRelay(){
 }
 async function removeRelay(id){ if(!confirm('确定删除这个中转节点吗？'))return; try{const r=await fetch(API+'/relays/'+encodeURIComponent(id),{method:'DELETE'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'删除失败');cfg=d.config;render();toast('节点已删除')}catch(e){toast(e.message,'error')} }
 function openAccount(){
-  accountImportFileName=''
-  showModal('快捷导入 ChatGPT 账号',`<div class="quick-import"><button class="quick-option" onclick="importCurrentAccount()">${svg('refresh')}<strong>一键导入当前账号</strong><small>自动读取本机 Codex CLI 的<br>~/.codex/auth.json</small></button><button class="quick-option" id="auth_drop" onclick="document.getElementById('auth_file').click()" ondragover="authDrag(event,true)" ondragleave="authDrag(event,false)" ondrop="authDrop(event)">${svg('download')}<strong>选择或拖拽账号文件</strong><small>支持 auth.json、sub2、CPA JSON<br>以及完整凭据 TXT，可批量导入</small></button></div><input id="auth_file" type="file" accept=".json,.txt,application/json,text/plain" class="hidden" onchange="loadAuthFile(this.files[0])"><div class="help-note" style="margin-top:12px"><b>安全默认值</b><p>重复账号会跳过，不覆盖现有 Token；新账号默认仅保存，不参与路由。TXT 必须包含 access_token、refresh_token 和 account_id。</p></div><div class="divider">或者手动粘贴</div><div class="form-grid"><div class="field full"><label>单账号备注 <span class="hint">批量文件会使用文件内名称</span></label><input class="input" id="account_label" maxlength="80" placeholder="例如：备用账号"></div><div class="field full"><label style="display:flex;align-items:center;gap:8px"><input id="account_routing_enabled" type="checkbox"> 导入后立即参与自动路由</label><span class="hint">建议先保持关闭，确认账号和额度后再逐个启用。</span></div><div class="field full"><label>账号文件内容</label><textarea id="account_json" style="min-height:150px" placeholder='粘贴 auth.json、sub2/CPA JSON 或完整凭据 TXT'></textarea><span class="hint" id="auth_file_hint">凭据只发送到本机管理接口，不会访问文件来源网站。</span></div></div>`,'安全导入','saveAccount()')
+  showModal('快捷导入 ChatGPT 账号',`<div class="quick-import"><button class="quick-option" onclick="importCurrentAccount()">${svg('refresh')}<strong>一键导入当前账号</strong><small>完整 OAuth 凭据<br>可自动续约</small></button><button class="quick-option" id="auth_drop" onclick="document.getElementById('auth_file').click()" ondragover="authDrag(event,true)" ondragleave="authDrag(event,false)" ondrop="authDrop(event)">${svg('download')}<strong>批量选择账号文件</strong><small>CPA/sub2 自动验权<br>兼容 Token 才能临时直用</small></button><button class="quick-option" onclick="openBatchOfficialLogin()">${svg('users')}<strong>批量官方登录</strong><small>把临时或不兼容账号转为<br>可自动续约账号</small></button></div><input id="auth_file" type="file" multiple accept=".json,.txt,application/json,text/plain" class="hidden" onchange="loadAuthFiles(this.files)">
+  <div class="help-note" style="margin-top:12px"><b>系统会自动分类并校验 OAuth 客户端</b><p><b>临时直导：</b>存在 access_token + account_id、没有 ChatGPT refresh_token，并且 Token 由 Codex 官方 OAuth 客户端签发；可以立即加入号池并显示倒计时。<br><b>可续约导入：</b>同时存在有效 refresh_token；可长期自动刷新。<br><b>权限不兼容：</b>某些 CPA/sub2 Token 虽能查询额度，但不能调用 Codex Responses，将强制仅保存并提示官方登录。<br><b>不能直导：</b>只有邮箱、密码或邮箱 OAuth 的 TXT。</p></div><div id="auth_file_preview" style="display:grid;gap:7px;margin:10px 0"></div>
+  <div class="divider">或者手动粘贴单个账号</div><div class="form-grid"><div class="field full"><label>单账号备注 <span class="hint">批量文件会使用文件内名称</span></label><input class="input" id="account_label" maxlength="80" placeholder="例如：备用账号"></div><div class="field full"><label style="display:flex;align-items:center;gap:8px"><input id="account_routing_enabled" type="checkbox"> 导入后立即参与自动路由</label><span class="hint">周抛临时号可以勾选后立即使用；仍建议先确认到期时间和额度。</span></div><div class="field full"><label>账号文件内容</label><textarea id="account_json" style="min-height:150px" placeholder='粘贴 auth.json、sub2/CPA JSON 或完整凭据 TXT' oninput="if(this.value.trim()){accountImportFiles=[];accountImportFileName='';const p=document.getElementById('auth_file_preview');if(p)p.innerHTML=''}"></textarea><span class="hint" id="auth_file_hint">凭据只发送到本机管理接口，不会访问文件来源网站。</span></div></div>`,'安全导入','saveAccount()')
+  accountImportFiles=[];accountImportFileName=''
 }
 function openRenameAccount(id){
   const account=(cfg.chatgptAccounts||[]).find(item=>item.id===id)
@@ -519,20 +546,43 @@ async function saveAccountRename(id){
   }catch(e){toast(e.message,'error')}
 }
 function authDrag(event,on){event.preventDefault();event.stopPropagation();document.getElementById('auth_drop')?.classList.toggle('dragging',on)}
-function authDrop(event){authDrag(event,false);loadAuthFile(event.dataTransfer?.files?.[0])}
-async function loadAuthFile(file){
-  if(!file)return
-  if(!/\.(json|txt)$/i.test(file.name))return toast('请选择 JSON 或 TXT 账号文件','error')
-  if(file.size>2*1024*1024)return toast('账号文件不能超过 2 MiB','error')
+function authDrop(event){authDrag(event,false);loadAuthFiles(event.dataTransfer?.files)}
+function renderAccountImportPreview(preview){
+  const target=document.getElementById('auth_file_preview')
+  if(!target)return
+  target.innerHTML=(preview||[]).map(item=>{
+    const state=!item.accounts
+      ? {tone:'off',label:'不能直导',detail:'未发现 ChatGPT access_token + account_id；邮箱 OAuth 不能替代'}
+      : item.incompatible
+        ? {tone:'off',label:'不可用于订阅通道',detail:`OAuth 客户端/权限与 Codex 官方登录不兼容；可保存但不能直接使用，请改用批量官方登录`}
+      : item.invalidTemporary
+        ? {tone:'off',label:'临时令牌无效',detail:'Access Token 已到期或无法读取到期时间'}
+        : item.temporary
+          ? {tone:'warn',label:'临时直导',detail:`${item.temporary} 个账号 · 最早剩余 ${item.countdown||'未知'}${item.duplicate_accounts?` · 与前面文件重复 ${item.duplicate_accounts} 个`:''}`}
+          : {tone:'',label:'可自动续约',detail:`${item.refreshable} 个账号 · 包含 ChatGPT Refresh Token${item.duplicate_accounts?` · 与前面文件重复 ${item.duplicate_accounts} 个`:''}`}
+    return `<div class="provider-row" style="grid-template-columns:minmax(0,1fr) auto;padding:9px 10px"><div style="min-width:0"><div class="cell-main">${esc(item.name)}</div><div class="cell-sub">${esc(state.detail)}</div></div><span class="status ${state.tone}"><i></i>${state.label}</span></div>`
+  }).join('')
+}
+async function loadAuthFiles(files){
+  const selected=[...(files||[])]
+  if(!selected.length)return
+  if(selected.length>300)return toast('单次最多选择 300 个账号文件','error')
+  if(selected.some(file=>!/\.(json|txt)$/i.test(file.name)))return toast('请选择 JSON 或 TXT 账号文件','error')
+  if(selected.some(file=>file.size>2*1024*1024))return toast('单个账号文件不能超过 2 MiB','error')
+  if(selected.reduce((sum,file)=>sum+file.size,0)>20*1024*1024)return toast('单次文件总大小不能超过 20 MiB','error')
   try{
-    const text=await file.text()
-    if(!text.trim())throw new Error('文件内容为空')
-    accountImportFileName=file.name
-    document.getElementById('account_json').value=text
-    document.getElementById('auth_file_hint').textContent=`已读取 ${file.name} · 将自动识别格式、去重并安全导入`
-    toast('账号文件已读取')
+    const entries=await Promise.all(selected.map(async file=>({name:file.name,content:await file.text()})))
+    if(entries.some(file=>!file.content.trim()))throw new Error('选择的文件中存在空文件')
+    accountImportFiles=entries
+    accountImportFileName=entries.length===1?entries[0].name:''
+    renderAccountImportPreview(AdminUIBehaviors.inspectDirectImportFiles(entries))
+    const textarea=document.getElementById('account_json')
+    if(textarea)textarea.value=entries.length===1?entries[0].content:''
+    document.getElementById('auth_file_hint').textContent=`已读取 ${entries.length} 个文件 · 将逐文件识别为临时或可续约账号，并自动去重`
+    toast(`已读取 ${entries.length} 个账号文件`)
   }catch(e){toast('无法读取文件：'+e.message,'error')}
 }
+async function loadAuthFile(file){return loadAuthFiles(file?[file]:[])}
 async function importCurrentAccount(){
   try{
     const r=await fetch(API+'/chatgpt-accounts/import-current',{method:'POST'}),d=await r.json()
@@ -572,6 +622,193 @@ async function copyLoginDiagnostics(){
   const text=JSON.stringify(loginPreflightData,null,2)
   try{await navigator.clipboard.writeText(text);toast('登录诊断已复制')}catch{toast(text,'error')}
 }
+function batchLoginStateLabel(status){
+  return {
+    pending:'待登录',
+    waiting:'登录中',
+    success:'已导入',
+    error:'失败',
+    skipped:'已跳过',
+    duplicate:'池中已有',
+    cancelled:'已取消'
+  }[status]||'待登录'
+}
+function batchLoginPrimary({label='开始登录',disabled=false,action='startBatchOfficialLogin()'}={}){
+  const submit=modal?.querySelector('.modal-foot .btn-primary')
+  if(!submit)return
+  submit.textContent=label
+  submit.disabled=disabled
+  submit.setAttribute('onclick',action)
+}
+function renderBatchLoginQueue(){
+  const list=document.getElementById('batch_login_queue')
+  const current=batchLoginQueue[batchLoginIndex]
+  if(list){
+    list.innerHTML=batchLoginQueue.length?`<div style="display:grid;gap:7px">${batchLoginQueue.map((item,index)=>`
+      <div class="provider-row" style="grid-template-columns:auto 1fr auto;padding:9px 10px;${index===batchLoginIndex?'outline:2px solid var(--primary-soft);':''}">
+        <b>${index+1}</b>
+        <div style="min-width:0"><div class="cell-main">${esc(item.label||item.email)}</div><div class="cell-sub">${esc(item.email)} · ${item.password?'已读取登录密码':'需要手动输入密码'} · ${esc((item.sourceNames||[]).join('、'))}</div></div>
+        <span class="status ${item.status==='success'?'':item.status==='pending'||item.status==='waiting'?'warn':'off'}"><i></i>${batchLoginStateLabel(item.status)}</span>
+      </div>`).join('')}</div>`:'<span class="cell-sub">请选择 CPA、sub2 或配套 TXT 文件。</span>'
+  }
+  const currentBox=document.getElementById('batch_login_current')
+  if(currentBox){
+    currentBox.innerHTML=current?`<div style="display:grid;gap:9px">
+      <div><b>当前 ${batchLoginIndex+1}/${batchLoginQueue.length}：${esc(current.label||current.email)}</b><div class="cell-sub">${esc(current.email)}</div></div>
+      <div style="display:flex;gap:7px;flex-wrap:wrap">
+        <button class="btn btn-sm" type="button" onclick="copyBatchLoginCredential('email')">${svg('download')}复制邮箱</button>
+        <button class="btn btn-sm" type="button" onclick="copyBatchLoginCredential('password')" ${current.password?'':'disabled'}>${svg('shield')}复制登录密码</button>
+        ${current.status==='waiting'?button('取消当前登录','x','cancelBatchOfficialLogin()','btn-sm'):''}
+        ${current.status==='error'?button('跳过此账号','arrow','skipBatchOfficialLogin()','btn-sm'):''}
+      </div>
+      <span class="hint">密码只保存在当前页面内存中，不会发送给代理。完成一个账号后请关闭其私密窗口，再登录下一个。</span>
+    </div>`:'<span class="cell-sub">尚未生成登录队列。</span>'
+  }
+  if(!batchLoginPreflightData?.ok||!current){
+    batchLoginPrimary({label:'开始登录队列',disabled:true})
+    return
+  }
+  if(current.status==='waiting'){
+    batchLoginPrimary({label:'等待官方登录…',disabled:true})
+    return
+  }
+  if(current.status==='success'||current.status==='skipped'||current.status==='duplicate'){
+    const hasNext=batchLoginQueue.slice(batchLoginIndex+1).some(item=>['pending','error','cancelled'].includes(item.status))
+    batchLoginPrimary(hasNext
+      ? {label:'登录下一个',action:'advanceBatchOfficialLogin()'}
+      : {label:'完成',action:'finishBatchOfficialLogin()'})
+    return
+  }
+  batchLoginPrimary({
+    label:current.status==='error'||current.status==='cancelled'?'重试当前账号':`登录第 ${batchLoginIndex+1} 个账号`,
+    action:'startBatchOfficialLogin()'
+  })
+}
+async function loadBatchLoginFiles(files){
+  const selected=[...(files||[])]
+  if(!selected.length)return
+  if(selected.length>300)return toast('单次最多选择 300 个文件','error')
+  if(selected.some(file=>file.size>2*1024*1024))return toast('单个账号文件不能超过 2 MiB','error')
+  if(selected.reduce((sum,file)=>sum+file.size,0)>20*1024*1024)return toast('单次文件总大小不能超过 20 MiB','error')
+  try{
+    const entries=await Promise.all(selected.map(async file=>({name:file.name,content:await file.text()})))
+    const candidates=AdminUIBehaviors.extractOfficialLoginCandidates(entries)
+    if(!candidates.length)throw new Error('文件中没有识别到邮箱；请使用包含 email 字段的 CPA/sub2 JSON 或配套 TXT')
+    const existingById=new Map((cfg.chatgptAccounts||[]).map(item=>[String(item.account_id||''),item]))
+    batchLoginQueue=candidates.map(item=>({
+      ...item,
+      status:item.accountId&&existingById.has(item.accountId)&&existingById.get(item.accountId)?.credential_mode!=='temporary_access'?'duplicate':'pending',
+      message:''
+    }))
+    batchLoginIndex=Math.max(0,batchLoginQueue.findIndex(item=>item.status==='pending'))
+    const hint=document.getElementById('batch_login_file_hint')
+    if(hint)hint.textContent=`已读取 ${selected.length} 个文件，识别到 ${batchLoginQueue.length} 个唯一账号`
+    renderBatchLoginQueue()
+  }catch(error){toast(error.message,'error')}
+}
+async function openBatchOfficialLogin(){
+  showModal('批量官方登录队列',`<div class="form-grid">
+    <div class="field full"><div class="help-note"><b>适用于缺少 ChatGPT refresh_token 的 CPA/sub2 文件</b><p>系统只从本地文件生成邮箱队列，然后逐个打开 OpenAI 官方登录。不会自动处理验证码、MFA 或验证码挑战，也不会把密码发送到后台。</p></div></div>
+    <div class="field full"><label>登录环境预检</label><div id="batch_login_preflight" class="help-note">${loginPreflightHtml(null)}</div></div>
+    <div class="field full"><label>选择账号文件 <span class="hint">可以一次选择多个 CPA、sub2 和 TXT 文件，自动按邮箱/账号 ID 去重</span></label><input id="batch_login_files" type="file" multiple accept=".json,.txt,application/json,text/plain" class="input" onchange="loadBatchLoginFiles(this.files)"><span class="hint" id="batch_login_file_hint">文件只在浏览器本地解析；最多识别 100 个账号。</span></div>
+    <div class="field full"><label style="display:flex;align-items:center;gap:8px"><input id="batch_login_routing_enabled" type="checkbox"> 登录成功后立即参与自动路由</label><span class="hint">建议保持关闭，全部登录后刷新额度并逐个启用。</span></div>
+    <div class="field full"><label>当前账号</label><div id="batch_login_current" class="help-note"><span class="cell-sub">尚未生成登录队列。</span></div></div>
+    <div class="field full"><label>登录状态</label><div id="batch_login_status" class="input" style="height:auto;min-height:48px;display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span class="status off"><i></i>等待选择文件</span></div></div>
+    <div class="field full"><label>账号队列</label><div id="batch_login_queue"><span class="cell-sub">请选择账号文件。</span></div></div>
+  </div>`,'开始登录队列','startBatchOfficialLogin()')
+  batchLoginQueue=[];batchLoginIndex=0;batchLoginPreflightData=null
+  batchLoginPrimary({label:'开始登录队列',disabled:true})
+  try{
+    const response=await fetch(API+'/chatgpt-login/preflight',{cache:'no-store'}),data=await response.json()
+    batchLoginPreflightData=data
+    const target=document.getElementById('batch_login_preflight')
+    if(target)target.innerHTML=loginPreflightHtml(data)
+    renderBatchLoginQueue()
+  }catch(error){
+    const target=document.getElementById('batch_login_preflight')
+    if(target)target.innerHTML=loginPreflightHtml({ok:false,message:error.message,candidates:[],repair_commands:[]})
+  }
+}
+async function copyBatchLoginCredential(kind){
+  const current=batchLoginQueue[batchLoginIndex]
+  const value=kind==='password'?current?.password:current?.email
+  if(!value)return toast(kind==='password'?'文件中没有 OpenAI 登录密码':'没有可复制的邮箱','error')
+  try{await navigator.clipboard.writeText(value);toast(kind==='password'?'登录密码已复制':'邮箱已复制')}catch{toast('复制失败，请从原始文件手动复制','error')}
+}
+async function startBatchOfficialLogin(){
+  const current=batchLoginQueue[batchLoginIndex]
+  if(!batchLoginPreflightData?.ok||!current||current.status==='waiting')return
+  current.status='waiting';current.message=''
+  renderBatchLoginQueue()
+  const status=document.getElementById('batch_login_status')
+  if(status)status.innerHTML='<span class="status warn"><i></i>正在启动 OpenAI 官方登录页…</span>'
+  try{
+    const routingEnabled=document.getElementById('batch_login_routing_enabled')?.checked===true
+    const r=await fetch(API+'/chatgpt-login/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({label:current.label||current.email,email:current.email,routingEnabled})}),d=await r.json()
+    if(!r.ok)throw new Error(d.error?.message||'无法启动登录')
+    if(status)status.innerHTML=loginStatusContent(d)
+    if(loginPoll)clearInterval(loginPoll)
+    loginPoll=setInterval(checkBatchOfficialLogin,1200)
+  }catch(error){
+    current.status='error';current.message=error.message
+    if(status)status.innerHTML=`<span class="status off"><i></i>${esc(error.message)}</span>`
+    renderBatchLoginQueue()
+  }
+}
+async function checkBatchOfficialLogin(){
+  try{
+    const r=await fetch(API+'/chatgpt-login/status'),d=await r.json()
+    const current=batchLoginQueue[batchLoginIndex],status=document.getElementById('batch_login_status')
+    if(!current||!status)return
+    const decision=AdminUIBehaviors.loginPollDecision(d.status)
+    if(!decision.terminal){status.innerHTML=loginStatusContent(d);return}
+    clearInterval(loginPoll);loginPoll=null
+    current.status=decision.outcome==='success'?'success':decision.outcome
+    current.message=d.message||''
+    status.innerHTML=decision.outcome==='success'
+      ? `<span class="status"><i></i>${esc(d.message||'账号已导入')}。请关闭刚才的私密窗口，再点击“登录下一个”。</span>`
+      : `<span class="status off"><i></i>${esc(d.message||'登录未完成')}</span>`
+    renderBatchLoginQueue()
+  }catch(error){
+    if(loginPoll)clearInterval(loginPoll)
+    loginPoll=null
+    const current=batchLoginQueue[batchLoginIndex]
+    if(current){current.status='error';current.message=error.message}
+    renderBatchLoginQueue()
+    toast(error.message,'error')
+  }
+}
+async function cancelBatchOfficialLogin(){
+  await fetch(API+'/chatgpt-login/cancel',{method:'POST'}).catch(()=>{})
+  if(loginPoll)clearInterval(loginPoll)
+  loginPoll=null
+  const current=batchLoginQueue[batchLoginIndex]
+  if(current)current.status='cancelled'
+  const status=document.getElementById('batch_login_status')
+  if(status)status.innerHTML='<span class="status off"><i></i>当前账号登录已取消</span>'
+  renderBatchLoginQueue()
+}
+function skipBatchOfficialLogin(){
+  const current=batchLoginQueue[batchLoginIndex]
+  if(current)current.status='skipped'
+  advanceBatchOfficialLogin()
+}
+function advanceBatchOfficialLogin(){
+  const next=batchLoginQueue.findIndex((item,index)=>index>batchLoginIndex&&['pending','error','cancelled'].includes(item.status))
+  if(next<0)return finishBatchOfficialLogin()
+  batchLoginIndex=next
+  const status=document.getElementById('batch_login_status')
+  if(status)status.innerHTML='<span class="status warn"><i></i>正在准备下一个账号…</span>'
+  renderBatchLoginQueue()
+  startBatchOfficialLogin()
+}
+async function finishBatchOfficialLogin(){
+  const completed=batchLoginQueue.filter(item=>item.status==='success').length
+  clearBatchLoginSecrets(false)
+  closeModal()
+  await load()
+  toast(`批量登录完成，成功导入 ${completed} 个账号`)
+}
 function loginStatusContent(d){
   const state=d.status==='waiting'?'warn':d.status==='success'?'':'off'
   const link=typeof d.verificationUrl==='string'&&d.verificationUrl.startsWith('https://')?`<a class="btn btn-sm btn-primary" href="${esc(d.verificationUrl)}" target="_blank" rel="noopener noreferrer">打开验证页（请确认私密模式）</a>`:''
@@ -610,11 +847,24 @@ async function checkOfficialLogin(){
 async function cancelOfficialLogin(){await fetch(API+'/chatgpt-login/cancel',{method:'POST'});if(loginPoll)clearInterval(loginPoll);loginPoll=null;const status=document.getElementById('login_status');if(status)status.innerHTML='<span class="status off"><i></i>登录已取消</span>'}
 async function saveAccount(){
   const content=document.getElementById('account_json').value.trim(),label=document.getElementById('account_label').value.trim(),routingEnabled=document.getElementById('account_routing_enabled')?.checked===true
-  if(!content)return toast('请粘贴或选择账号文件','error')
+  const payloads=accountImportFiles.length?accountImportFiles:(content?[{name:accountImportFileName,content}]:[])
+  if(!payloads.length)return toast('请粘贴或选择账号文件','error')
   try{
-    const r=await fetch(API+'/chatgpt-accounts/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({content,label,routingEnabled,sourceName:accountImportFileName})}),d=await r.json()
-    if(!r.ok)throw new Error(d.error?.message||'导入失败')
-    cfg=d.config;closeModal();render();toast(d.message||'账号导入完成')
+    let imported=0,skipped=0,temporary=0,refreshable=0,incompatible=0
+    const errors=[]
+    for(const payload of payloads){
+      const r=await fetch(API+'/chatgpt-accounts/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({content:payload.content,label:payloads.length===1?label:'',routingEnabled,sourceName:payload.name})}),d=await r.json()
+      if(!r.ok){errors.push(`${payload.name||'手动内容'}：${d.error?.message||'导入失败'}`);continue}
+      cfg=d.config
+      imported+=Number(d.result?.imported||0);skipped+=Number(d.result?.skipped||0)
+      temporary+=Number(d.result?.temporary||0);refreshable+=Number(d.result?.refreshable||0)
+      incompatible+=Number(d.result?.incompatible||0)
+    }
+    if(!imported&&!skipped)throw new Error(errors.join('；')||'没有可导入账号')
+    for(const payload of payloads)payload.content=''
+    accountImportFiles=[]
+    closeModal();render()
+    toast(`导入完成：新增 ${imported}（临时 ${temporary} / 可续约 ${refreshable}${incompatible?` / 不兼容 ${incompatible}`:''}），重复 ${skipped}${errors.length?`，${errors.length} 个文件无法导入`:''}`,errors.length||incompatible?'error':'')
   }catch(e){toast(e.message,'error')}
 }
 async function removeAccount(id){const account=(cfg.chatgptAccounts||[]).find(item=>item.id===id);const name=account?.label||account?.email||'未命名账号',shortId=String(account?.account_id||id).slice(0,12);if(!confirm(`确定移除账号「${name}」吗？\n账号 ID：${shortId}…\n\n删除前会自动创建独立账号备份。`))return;try{const r=await fetch(API+'/chatgpt-accounts/'+encodeURIComponent(id),{method:'DELETE'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'移除失败');cfg=d.config;render();toast('账号已移除，删除前数据已备份')}catch(e){toast(e.message,'error')}}

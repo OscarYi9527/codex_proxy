@@ -6,7 +6,7 @@ import { requestLog } from '../logger.js'
 import { sendJson, pipeResponsesUpstream, fetchWithRetry, setProxyMeta } from '../server-utils.js'
 import { recordUsage, recordAccountOutcome, recordOperationalEvent, saveStats } from '../stats.js'
 import { chinaFetch, withChinaDispatcher } from '../china-fetch.js'
-import { pickActiveAccount, ensureFreshToken, markAccountCooldown, markAccountAuthFailure, extractUsageFromHeaders, applyAccountUsage, accountSessionKey, noteAccountSuccess, reserveAccountRequest, renewAccountRequestLease, releaseAccountRequest, accountActiveRequestCount, accountConcurrencyLimit, accountRemainingPercent, accountPolicyState, noteAccountAdaptiveOutcome, refreshAccountUsage } from '../chatgpt-accounts.js'
+import { pickActiveAccount, ensureFreshToken, markAccountCooldown, markAccountAuthFailure, extractUsageFromHeaders, applyAccountUsage, accountSessionKey, noteAccountSuccess, reserveAccountRequest, renewAccountRequestLease, releaseAccountRequest, accountActiveRequestCount, accountConcurrencyLimit, accountCredentialLifecycle, accountRemainingPercent, accountPolicyState, noteAccountAdaptiveOutcome, refreshAccountUsage } from '../chatgpt-accounts.js'
 import { recordRouteDecision } from '../route-decisions.js'
 import { normalizeResponsesFunctionCallIds } from '../convert/tool-ids.js'
 
@@ -430,6 +430,10 @@ export function poolAvailabilityDetails(model) {
   const details = {
     total: (proxyConfig.chatgptAccounts || []).length,
     enabled: 0,
+    temporary: 0,
+    incompatible: 0,
+    expiring_soon: 0,
+    temporary_expired: 0,
     stored_only: 0,
     auth_error: 0,
     busy: 0,
@@ -442,12 +446,17 @@ export function poolAvailabilityDetails(model) {
     eligible: 0
   }
   for (const account of (proxyConfig.chatgptAccounts || [])) {
+    const credential = accountCredentialLifecycle(account, now)
+    if (credential.temporary) details.temporary++
+    if (!credential.compatible) details.incompatible++
+    if (credential.expiring_soon) details.expiring_soon++
+    if (credential.expired) details.temporary_expired++
     if (account.routing_enabled === false) {
       details.stored_only++
       continue
     }
     details.enabled++
-    if (account.status === 'auth_error') details.auth_error++
+    if (credential.expired || account.status === 'auth_error') details.auth_error++
     else if (account.status === 'cooldown' && Number(account.cooldown_until) > now) details.cooling++
     else if (model && Number(account.model_cooldowns?.[model]) > now) details.model_cooling++
     else {

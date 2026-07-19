@@ -1,9 +1,27 @@
+const CHATGPT_CODEX_OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
+
+function accessTokenCompatibility(token) {
+  try {
+    const payload = JSON.parse(Buffer.from(String(token || '').split('.')[1], 'base64url').toString('utf8'))
+    return payload.client_id === CHATGPT_CODEX_OAUTH_CLIENT_ID
+      ? 'codex_subscription'
+      : 'incompatible_oauth_client'
+  } catch {
+    return 'unknown_oauth_client'
+  }
+}
+
 function maskChatgptAccounts(accounts) {
   if (!accounts) return accounts
   return accounts.map(({ access_token, refresh_token, id_token, ...account }) => {
-    if (!account.reset_credits) return account
+    const masked = {
+      ...account,
+      credential_mode: account.credential_mode || (refresh_token ? 'refreshable' : 'temporary_access'),
+      credential_compatibility: account.credential_compatibility || accessTokenCompatibility(access_token)
+    }
+    if (!masked.reset_credits) return masked
     const { available_count, total_earned_count, expires_at, updated_at } = account.reset_credits
-    return { ...account, reset_credits: { available_count, total_earned_count, expires_at, updated_at } }
+    return { ...masked, reset_credits: { available_count, total_earned_count, expires_at, updated_at } }
   })
 }
 

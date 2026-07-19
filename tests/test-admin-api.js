@@ -13,7 +13,7 @@ import { assertCircuitAvailable, getCircuitStates, recordCircuitResult, resetCir
 import { fetchWithRetry, proxyMetaHeaders, retryAfterMs } from '../src/server-utils.js'
 import { redactSecrets } from '../src/logger.js'
 import { createServer } from '../src/server.js'
-import { findDuplicateAccount, findPrivateBrowser, getChatgptLoginPreflight, parseDeviceAuthOutput, privateBrowserArgs, publicProxyConfig, resolveCodexLaunch, summarizeCodexLaunchFailure } from '../src/admin.js'
+import { findDuplicateAccount, findPrivateBrowser, getChatgptLoginPreflight, officialLoginUrlWithHint, parseDeviceAuthOutput, privateBrowserArgs, publicProxyConfig, resolveCodexLaunch, summarizeCodexLaunchFailure } from '../src/admin.js'
 import { acquireActiveAccountWithRetry, handleChatGptSub, poolAvailabilityDetails, refreshBelowReserveAccounts, sendWithAccountRotation } from '../src/routes/chatgpt-sub.js'
 import { getRouteDecisions, recordRouteDecision, resetRouteDecisions } from '../src/route-decisions.js'
 import { decryptConfigSecrets, encryptConfigSecrets, isEncryptedSecret } from '../src/credential-store.js'
@@ -266,6 +266,22 @@ Node.js v24.11.1`
     assert.deepStrictEqual(privateBrowserArgs('edge', url), ['--inprivate', '--new-window', url])
     assert.deepStrictEqual(privateBrowserArgs('firefox', url), ['-private-window', url])
     assert.strictEqual(privateBrowserArgs('unknown', url), null)
+  })
+
+  it('仅向 OpenAI 官方登录地址添加邮箱提示', () => {
+    const hinted = officialLoginUrlWithHint(
+      'https://auth.openai.com/oauth/authorize?client_id=codex',
+      'user@example.test'
+    )
+    assert.equal(new URL(hinted).searchParams.get('login_hint'), 'user@example.test')
+    assert.equal(
+      officialLoginUrlWithHint('https://example.test/oauth', 'user@example.test'),
+      'https://example.test/oauth'
+    )
+    assert.equal(
+      officialLoginUrlWithHint('https://auth.openai.com/oauth', 'not-an-email'),
+      'https://auth.openai.com/oauth'
+    )
   })
 
   it('优先选择用户默认浏览器的已安装实例', () => {

@@ -307,6 +307,25 @@ export function privateBrowserArgs(kind, url) {
   return null
 }
 
+export function officialLoginUrlWithHint(authUrl, email) {
+  try {
+    const url = new URL(String(authUrl || ''))
+    const hostname = url.hostname.toLowerCase()
+    const loginEmail = String(email || '').trim()
+    if (
+      url.protocol !== 'https:' ||
+      !(hostname === 'openai.com' || hostname.endsWith('.openai.com')) ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(loginEmail)
+    ) {
+      return String(authUrl || '')
+    }
+    url.searchParams.set('login_hint', loginEmail)
+    return url.toString()
+  } catch {
+    return String(authUrl || '')
+  }
+}
+
 function defaultBrowserKind() {
   if (process.platform !== 'win32') return null
   try {
@@ -409,7 +428,9 @@ async function importCompletedLogin(session) {
     const raw = fs.readFileSync(session.authFile, 'utf8')
     const incoming = parseAuthJson(raw)
     const duplicate = findDuplicateAccount(proxyConfig.chatgptAccounts, incoming.account_id)
-    if (duplicate) {
+    const upgradingTemporary = duplicate &&
+      (duplicate.credential_mode === 'temporary_access' || !duplicate.refresh_token)
+    if (duplicate && !upgradingTemporary) {
       throw new Error(
         `登录的是已存在账号「${duplicate.label || duplicate.account_id}」，未覆盖任何账号。请重新开始并在无痕窗口中选择另一个账号。`
       )
@@ -424,7 +445,13 @@ async function importCompletedLogin(session) {
       usageMessage = '，首次额度同步失败，可在账号池点击刷新重试'
     }
     try { session.child?.kill() } catch {}
-    finishLoginSession(session, 'success', `官方登录成功，账号已自动加入账号池${usageMessage}`)
+    finishLoginSession(
+      session,
+      'success',
+      upgradingTemporary
+        ? `官方登录成功，临时账号已升级为可自动续约账号${usageMessage}`
+        : `官方登录成功，账号已自动加入账号池${usageMessage}`
+    )
   } catch (error) {
     try { session.child?.kill() } catch {}
     finishLoginSession(session, 'error', error.message)
@@ -460,9 +487,9 @@ function handleAppServerLoginMessage(session, message) {
       return
     }
     session.loginId = result.loginId
-    session.verificationUrl = result.authUrl
+    session.verificationUrl = officialLoginUrlWithHint(result.authUrl, session.email)
     session.privateBrowserAttempted = true
-    session.privateBrowserKind = openPrivateBrowser(result.authUrl)
+    session.privateBrowserKind = openPrivateBrowser(session.verificationUrl)
     session.message = session.privateBrowserKind
       ? `已自动打开 ${session.privateBrowserKind} 私密窗口，请在其中完成 OpenAI 官方登录`
       : '未能自动打开私密窗口，请点击下方按钮并确认使用私密模式'
@@ -532,6 +559,7 @@ export async function handleChatgptLoginStart(req, res) {
       message: `正在通过 ${codexLaunch.source} 启动隔离的 OpenAI 官方浏览器登录…`,
       startedAt: new Date().toISOString(),
       label: String(body.label || body.email || '').trim(),
+      email: String(body.email || '').trim(),
       routingEnabled: body.routingEnabled === true,
       tempHome,
       authFile,

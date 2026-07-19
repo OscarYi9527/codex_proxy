@@ -27,6 +27,12 @@
 - 新增数据库 Relay 配置驱动真实模型目录和 SSE Responses 的非 Mock 集成测试。
 - 新增 ChatGPT 账号文件快捷导入，兼容 auth.json、sub2/CPA JSON 和完整凭据 TXT；
   批量导入默认跳过重复账号并保持“仅保存”状态。
+- 新增缺少 ChatGPT Refresh Token 时的批量官方登录队列：本地解析 CPA/sub2/TXT、
+  按邮箱或账号 ID 去重、逐个打开隔离 OAuth，并提供不离开浏览器内存的凭据复制辅助。
+- 新增 CPA/sub2 短期 Access Token 批量直导：临时账号显示精确到期时间与剩余倒计时，
+  到期自动停止路由；账号池支持可续约、临时、24 小时内到期和已失效分类。
+- 临时导入新增 OAuth 客户端兼容性校验；能查询额度但不是由 Codex 官方客户端签发的
+  Token 会归入“不兼容”分类并强制仅保存，避免导入后请求持续返回 401。
 
 ### Changed
 

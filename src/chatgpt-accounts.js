@@ -11,7 +11,7 @@ import { id } from './server-utils.js'
 import { chinaFetch, withChinaDispatcher } from './china-fetch.js'
 import { getStats, statsDayKey } from './stats.js'
 
-const OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
+export const CHATGPT_CODEX_OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 const OAUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token'
 const USAGE_PATH = '/backend-api/wham/usage'
 const RESET_CREDITS_PATH = '/backend-api/wham/rate-limit-reset-credits'
@@ -68,7 +68,7 @@ function decodeJwtExpiry(token) {
   }
 }
 
-export function parseAuthJson(raw) {
+export function parseAuthJson(raw, { allowAccessOnly = false } = {}) {
   let parsed
   try {
     parsed = JSON.parse(raw)
@@ -80,27 +80,81 @@ export function parseAuthJson(raw) {
     throw new Error('auth.json 缺少 tokens 字段')
   }
   const { access_token, refresh_token, id_token, account_id } = tokens
-  if (!access_token || !refresh_token || !account_id) {
+  if (!access_token || !account_id || (!refresh_token && !allowAccessOnly)) {
     throw new Error('auth.json 缺少 access_token / refresh_token / account_id')
   }
-  return { access_token, refresh_token, id_token, account_id }
+  return { access_token, refresh_token: refresh_token || null, id_token, account_id }
 }
 
-export function addChatgptAccount(raw, label, { routingEnabled = undefined } = {}) {
-  const { access_token, refresh_token, id_token, account_id } = parseAuthJson(raw)
+export function chatgptAccessTokenCompatibility(token) {
+  try {
+    const payloadSegment = String(token || '').split('.')[1]
+    const payload = JSON.parse(Buffer.from(
+      payloadSegment.replace(/-/g, '+').replace(/_/g, '/'),
+      'base64'
+    ).toString('utf8'))
+    const clientId = String(payload.client_id || '')
+    return {
+      compatible: clientId === CHATGPT_CODEX_OAUTH_CLIENT_ID,
+      mode: clientId === CHATGPT_CODEX_OAUTH_CLIENT_ID
+        ? 'codex_subscription'
+        : 'incompatible_oauth_client',
+      client_id: clientId || null
+    }
+  } catch {
+    return {
+      compatible: false,
+      mode: 'unknown_oauth_client',
+      client_id: null
+    }
+  }
+}
+
+export function addChatgptAccount(raw, label, {
+  routingEnabled = undefined,
+  allowAccessOnly = false,
+  sourceFormat = null,
+  email = null,
+  planType = null
+} = {}) {
+  const { access_token, refresh_token, id_token, account_id } = parseAuthJson(raw, { allowAccessOnly })
   const existing = (proxyConfig.chatgptAccounts || []).find(account => account.account_id === account_id)
+  const expiresAt = decodeJwtExpiry(access_token) || (refresh_token ? Date.now() + 3600 * 1000 : null)
+  if (!refresh_token && (!expiresAt || expiresAt <= Date.now() + REFRESH_SAFETY_MARGIN_MS)) {
+    throw new Error('临时 Access Token 已过期或无法读取到期时间，不能导入')
+  }
+  const credentialMode = refresh_token ? 'refreshable' : 'temporary_access'
+  const compatibility = chatgptAccessTokenCompatibility(access_token)
+  const temporaryIncompatible = credentialMode === 'temporary_access' && !compatibility.compatible
   const account = {
+    ...(existing || {}),
     id: existing?.id || id('acct'),
     label: label || existing?.label || account_id,
     access_token,
     refresh_token,
     id_token,
     account_id,
-    expires_at: decodeJwtExpiry(access_token) || (Date.now() + 3600 * 1000),
-    status: 'active',
+    expires_at: expiresAt,
+    credential_mode: credentialMode,
+    credential_compatibility: compatibility.mode,
+    credential_source_format: sourceFormat || existing?.credential_source_format || null,
+    temporary_imported_at: credentialMode === 'temporary_access'
+      ? (existing?.temporary_imported_at || new Date().toISOString())
+      : null,
+    email: email || existing?.email || null,
+    plan_type: planType || existing?.plan_type || null,
+    status: temporaryIncompatible ? 'auth_error' : 'active',
+    auth_error: temporaryIncompatible
+      ? {
+          type: 'incompatible_oauth_client',
+          at: new Date().toISOString()
+        }
+      : null,
     usage_sync_status: existing?.usage_updated_at ? 'synced' : 'pending',
     usage_sync_error: null,
-    routing_enabled: routingEnabled ?? existing?.routing_enabled ?? true,
+    routing_enabled: temporaryIncompatible
+      ? false
+      : (routingEnabled ?? existing?.routing_enabled ?? true),
     cooldown_until: null,
     last_refresh: new Date().toISOString(),
     added_at: existing?.added_at || new Date().toISOString()
@@ -124,6 +178,28 @@ export function accountRemainingPercent(account) {
   // Both quota windows constrain availability, so the effective headroom is
   // the least remaining percentage across all known windows.
   return windows.length ? Math.max(0, Math.min(100, Math.min(...windows))) : null
+}
+
+export function accountCredentialLifecycle(account, now = Date.now()) {
+  const mode = account?.credential_mode === 'temporary_access' ? 'temporary_access' : 'refreshable'
+  const compatibility = account?.credential_compatibility ||
+    (account?.access_token ? chatgptAccessTokenCompatibility(account.access_token).mode : 'codex_subscription')
+  const compatible = mode !== 'temporary_access' || compatibility === 'codex_subscription'
+  const expiresAt = Number(account?.expires_at)
+  const remainingMs = Number.isFinite(expiresAt) ? expiresAt - now : null
+  const temporary = mode === 'temporary_access'
+  return {
+    mode,
+    temporary,
+    refreshable: mode === 'refreshable',
+    expires_at: Number.isFinite(expiresAt) ? expiresAt : null,
+    remaining_ms: remainingMs,
+    compatibility,
+    compatible,
+    expired: temporary && (remainingMs == null || remainingMs <= 0),
+    expiring_soon: temporary && remainingMs != null && remainingMs > 0 && remainingMs <= 24 * 60 * 60 * 1000,
+    routable: compatible && (!temporary || (remainingMs != null && remainingMs > REFRESH_SAFETY_MARGIN_MS))
+  }
 }
 
 export function accountUsageIsFresh(account, now = Date.now()) {
@@ -377,6 +453,21 @@ export function pickActiveAccount(excludeIds = null, {
   const reservationMatches = new Set()
   for (const account of accounts) {
     if (excludeIds && excludeIds.has(account.id)) continue
+    const credential = accountCredentialLifecycle(account, now)
+    if (!credential.routable) {
+      const authErrorType = credential.compatible
+        ? 'temporary_access_expired'
+        : 'incompatible_oauth_client'
+      if (account.status !== 'auth_error' || account.auth_error?.type !== authErrorType) {
+        account.status = 'auth_error'
+        account.auth_error = {
+          type: authErrorType,
+          at: new Date().toISOString()
+        }
+        persistAccount(account)
+      }
+      continue
+    }
     if (
       account.cooldown_until &&
       (now > account.cooldown_until || account.cooldown_until > now + MAX_REASONABLE_COOLDOWN_MS)
@@ -452,6 +543,19 @@ export function pickActiveAccount(excludeIds = null, {
 export async function ensureFreshToken(account, fetchImpl = fetch) {
   const managedByLocalCodex = proxyConfig.activeChatgptAccountId === account.id
   if (managedByLocalCodex) syncActiveAccountFromCodexHome(account)
+  const credential = accountCredentialLifecycle(account)
+  if (credential.temporary && !credential.compatible) {
+    account.status = 'auth_error'
+    account.auth_error = {
+      type: 'incompatible_oauth_client',
+      at: new Date().toISOString()
+    }
+    persistAccount(account)
+    const error = new Error('该临时 Token 不是由 Codex 官方 OAuth 客户端签发，无法调用 ChatGPT Codex Responses；请完成官方登录')
+    error.code = 'TOKEN_OAUTH_CLIENT_INCOMPATIBLE'
+    error.retryable = false
+    throw error
+  }
   if (account.expires_at && account.expires_at - Date.now() > REFRESH_SAFETY_MARGIN_MS) {
     return account
   }
@@ -459,6 +563,18 @@ export async function ensureFreshToken(account, fetchImpl = fetch) {
     const error = new Error('当前本机账号的 Token 尚未由 Codex 刷新，将暂时尝试其他账号')
     error.code = 'TOKEN_REFRESH_ACTIVE_SOURCE_STALE'
     error.retryable = true
+    throw error
+  }
+  if (account.credential_mode === 'temporary_access' && !account.refresh_token) {
+    account.status = 'auth_error'
+    account.auth_error = {
+      type: 'temporary_access_expired',
+      at: new Date().toISOString()
+    }
+    persistAccount(account)
+    const error = new Error('临时账号的 Access Token 已到期，无法自动续约；请移除账号或完成官方登录')
+    error.code = 'TOKEN_TEMPORARY_ACCESS_EXPIRED'
+    error.retryable = false
     throw error
   }
   if (tokenRefreshInFlight.has(account.id)) return tokenRefreshInFlight.get(account.id)
@@ -470,7 +586,7 @@ export async function ensureFreshToken(account, fetchImpl = fetch) {
         headers: { 'content-type': 'application/json' },
         signal: AbortSignal.timeout(15_000),
         body: JSON.stringify({
-          client_id: OAUTH_CLIENT_ID,
+          client_id: CHATGPT_CODEX_OAUTH_CLIENT_ID,
           grant_type: 'refresh_token',
           refresh_token: account.refresh_token
         })
@@ -1111,6 +1227,38 @@ export function repairAccountRuntimeState(now = Date.now()) {
   reapExpiredLeases(null, now)
   for (const account of (proxyConfig.chatgptAccounts || [])) {
     let changed = false
+    const credential = accountCredentialLifecycle(account, now)
+    if (credential.temporary && !credential.compatible) {
+      if (account.credential_compatibility !== credential.compatibility) {
+        account.credential_compatibility = credential.compatibility
+        changed = true
+      }
+      if (account.status !== 'auth_error' || account.auth_error?.type !== 'incompatible_oauth_client') {
+        account.status = 'auth_error'
+        account.auth_error = {
+          type: 'incompatible_oauth_client',
+          at: new Date().toISOString()
+        }
+        changed = true
+      }
+      if (account.routing_enabled !== false) {
+        account.routing_enabled = false
+        changed = true
+      }
+    } else if (credential.expired) {
+      if (account.status !== 'auth_error' || account.auth_error?.type !== 'temporary_access_expired') {
+        account.status = 'auth_error'
+        account.auth_error = {
+          type: 'temporary_access_expired',
+          at: new Date().toISOString()
+        }
+        changed = true
+      }
+      if (account.routing_enabled !== false) {
+        account.routing_enabled = false
+        changed = true
+      }
+    }
     if (
       account.cooldown_until &&
       (Number(account.cooldown_until) <= now || Number(account.cooldown_until) > now + MAX_REASONABLE_COOLDOWN_MS)
@@ -1151,7 +1299,8 @@ export function getAccountRuntimeDiagnostics() {
       remaining_percent: accountRemainingPercent(account),
       cooldown_until: account.cooldown_until || null,
       model_cooldowns: Object.keys(account.model_cooldowns || {}).length,
-      usage_forecast: account.usage_forecast || null
+      usage_forecast: account.usage_forecast || null,
+      credential: accountCredentialLifecycle(account)
     }
   })
 }

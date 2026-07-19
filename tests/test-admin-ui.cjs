@@ -5,6 +5,9 @@ const {
   applyQuotaResetButtonState,
   filterErrorGuides,
   loginPollDecision,
+  extractOfficialLoginCandidates,
+  accountCredentialDisplay,
+  inspectDirectImportFiles,
   quotaResetFinalMessage
 } = require('../src/admin_ui_behaviors.cjs')
 
@@ -74,5 +77,125 @@ describe('admin error guide and login polling behavior', () => {
     assert.equal(loginPollDecision('error').terminal, true)
     assert.equal(loginPollDecision('cancelled').keepPolling, false)
     assert.equal(loginPollDecision('unexpected').keepPolling, true)
+  })
+
+  it('extracts and merges local CPA, sub2, and companion TXT login candidates', () => {
+    const candidates = extractOfficialLoginCandidates([
+      {
+        name: 'account_cpa.json',
+        content: JSON.stringify({
+          email: 'user@example.test',
+          password: 'openai-password',
+          account_id: 'account-1',
+          name: 'CPA account'
+        })
+      },
+      {
+        name: 'account_sub2.json',
+        content: JSON.stringify({
+          accounts: [{
+            name: 'sub2 duplicate',
+            credentials: {
+              email: 'user@example.test',
+              account_id: 'account-1'
+            }
+          }]
+        })
+      },
+      {
+        name: 'account.txt',
+        content: 'user@example.test--------mail-password----mail-client----mail-refresh-token'
+      }
+    ])
+
+    assert.equal(candidates.length, 1)
+    assert.equal(candidates[0].email, 'user@example.test')
+    assert.equal(candidates[0].password, 'openai-password')
+    assert.equal(candidates[0].accountId, 'account-1')
+    assert.deepEqual(candidates[0].sourceNames, [
+      'account_cpa.json',
+      'account_sub2.json',
+      'account.txt'
+    ])
+  })
+
+  it('does not mistake mailbox TXT credentials for an OpenAI password', () => {
+    const [candidate] = extractOfficialLoginCandidates([{
+      name: 'mail.txt',
+      content: 'mail@example.test--------mail-password----client-id----refresh-token'
+    }])
+    assert.equal(candidate.email, 'mail@example.test')
+    assert.equal(candidate.password, '')
+  })
+
+  it('classifies renewable and temporary credentials with an expiry countdown', () => {
+    const now = Date.parse('2026-07-19T00:00:00Z')
+    assert.equal(accountCredentialDisplay({ credential_mode: 'refreshable' }, now).countdown, '自动续约')
+    const temporary = accountCredentialDisplay({
+      credential_mode: 'temporary_access',
+      expires_at: now + (2 * 24 + 3) * 60 * 60 * 1000
+    }, now)
+    assert.equal(temporary.category, 'temporary')
+    assert.equal(temporary.countdown, '2天 3小时')
+    assert.equal(accountCredentialDisplay({
+      credential_mode: 'temporary_access',
+      expires_at: now + 30 * 60 * 1000
+    }, now).category, 'expiring')
+    assert.equal(accountCredentialDisplay({
+      credential_mode: 'temporary_access',
+      expires_at: now - 1
+    }, now).category, 'expired')
+    assert.equal(accountCredentialDisplay({
+      credential_mode: 'temporary_access',
+      credential_compatibility: 'incompatible_oauth_client',
+      expires_at: now + 60_000
+    }, now).category, 'incompatible')
+  })
+
+  it('previews each direct-import file without returning token contents', () => {
+    const now = Date.parse('2026-07-19T00:00:00Z')
+    const payload = Buffer.from(JSON.stringify({
+      exp: Math.floor(now / 1000) + 7200,
+      client_id: 'app_EMoamEEZ73f0CkXaXp7hrann'
+    })).toString('base64url')
+    const preview = inspectDirectImportFiles([
+      {
+        name: 'temporary_cpa.json',
+        content: JSON.stringify({
+          access_token: `header.${payload}.secret`,
+          account_id: 'temporary-preview',
+          refresh_token: ''
+        })
+      },
+      {
+        name: 'renewable.json',
+        content: JSON.stringify({
+          tokens: {
+            access_token: `header.${payload}.secret`,
+            refresh_token: 'refresh-secret',
+            account_id: 'renewable-preview'
+          }
+        })
+      },
+      {
+        name: 'mail.txt',
+        content: 'mail@example.test--------mail-password----client-id----mail-refresh'
+      }
+    ], now)
+    assert.deepEqual(preview.map(item => ({
+      name: item.name,
+      accounts: item.accounts,
+      temporary: item.temporary,
+      refreshable: item.refreshable,
+      incompatible: item.incompatible,
+      duplicate_accounts: item.duplicate_accounts,
+      importable: item.importable
+    })), [
+      { name: 'temporary_cpa.json', accounts: 1, temporary: 1, refreshable: 0, incompatible: 0, duplicate_accounts: 0, importable: true },
+      { name: 'renewable.json', accounts: 1, temporary: 0, refreshable: 1, incompatible: 0, duplicate_accounts: 0, importable: true },
+      { name: 'mail.txt', accounts: 0, temporary: 0, refreshable: 0, incompatible: 0, duplicate_accounts: 0, importable: false }
+    ])
+    assert.equal(preview[0].countdown, '2小时 0分钟')
+    assert.doesNotMatch(JSON.stringify(preview), /secret/)
   })
 })

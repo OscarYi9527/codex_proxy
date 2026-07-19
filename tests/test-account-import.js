@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { parseChatgptAccountImport } from '../src/account-import.js'
+import { parseAuthJson } from '../src/chatgpt-accounts.js'
 
 const tokens = (suffix = 'one') => ({
   access_token: `header.${suffix}.signature`,
@@ -54,6 +55,28 @@ describe('ChatGPT 多格式快捷导入', () => {
     assert.equal(result[0].accountId, 'account-cpa')
   })
 
+  it('将缺少 ChatGPT refresh_token 的 CPA/sub2 凭据识别为临时账号', () => {
+    const result = parseChatgptAccountImport(JSON.stringify({
+      email: 'temporary@example.test',
+      name: 'Temporary CPA',
+      plan_type: 'free',
+      access_token: 'header.temporary.signature',
+      id_token: 'identity.temporary.signature',
+      account_id: 'account-temporary',
+      refresh_token: ''
+    }))
+    assert.equal(result.length, 1)
+    assert.equal(result[0].credentialMode, 'temporary_access')
+    assert.equal(result[0].email, 'temporary@example.test')
+    assert.equal(result[0].planType, 'free')
+    assert.equal(JSON.parse(result[0].authJson).tokens.refresh_token, null)
+    assert.throws(() => parseAuthJson(result[0].authJson), /refresh_token/)
+    assert.equal(
+      parseAuthJson(result[0].authJson, { allowAccessOnly: true }).account_id,
+      'account-temporary'
+    )
+  })
+
   it('兼容键值 TXT 和带表头的制表符 TXT', () => {
     const keyValue = parseChatgptAccountImport([
       'email=user@example.test',
@@ -73,7 +96,7 @@ describe('ChatGPT 多格式快捷导入', () => {
   it('拒绝只有 client_id 和 refresh_token 的不完整文件', () => {
     assert.throws(
       () => parseChatgptAccountImport('client_id=client\nrefresh_token=refresh-only'),
-      /不能离线导入/
+      /没有找到可导入账号/
     )
   })
 })

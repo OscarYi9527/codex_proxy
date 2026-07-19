@@ -7,7 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { resolveCodexModel, isChatGptSubModel, isOpenAIApiModel, isRelayModel, parseRelayModel, buildModelsResponse, getThreadId } from '../src/models.js'
 import { recordUsage, recordAccountOutcome, recordOperationalEvent, getStats, resetStats, saveStats, statsDayKey } from '../src/stats.js'
-import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurrencyLimit, accountPolicyState, accountRemainingPercent, accountUsageIsFresh, calculateUsageForecast, consumeAccountResetCredit, cooldownMsFromResponseText, ensureFreshToken, extractResetCredits, extractUsageFromBody, extractUsageFromHeaders, mergeAccountUsageWindows, normalizeAccountRoutingStrategy, noteAccountAdaptiveOutcome, noteAccountSuccess, pickActiveAccount, refreshAccountResetCredits, refreshAccountUsage, releaseAccountRequest, renewAccountRequestLease, reserveAccountRequest, resetAccountRequestCounts, resetAccountStickiness } from '../src/chatgpt-accounts.js'
+import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurrencyLimit, accountCredentialLifecycle, accountPolicyState, accountRemainingPercent, accountUsageIsFresh, calculateUsageForecast, consumeAccountResetCredit, cooldownMsFromResponseText, ensureFreshToken, extractResetCredits, extractUsageFromBody, extractUsageFromHeaders, mergeAccountUsageWindows, normalizeAccountRoutingStrategy, noteAccountAdaptiveOutcome, noteAccountSuccess, pickActiveAccount, refreshAccountResetCredits, refreshAccountUsage, releaseAccountRequest, renewAccountRequestLease, reserveAccountRequest, resetAccountRequestCounts, resetAccountStickiness } from '../src/chatgpt-accounts.js'
 import { proxyConfig, atomicWriteJson, configForSettingsSnapshot, mergeAccountBackup, mergeSettingsSnapshot, orderChatgptAccounts, renameChatgptAccountInList } from '../src/config.js'
 import { assertCircuitAvailable, getCircuitStates, recordCircuitResult, resetCircuits } from '../src/circuit-breaker.js'
 import { fetchWithRetry, proxyMetaHeaders, retryAfterMs } from '../src/server-utils.js'
@@ -394,6 +394,48 @@ describe('稳定重试策略', () => {
 })
 
 describe('自适应并发、租约和刷新单飞', () => {
+  it('临时账号在有效期内可用，到期后不尝试 Refresh Token 并标记失效', async () => {
+    const original = proxyConfig.chatgptAccounts
+    const temporary = {
+      id: 'temporary-lifecycle',
+      account_id: 'temporary-upstream',
+      access_token: 'temporary-access',
+      refresh_token: null,
+      credential_mode: 'temporary_access',
+      credential_compatibility: 'codex_subscription',
+      expires_at: Date.now() + 60_000,
+      status: 'active',
+      routing_enabled: true
+    }
+    proxyConfig.chatgptAccounts = [temporary]
+    let fetchCalls = 0
+    try {
+      assert.equal(accountCredentialLifecycle(temporary).routable, true)
+      assert.equal(
+        await ensureFreshToken(temporary, async () => {
+          fetchCalls++
+          throw new Error('should not fetch')
+        }),
+        temporary
+      )
+      assert.equal(fetchCalls, 0)
+
+      temporary.expires_at = Date.now() - 1
+      await assert.rejects(
+        ensureFreshToken(temporary, async () => {
+          fetchCalls++
+          throw new Error('should not fetch')
+        }),
+        error => error.code === 'TOKEN_TEMPORARY_ACCESS_EXPIRED' && error.retryable === false
+      )
+      assert.equal(fetchCalls, 0)
+      assert.equal(temporary.status, 'auth_error')
+      assert.equal(pickActiveAccount(), null)
+    } finally {
+      proxyConfig.chatgptAccounts = original
+    }
+  })
+
   it('429 降低并发，连续成功后逐步恢复', () => {
     resetAccountRequestCounts()
     assert.strictEqual(accountConcurrencyLimit('adaptive'), 3)

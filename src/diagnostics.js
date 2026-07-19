@@ -1,5 +1,5 @@
 import { proxyConfig } from './config.js'
-import { accountActiveRequestCount, accountConcurrencyLimit, accountPolicyState, accountRemainingPercent } from './chatgpt-accounts.js'
+import { accountActiveRequestCount, accountConcurrencyLimit, accountCredentialLifecycle, accountPolicyState, accountRemainingPercent } from './chatgpt-accounts.js'
 import { getCircuitStates } from './circuit-breaker.js'
 import { getHttpErrorGuide } from './error-guide.js'
 import { getProviderHealth } from './provider-health.js'
@@ -26,6 +26,10 @@ export function accountPoolDiagnosis({ model = null, now = Date.now() } = {}) {
   const threshold = Number(proxyConfig.chatgptLowQuotaThreshold ?? 10)
   const counts = {
     total: accounts.length,
+    temporary: 0,
+    incompatible: 0,
+    expiring_soon: 0,
+    temporary_expired: 0,
     stored_only: 0,
     auth_error: 0,
     cooling: 0,
@@ -39,6 +43,11 @@ export function accountPoolDiagnosis({ model = null, now = Date.now() } = {}) {
   }
   let earliestRecoveryAt = null
   for (const account of accounts) {
+    const credential = accountCredentialLifecycle(account, now)
+    if (credential.temporary) counts.temporary++
+    if (!credential.compatible) counts.incompatible++
+    if (credential.expiring_soon) counts.expiring_soon++
+    if (credential.expired) counts.temporary_expired++
     if (account.routing_enabled === false) {
       counts.stored_only++
       continue
@@ -106,6 +115,21 @@ export function buildAutomaticDiagnosis({
     conclusion: 'Access Token 或 Refresh Token 已不可用，需要重新完成官方登录。',
     count: pool.auth_error,
     actions: [action('official_login', '重新登录', '#accounts', '启动官方隔离登录预检')]
+  })
+  if (pool.expiring_soon > 0) addIssue(issues, {
+    id: 'temporary_expiring',
+    title: `${pool.expiring_soon} 个临时账号将在 24 小时内到期`,
+    conclusion: '这些账号没有 ChatGPT Refresh Token；到期后会自动停止路由，不能自动续约。',
+    count: pool.expiring_soon,
+    actions: [action('open_accounts', '查看倒计时', '#accounts', '按“24h 内到期”分类查看账号')]
+  })
+  if (pool.incompatible > 0) addIssue(issues, {
+    id: 'temporary_incompatible',
+    level: 'critical',
+    title: `${pool.incompatible} 个临时账号 OAuth 权限不兼容`,
+    conclusion: 'Token 可以查询部分账号信息，但不是 Codex 官方 OAuth 客户端签发，不能调用订阅 Responses。',
+    count: pool.incompatible,
+    actions: [action('official_login', '批量官方登录', '#accounts', '用官方 OAuth 将临时账号升级为可续约账号')]
   })
   if (pool.below_reserve > 0) addIssue(issues, {
     id: 'below_reserve',

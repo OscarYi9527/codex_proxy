@@ -46,22 +46,31 @@ function normalizeRecord(record, sourceFormat) {
       'workspace_id',
       'workspaceId'
     ], 240)
-    if (!accessToken || !refreshToken || !accountId) continue
+    if (!accessToken || !accountId) continue
     const extra = record.extra && typeof record.extra === 'object' ? record.extra : {}
     const label = firstString(record, ['label', 'name', 'email'], 80) ||
       firstString(credentials, ['email'], 80) ||
       firstString(extra, ['name', 'email'], 80) ||
       accountId
+    const email = firstString(record, ['email'], 320) ||
+      firstString(credentials, ['email'], 320) ||
+      firstString(extra, ['email'], 320)
+    const planType = firstString(record, ['plan_type', 'planType', 'chatgpt_plan_type'], 80) ||
+      firstString(credentials, ['plan_type', 'planType', 'chatgpt_plan_type'], 80)
+    const credentialMode = refreshToken ? 'refreshable' : 'temporary_access'
     return {
       accountId,
       label,
       sourceFormat,
+      credentialMode,
+      email,
+      planType,
       authJson: JSON.stringify({
         OPENAI_API_KEY: null,
         tokens: {
           id_token: idToken || null,
           access_token: accessToken,
-          refresh_token: refreshToken,
+          refresh_token: refreshToken || null,
           account_id: accountId
         },
         last_refresh: new Date().toISOString()
@@ -98,7 +107,13 @@ function collectJsonRecords(root, sourceFormat) {
 function delimiterForHeader(line) {
   for (const delimiter of ['\t', '----', '|', ',']) {
     const fields = line.split(delimiter).map(value => value.trim().toLowerCase())
-    if (fields.includes('access_token') && fields.includes('refresh_token')) return delimiter
+    const hasAccountId = fields.some(value => [
+      'account_id',
+      'accountid',
+      'chatgpt_account_id',
+      'workspace_id'
+    ].includes(value))
+    if (fields.includes('access_token') && hasAccountId) return delimiter
   }
   return null
 }
@@ -177,8 +192,8 @@ export function parseChatgptAccountImport(raw) {
   }
   if (unique.length === 0) {
     throw new Error(
-      '没有找到完整账号凭据；需要 access_token、refresh_token 和 account_id。' +
-      '仅有 client_id + refresh_token 的文件不能离线导入，请改用 sub2/CPA JSON 或官方登录。'
+      '没有找到可导入账号；至少需要 access_token 和 account_id。' +
+      '缺少 refresh_token 时会按临时账号导入；仅有邮箱、client_id 或邮箱 OAuth 信息仍不能调用 ChatGPT。'
     )
   }
   if (records.length > MAX_IMPORT_ACCOUNTS) {

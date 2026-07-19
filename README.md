@@ -20,6 +20,10 @@ Windows 上的 Codex CLI / VS Code 多上游路由代理。它在保留原生 Re
 - 额度重置会显著标注为高风险操作，要求输入完整账号名称、勾选目标账号和次数消耗确认项，并通过最终系统确认；服务端再次校验全部确认、账号 ID 和最新可用次数。
 - 账号支持本地改名；新登录/导入账号会立即尝试同步额度，并明确显示同步中、失败或待重试状态。
 - 新登录或手动导入的账号可设为“仅保存”，不会切换本机 Codex，也不会参与代理路由；需要时可单独启用。
+- CPA/sub2 短期 Token 可批量预检并分类为可续约、兼容临时、24 小时内到期、已失效或
+  OAuth 不兼容；兼容临时账号显示到期倒计时，到期自动停止路由。
+- “能查询额度”不等于“能调用模型”：非 Codex 官方 OAuth 客户端签发的临时 Token
+  会强制保持仅保存并提示官方登录，避免账号池持续产生 401。
 - 合规稳定模式限制单账号并发为 3、忙碌请求进入本地等待队列、单请求最多尝试 2 个账号，并优先使用 30 分钟内的新鲜额度数据。
 - 并发会根据成功、429、网络错误和高延迟在 1～3 之间自适应；请求槽位使用可续期租约，断连或异常退出后可自动回收。
 - Token 刷新和额度刷新均使用单飞合并，区分临时网络错误与必须重新登录的永久凭据错误。
@@ -469,7 +473,7 @@ PostgreSQL。切换 PostgreSQL 时设置 `AI_EDITOR_GATEWAY_DB_DIALECT=postgres`
 | `GET` | `/admin/api/runtime-info` | 获取实际运行版本、路径及部署一致性 |
 | `POST` | `/admin/api/deploy-update` | 从本机启动备份、部署、重启、健康检查和自动回滚 |
 | `GET` | `/admin/api/chatgpt-login/preflight` | 检查 Codex CLI、app-server OAuth 和私密浏览器 |
-| `POST` | `/admin/api/chatgpt-accounts/import` | 本机批量解析并导入多种账号文件 |
+| `POST` | `/admin/api/chatgpt-accounts/import` | 本机批量解析账号文件，分类临时/可续约凭据并校验 OAuth 兼容性 |
 | `GET` | `/admin/api/config-snapshots` | 列出最近配置快照 |
 | `POST` | `/admin/api/chatgpt-accounts/:id/reset-credits` | 查询指定账号的 Codex 重置次数 |
 | `POST` | `/admin/api/chatgpt-accounts/refresh-reset-credits-all` | 查询账号池全部账号的重置次数 |
@@ -516,9 +520,13 @@ PostgreSQL。切换 PostgreSQL 时设置 `AI_EDITOR_GATEWAY_DB_DIALECT=postgres`
 功能：
 - 可视化编辑 API 地址、密钥、默认模型和中转节点
 - ChatGPT 官方隔离登录（全局 CLI 损坏时自动回退到 VS Code 内置 Codex）、账号仅保存/启用、拖拽优先级和 9 种路由策略
-- ChatGPT 账号文件快捷导入：支持标准 `auth.json`、sub2 JSON、CPA JSON 和包含完整
-  `access_token`、`refresh_token`、`account_id` 的 TXT；支持批量识别，重复账号默认跳过，
-  新账号默认仅保存、不参与路由
+- ChatGPT 账号文件快捷导入：支持标准 `auth.json`、sub2 JSON、CPA JSON 和包含
+  `access_token`、`account_id` 的 TXT；多文件导入前逐文件预览凭据类型、剩余有效期、
+  重复账号和 OAuth 客户端兼容性
+- 完整 `refresh_token` 账号归类为“可续约”；缺少 Refresh Token 但由 Codex 官方
+  OAuth 客户端签发的账号归类为“临时”，显示倒计时并在到期后自动停止路由
+- 非 Codex OAuth Token 即使能够查询 `/backend-api/wham/usage`，也会归入“不兼容”
+  分类并强制仅保存；可通过批量官方登录将原临时记录原地升级为可续约账号
 - 账号改名、首次额度自动同步、独立账号备份以及只补回缺失账号的安全恢复
 - 每账号安全余量、每日请求/Token 上限、模型/会话预留，以及带风险确认和自动到期的紧急继续
 - 5 小时/每周额度、趋势预测、1h/24h/7d 成功率、P50/P95 延迟和双层冷却
@@ -571,7 +579,7 @@ API 端点：
 | GET | /admin/api/runtime-info | 获取实际运行位置、版本、Commit 和安装一致性 |
 | POST | /admin/api/deploy-update | 启动安全部署、重启、健康检查和失败回滚 |
 | GET | /admin/api/chatgpt-login/preflight | 获取官方登录环境预检结果 |
-| POST | /admin/api/chatgpt-accounts/import | 本机解析并批量导入 auth.json、sub2/CPA JSON 或完整凭据 TXT |
+| POST | /admin/api/chatgpt-accounts/import | 本机解析并批量导入 auth.json、sub2/CPA JSON 或凭据 TXT，并返回临时/可续约/不兼容统计 |
 | GET | /admin/api/config-snapshots | 获取设置快照列表 |
 | POST | /admin/api/config-rollback | 仅回滚设置，不回退账号 Token/API Key |
 | GET | /admin/api/account-backups | 获取账号备份列表 |
@@ -610,6 +618,27 @@ API 端点：
 ```
 
 额度重置会消耗一次机会且无法撤销。管理接口仅应通过 localhost 使用。
+
+#### CPA / sub2 临时账号兼容性
+
+CPA 和 sub2 是文件结构，不代表其中 Token 一定具有 Codex 订阅推理权限。导入器会同时
+检查 Access Token 的到期时间和 OAuth `client_id`：
+
+- `client_id = app_EMoamEEZ73f0CkXaXp7hrann`：Codex 官方 OAuth 客户端；没有
+  `refresh_token` 时可以作为临时账号使用到 Access Token 到期。
+- 其他 OAuth 客户端：账号可以保存，部分 Token 也可能成功查询额度，但不能据此认定
+  能调用 `https://chatgpt.com/backend-api/codex/responses`；系统会标记“不兼容”并关闭路由。
+- 只有邮箱、密码、邮箱 OAuth client/refresh token 的 TXT：不能直接调用 ChatGPT，
+  只能辅助在隔离浏览器中完成官方登录。
+
+快捷导入界面会逐文件显示“可自动续约”“临时直导”“不可用于订阅通道”或“不能直导”。
+账号池可按“可续约 / 临时 / 24h 内到期 / 已失效 / 不兼容”筛选。需要把临时或不兼容
+记录转为长期可用账号时，使用“批量登录队列”；官方 OAuth 成功后会保留原账号池记录
+并写入可轮换 Refresh Token。
+
+如果出现“额度接口 200、模型请求 401”，说明 Token 只通过了账号信息接口鉴权，不具备
+订阅 Responses 权限。本地代理无法为上游 Token 增加 scope；必须完成 OpenAI 官方登录，
+或重新取得由 Codex 官方 OAuth 客户端签发的凭据。
 
 #### 每账号额度治理
 

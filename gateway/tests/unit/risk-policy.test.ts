@@ -1,4 +1,8 @@
-import { evaluateRiskPolicy } from '../../src/credits/turn-risk-service.js'
+import { jest } from '@jest/globals'
+import {
+  evaluateRiskPolicy,
+  TurnRiskService
+} from '../../src/credits/turn-risk-service.js'
 
 describe('per-Turn and cumulative credit risk policy (T070/T076/T077)', () => {
   it('accepts the exact overdraft and cumulative boundaries', () => {
@@ -34,5 +38,29 @@ describe('per-Turn and cumulative credit risk policy (T070/T076/T077)', () => {
       expect.objectContaining({ code: 'credits_risk_limit', statusCode: 409 })
     )
   })
-})
 
+  it('does not reserve or limit a Level 1 administrator Turn', async () => {
+    const estimate = jest.fn()
+    const service = new TurnRiskService(
+      {} as never,
+      {} as never,
+      { estimate } as never,
+      {} as never
+    )
+
+    await expect(service.reserve({
+      identity: {
+        accountId: 'acct_level1',
+        deviceSessionId: 'ds_level1',
+        role: 'level1',
+        organizationId: null,
+        accountVersion: 1,
+        passwordVersion: 1
+      },
+      turnId: 'turn_level1_unlimited',
+      modelId: 'model',
+      body: { input: 'hello' }
+    })).resolves.toBeNull()
+    expect(estimate).not.toHaveBeenCalled()
+  })
+})

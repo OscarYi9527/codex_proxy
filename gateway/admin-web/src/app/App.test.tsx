@@ -36,18 +36,18 @@ function clientFor(role: AccountRole): ManagementApiClient {
       { id: 'account', label: '我的账号' },
       { id: 'security', label: '设备与安全' },
       { id: 'usage', label: '使用记录' },
-      { id: 'organization', label: '组织用户' },
+      { id: 'organization', label: '组织与用户' },
       { id: 'invitations', label: '邀请码' },
-      { id: 'credits', label: '积分管理' },
+      { id: 'credits', label: '组织额度' },
       { id: 'audit', label: '调用审计' }
     ],
     level1: [
       { id: 'account', label: '我的账号' },
       { id: 'security', label: '设备与安全' },
       { id: 'usage', label: '使用记录' },
-      { id: 'organization', label: '组织用户' },
+      { id: 'organization', label: '组织与用户' },
       { id: 'invitations', label: '邀请码' },
-      { id: 'credits', label: '积分管理' },
+      { id: 'credits', label: '组织额度' },
       { id: 'audit', label: '调用审计' },
       { id: 'providers', label: 'Provider 与模型' },
       { id: 'diagnostics', label: '系统诊断' }
@@ -365,7 +365,7 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
     render(<App client={clientFor(role)} />)
     bootstrap()
     await screen.findByRole('navigation', { name: '管理导航' })
-    expect(Boolean(screen.queryByRole('button', { name: '组织用户' })))
+    expect(Boolean(screen.queryByRole('button', { name: '组织与用户' })))
       .toBe(seesOrganization)
     expect(Boolean(screen.queryByRole('button', { name: '调用审计' })))
       .toBe(seesAudit)
@@ -385,6 +385,23 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
     expect(client.providers).not.toHaveBeenCalled()
     expect(client.models).not.toHaveBeenCalled()
     expect(client.diagnostics).not.toHaveBeenCalled()
+  })
+
+  it('shows Level 1 as unlimited and exposes organization and allocation shortcuts', async () => {
+    render(<App client={clientFor('level1')} />)
+    bootstrap()
+
+    expect(await screen.findByText(/一级管理员账号额度不受限/)).toBeInTheDocument()
+    expect(screen.queryByText('87.500000')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '管理组织与用户' }))
+    expect(await screen.findByRole('heading', { name: '组织与用户' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '我的账号' }))
+    fireEvent.click(screen.getByRole('button', { name: '分配组织额度' }))
+    expect(await screen.findByRole('heading', { name: '示例组织' })).toBeInTheDocument()
+    expect(screen.getByLabelText('组织月度总积分')).toBeInTheDocument()
+    expect(screen.getByLabelText('用户积分 member@example.test')).toBeInTheDocument()
   })
 
   it('shows organization users and invitations only for an authorized administrator', async () => {

@@ -40,9 +40,9 @@ function navigationForRole(role: AccountRole): readonly ManagementNavigationItem
   if (role === 'user') return USER_NAVIGATION
   const organization = [
     ...USER_NAVIGATION,
-    { id: 'organization' as const, label: '组织用户' },
+    { id: 'organization' as const, label: '组织与用户' },
     { id: 'invitations' as const, label: '邀请码' },
-    { id: 'credits' as const, label: '积分管理' },
+    { id: 'credits' as const, label: '组织额度' },
     { id: 'audit' as const, label: '调用审计' }
   ]
   return role === 'level2'

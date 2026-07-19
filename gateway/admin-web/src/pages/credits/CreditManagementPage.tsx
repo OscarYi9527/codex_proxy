@@ -54,8 +54,8 @@ export function CreditManagementPage({
   if (views.length === 0) {
     return (
       <section className="content-card">
-        <h2>积分管理</h2>
-        <p className="muted">当前没有可管理的组织积分周期。</p>
+        <h2>组织额度</h2>
+        <p className="muted">当前没有可管理的组织。请先在“组织与用户”中创建组织。</p>
       </section>
     )
   }

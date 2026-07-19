@@ -43,11 +43,11 @@ interface LoadedManagementData {
 
 function PlaceholderPage({ route }: { readonly route: ManagementRoute }) {
   const labels: Partial<Record<ManagementRoute, string>> = {
-    organization: '组织用户',
+    organization: '组织与用户',
     invitations: '邀请码',
     providers: 'Provider 与模型',
     diagnostics: '系统诊断',
-    credits: '积分管理',
+    credits: '组织额度',
     audit: '调用审计'
   }
   return (
@@ -224,7 +224,11 @@ export function App({
         {route === 'account' && (
           <>
             <AccountPage details={data.account} />
-            <CreditsPage credits={data.account.credits} />
+            <CreditsPage
+              details={data.account}
+              onOpenOrganizations={() => selectRoute('organization')}
+              onOpenCredits={() => selectRoute('credits')}
+            />
           </>
         )}
         {route === 'security' && (

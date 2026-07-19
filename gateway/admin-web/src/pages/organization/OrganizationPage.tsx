@@ -94,7 +94,7 @@ export function OrganizationPage({
   return (
     <>
       <section className="content-card">
-        <h2>组织</h2>
+        <h2>组织与用户</h2>
         {role === 'level1' && (
           <form className="security-form" onSubmit={event => void create(event)}>
             <label>

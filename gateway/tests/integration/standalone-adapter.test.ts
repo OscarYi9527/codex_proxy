@@ -150,5 +150,35 @@ describe('existing Provider compatibility adapter (T044-T046)', () => {
       model: 'gpt-5.4-mini',
       stream: true
     })
+
+    const importedSubscription = await fixture.gateway.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/chatgpt-accounts/import',
+      headers: { authorization: `Bearer ${tokens.accessToken}` },
+      payload: {
+        authJson: JSON.stringify({
+          tokens: {
+            access_token: 'isolated-subscription-access-token',
+            refresh_token: 'isolated-subscription-refresh-token',
+            account_id: 'isolated-subscription-account'
+          }
+        }),
+        label: 'Isolated subscription account',
+        routingEnabled: true
+      }
+    })
+    expect(importedSubscription.statusCode).toBe(200)
+
+    const modelsAfterSubscription = await fixture.gateway.app.inject({
+      method: 'GET',
+      url: '/v1/models',
+      headers: { authorization: `Bearer ${tokens.accessToken}` }
+    })
+    expect(modelsAfterSubscription.statusCode).toBe(200)
+    expect(modelsAfterSubscription.json().data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'gpt-5.6-sol' }),
+      expect.objectContaining({ id: 'gpt-5.6-terra' }),
+      expect.objectContaining({ id: 'gpt-5.6-luna' })
+    ]))
   })
 })

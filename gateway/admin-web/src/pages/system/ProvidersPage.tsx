@@ -312,6 +312,7 @@ export function ProvidersPage({
   const authJsonRef = useRef<HTMLTextAreaElement>(null)
   const authFileRef = useRef<HTMLInputElement>(null)
   const loginPollPending = useRef(false)
+  const importAuthJsonRef = useRef<(raw: string) => Promise<void>>(async () => undefined)
 
   const run = async (operation: () => Promise<unknown>, success = '设置已保存。') => {
     if (busy) return
@@ -436,6 +437,7 @@ export function ProvidersPage({
       setBusy(false)
     }
   }
+  importAuthJsonRef.current = importAuthJson
 
   const readAuthFile = async (file: File | undefined) => {
     if (!file) return
@@ -505,7 +507,7 @@ export function ProvidersPage({
           : '无法读取当前 Codex 账号，请确认本机已登录 Codex。')
         return
       }
-      if (message.authJson) void importAuthJson(message.authJson)
+      if (message.authJson) void importAuthJsonRef.current(message.authJson)
     }
     window.addEventListener('message', receive)
     return () => window.removeEventListener('message', receive)

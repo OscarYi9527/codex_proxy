@@ -58,6 +58,57 @@ function usesMaxCompletionTokens(model) {
   return /^(?:gpt-5|o[134])(?:$|[-_.])/i.test(String(model || ''))
 }
 
+function requiresDisabledReasoningForTools(model) {
+  return /^gpt-5[._-]6(?:$|[-_.])/i.test(String(model || ''))
+}
+
+function asRecord(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : null
+}
+
+function convertTool(tool) {
+  const source = asRecord(tool)
+  if (!source) return null
+  const nestedFunction = asRecord(source.function)
+  const name = typeof source.name === 'string' && source.name
+    ? source.name
+    : (typeof nestedFunction?.name === 'string' ? nestedFunction.name : '')
+
+  // Chat Completions only accepts named function tools. Responses built-ins
+  // such as web search have no function name and cannot be represented on
+  // this compatibility route; omit them instead of emitting an invalid
+  // tools[n].function object that the upstream rejects.
+  if (!name) return null
+
+  if (source.type === 'custom') {
+    return {
+      type: 'function',
+      function: {
+        name,
+        description: source.description || `Codex tool: ${name}`,
+        parameters: {
+          type: 'object',
+          properties: { input: { type: 'string' } },
+          required: ['input'],
+          additionalProperties: false
+        }
+      }
+    }
+  }
+
+  return {
+    type: 'function',
+    function: {
+      name,
+      description: source.description || nestedFunction?.description || '',
+      parameters:
+        source.parameters ||
+        nestedFunction?.parameters ||
+        { type: 'object', properties: {} }
+    }
+  }
+}
+
 export function responsesToChatCompletions(body, upstreamModel) {
   const messages = []
   const instructions = asText(body.instructions)
@@ -81,33 +132,20 @@ export function responsesToChatCompletions(body, upstreamModel) {
   if (body.temperature != null) request.temperature = body.temperature
   if (body.top_p != null) request.top_p = body.top_p
 
-  if (body.tools && body.tool_choice !== 'none') {
-    request.tools = body.tools.map(tool => {
-      if (tool.type === 'custom') {
-        return {
-          type: 'function',
-          function: {
-            name: tool.name,
-            description: tool.description || `Codex tool: ${tool.name}`,
-            parameters: {
-              type: 'object',
-              properties: { input: { type: 'string' } },
-              required: ['input'],
-              additionalProperties: false
-            }
-          }
-        }
+  if (Array.isArray(body.tools) && body.tool_choice !== 'none') {
+    const tools = body.tools.map(convertTool).filter(Boolean)
+    if (tools.length) {
+      request.tools = tools
+
+      // GPT-5.6 Chat Completions rejects function tools while reasoning is
+      // enabled (including the model's default reasoning effort). Explicitly
+      // disable reasoning on this compatibility route; native Responses
+      // requests keep their requested reasoning level.
+      if (requiresDisabledReasoningForTools(upstreamModel)) {
+        request.reasoning_effort = 'none'
       }
-      return {
-        type: 'function',
-        function: {
-          name: tool.name,
-          description: tool.description || '',
-          parameters: tool.parameters || { type: 'object', properties: {} }
-        }
-      }
-    })
-    if (body.tool_choice) {
+    }
+    if (tools.length && body.tool_choice) {
       if (body.tool_choice === 'required') request.tool_choice = 'required'
       else if (body.tool_choice === 'auto') request.tool_choice = 'auto'
       else if (body.tool_choice?.name) {

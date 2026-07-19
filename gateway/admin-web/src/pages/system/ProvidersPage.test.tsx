@@ -288,6 +288,7 @@ describe('Level-1 Provider administration page (T083/T088)', () => {
       />
     )
     fireEvent.click(screen.getByRole('button', { name: '添加订阅账号' }))
+    fireEvent.click(screen.getByLabelText('导入后立即参与自动路由'))
     fireEvent.click(screen.getByRole('button', { name: /一键导入当前 Codex 账号/ }))
     expect(click).toHaveBeenCalledTimes(1)
     expect((click.mock.contexts[0] as HTMLAnchorElement).href)
@@ -328,7 +329,7 @@ describe('Level-1 Provider administration page (T083/T088)', () => {
       expect(api.importChatgptAccount).toHaveBeenCalledWith({
         authJson,
         label: '',
-        routingEnabled: false
+        routingEnabled: true
       })
     })
     expect(document.body.textContent).not.toContain('native-access-secret')

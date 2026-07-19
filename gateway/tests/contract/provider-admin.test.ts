@@ -503,7 +503,14 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
       kind: 'chatgpt',
       displayName: 'ChatGPT 订阅池',
       config: {
-        models: ['gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini']
+        models: [
+          'gpt-5.6-sol',
+          'gpt-5.6-terra',
+          'gpt-5.6-luna',
+          'gpt-5.5',
+          'gpt-5.4',
+          'gpt-5.4-mini'
+        ]
       }
     })
     expect(listed.json().providers[0].credentials[0]).toMatchObject({

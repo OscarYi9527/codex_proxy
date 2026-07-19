@@ -16,6 +16,58 @@ export interface SafeModelList {
   readonly data: SafeModel[]
 }
 
+export interface GatewayProviderAvailability {
+  readonly deepseek?: boolean
+  readonly 'openai-api'?: boolean
+  readonly 'chatgpt-sub'?: boolean
+  readonly relays?: readonly string[]
+}
+
+const BUILT_IN_VIRTUAL_MODELS = new Set([
+  'auto',
+  'auto-fast',
+  'auto-cheap',
+  'auto-reliable'
+])
+
+/**
+ * Keeps the AI Editor catalog aligned with explicitly configured routes.
+ *
+ * The embedded standalone Proxy advertises its built-in `auto*` aliases even
+ * though they are not real upstream models. Do not leak those aliases into the
+ * product picker unless Gateway configuration explicitly enables them.
+ */
+export function filterGatewayModels(
+  models: readonly SafeModel[],
+  configuredModelIds: readonly string[],
+  providers: GatewayProviderAvailability
+): SafeModel[] {
+  const configured = new Set(configuredModelIds)
+  const relays = Array.isArray(providers.relays) ? providers.relays : []
+  const anyProvider = Boolean(
+    providers.deepseek ||
+    providers['openai-api'] ||
+    providers['chatgpt-sub'] ||
+    relays.length
+  )
+
+  return models
+    .filter((model, index, catalog) =>
+      catalog.findIndex(candidate => candidate.id === model.id) === index
+    )
+    .filter(model => {
+      if (BUILT_IN_VIRTUAL_MODELS.has(model.id)) {
+        return anyProvider && configured.has(model.id)
+      }
+      if (model.id.startsWith('relay-')) {
+        return relays.some(relayId => model.id.startsWith(`relay-${relayId}-`))
+      }
+      if (model.id.startsWith('openai-api-')) return providers['openai-api'] === true
+      if (/^gpt-/i.test(model.id)) return providers['chatgpt-sub'] === true
+      return providers.deepseek === true
+    })
+}
+
 export interface ProviderForwardResult {
   readonly providerId?: string
   readonly assistantText?: string
@@ -515,21 +567,9 @@ export class StandaloneRouteAdapter implements ProviderRouteAdapter {
         throw new Error('Model catalog response is invalid')
       }
       const readiness = JSON.parse(readinessBody.toString('utf8')) as {
-        providers?: {
-          deepseek?: boolean
-          'openai-api'?: boolean
-          'chatgpt-sub'?: boolean
-          relays?: string[]
-        }
+        providers?: GatewayProviderAvailability
       }
       const providers = readiness.providers || {}
-      const relays = Array.isArray(providers.relays) ? providers.relays : []
-      const anyProvider = Boolean(
-        providers.deepseek ||
-        providers['openai-api'] ||
-        providers['chatgpt-sub'] ||
-        relays.length
-      )
       const configuredModels = this.#modelIds.map<SafeModel>(id => ({
         id,
         object: 'model',
@@ -537,21 +577,11 @@ export class StandaloneRouteAdapter implements ProviderRouteAdapter {
       }))
       return {
         object: 'list',
-        data: [...value.data, ...configuredModels]
-          .filter((model, index, models) =>
-            models.findIndex(candidate => candidate.id === model.id) === index
-          )
-          .filter(model => {
-          if (['auto', 'auto-fast', 'auto-cheap', 'auto-reliable'].includes(model.id)) {
-            return anyProvider
-          }
-          if (model.id.startsWith('relay-')) {
-            return relays.some(relayId => model.id.startsWith(`relay-${relayId}-`))
-          }
-          if (model.id.startsWith('openai-api-')) return providers['openai-api'] === true
-          if (/^gpt-/i.test(model.id)) return providers['chatgpt-sub'] === true
-          return providers.deepseek === true
-          })
+        data: filterGatewayModels(
+          [...value.data, ...configuredModels],
+          this.#modelIds,
+          providers
+        )
       }
     } finally {
       modelBody.fill(0)

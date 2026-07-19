@@ -386,10 +386,19 @@ function saveProxyConfig(fields, { snapshot = false, reason = 'change' } = {}) {
 }
 
 sanitizeExistingConfigSnapshots()
-let proxyConfig = loadProxyConfig()
+const proxyConfig = loadProxyConfig()
 
 function reloadProxyConfig() {
-  proxyConfig = loadProxyConfig()
+  const nextConfig = loadProxyConfig()
+  // Keep the exported object identity stable. The embedded Gateway adapter
+  // holds a reference to this object so it can apply database-backed Provider
+  // changes directly to the standalone routing runtime. Replacing the object
+  // here would leave the adapter writing to a stale configuration while
+  // request handlers read the new one.
+  for (const key of Object.keys(proxyConfig)) {
+    if (!(key in nextConfig)) delete proxyConfig[key]
+  }
+  Object.assign(proxyConfig, nextConfig)
   console.log('[codex-proxy] 配置已热重载')
   return proxyConfig
 }

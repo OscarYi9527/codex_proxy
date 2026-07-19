@@ -41,6 +41,8 @@ const DEFAULTS = {
 const DEFAULT_CHATGPT_PROVIDER_NAME = 'ChatGPT 订阅池'
 const DEFAULT_CHATGPT_MODELS = [
   'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
   'gpt-5.5',
   'gpt-5.4',
   'gpt-5.4-mini'

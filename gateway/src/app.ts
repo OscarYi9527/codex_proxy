@@ -71,6 +71,13 @@ import { ProviderWorkerClient } from './provider-worker/provider-worker-client.j
 import {
   ProviderWorkerSettlementReconciler
 } from './provider-worker/settlement-reconciler.js'
+import {
+  loadCredentialKeyProvider
+} from './security/credential-keys.js'
+import {
+  EnvelopeCredentialProtector,
+  type CredentialProtector
+} from './security/envelope-credential-protector.js'
 
 export interface GatewayApp {
   readonly app: FastifyInstance
@@ -91,6 +98,7 @@ export async function createGatewayApp(options: {
   bootstrapSink?: (loginName: string, temporaryPassword: string) => void
   providerAdapter?: ProviderRouteAdapter
   chatgptLogin?: ChatgptLoginCoordinator
+  credentialProtector?: CredentialProtector
 } = {}): Promise<GatewayApp> {
   const config = options.config || loadGatewayConfig()
   const clock = options.clock || new SystemClock()
@@ -219,9 +227,12 @@ export async function createGatewayApp(options: {
         ? new ProviderWorkerClient(config.providerWorker)
         : new StandaloneRouteAdapter({ storageRoot: config.dataRoot }))
     if (providerAdapter instanceof StandaloneRouteAdapter) await providerAdapter.initialize()
+    const credentialProtector = options.credentialProtector ||
+      new EnvelopeCredentialProtector(loadCredentialKeyProvider(config))
     const providerRepository = new ProviderRepository(
       database.db,
-      callback => database.inTransaction(callback)
+      callback => database.inTransaction(callback),
+      credentialProtector
     )
     const organizationRepository = new OrganizationRepository(
       database.db,

@@ -12,6 +12,7 @@ import { TurnStore } from './turn-store.js'
 import { ExecutionStore } from './execution-store.js'
 import { MockProviderExecutor } from './mock-executor.js'
 import { ChatgptSubscriptionExecutor } from './chatgpt-sub-executor.js'
+import { loadWorkerCredentialVault } from './credential-vault.js'
 
 const BODY_LIMIT = 16 * 1024 * 1024
 const MAX_CACHED_RESPONSE_BYTES = 8 * 1024 * 1024
@@ -149,12 +150,18 @@ export function createProviderWorkerServer(options = {}) {
     workerId: config.workerId || 'worker-local',
     region: config.region || 'local-development'
   })
+  const credentialVault = options.credentialVault || (
+    !options.executor && config.executorMode === 'chatgpt-sub'
+      ? loadWorkerCredentialVault(config)
+      : null
+  )
   const executor = options.executor || (
     config.executorMode === 'chatgpt-sub'
       ? new ChatgptSubscriptionExecutor({
           dataRoot: config.dataRoot,
           environment: config.environment,
-          fetchImpl: options.fetchImpl
+          fetchImpl: options.fetchImpl,
+          credentialVault
         })
       : new MockProviderExecutor()
   )
@@ -594,6 +601,7 @@ export function createProviderWorkerServer(options = {}) {
     turnStore,
     executionStore,
     executor,
+    credentialVault,
     async close() {
       turnStore.close()
       if (!server.listening) return

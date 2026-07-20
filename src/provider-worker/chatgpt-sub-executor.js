@@ -170,6 +170,15 @@ function validateAccount(value) {
       0,
       Number.MAX_SAFE_INTEGER
     )),
+    credential_version: Math.max(
+      1,
+      Math.floor(number(
+        source.credential_version,
+        1,
+        1,
+        Number.MAX_SAFE_INTEGER
+      ))
+    ),
     reserved_models: safeStringList(source.reserved_models, 50),
     status: typeof source.status === 'string' && source.status
       ? source.status.slice(0, 40)
@@ -444,6 +453,7 @@ export class ChatgptSubscriptionExecutor {
     this.dataRoot = options.dataRoot
     this.environment = options.environment || 'development'
     this.fetchImpl = options.fetchImpl || fetch
+    this.credentialVault = options.credentialVault || null
   }
 
   async initialize() {
@@ -516,8 +526,11 @@ export class ChatgptSubscriptionExecutor {
         .map(account => [account.id, account])
     )
     const nextDigests = new Map()
-    const accounts = incomingAccounts.map(account => {
-      const digest = credentialDigest(account)
+    const restoredAccounts = this.credentialVault
+      ? await this.credentialVault.restore(incomingAccounts)
+      : incomingAccounts
+    const accounts = restoredAccounts.map((account, index) => {
+      const digest = credentialDigest(incomingAccounts[index])
       nextDigests.set(account.id, digest)
       const previous = previousById.get(account.id)
       if (!previous || this.#credentialDigests.get(account.id) !== digest) {
@@ -546,6 +559,7 @@ export class ChatgptSubscriptionExecutor {
         model
       }))
     })
+    await this.#persistCredentials()
     return this.configurationStatus()
   }
 
@@ -620,6 +634,7 @@ export class ChatgptSubscriptionExecutor {
       account,
       this.#runtime.china.chinaFetch(this.fetchImpl)
     )
+    await this.#persistCredentials()
   }
 
   async execute(options) {
@@ -661,6 +676,7 @@ export class ChatgptSubscriptionExecutor {
     })
     completion.catch(() => {})
     await response.headerPromise
+    await this.#persistCredentials()
     if (response.statusCode < 200 || response.statusCode >= 300) {
       const errorBody = await collectLimited(response, MAX_ERROR_BODY_BYTES)
       errorBody.fill(0)
@@ -715,5 +731,12 @@ export class ChatgptSubscriptionExecutor {
         }
       }
     }
+  }
+
+  async #persistCredentials() {
+    if (!this.credentialVault || !this.#runtime) return
+    await this.credentialVault.snapshot(
+      this.#runtime.config.proxyConfig.chatgptAccounts || []
+    )
   }
 }

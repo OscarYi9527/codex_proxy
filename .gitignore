@@ -59,5 +59,7 @@ gateway/admin-web/coverage/
 gateway/admin-web/.vite/
 gateway/admin-web/*.tsbuildinfo
 *.gateway-secret
+*.worker-secret
+*.gateway-backup
 *.edge-secret
 *.handoff-secret

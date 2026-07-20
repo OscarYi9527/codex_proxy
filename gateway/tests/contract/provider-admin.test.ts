@@ -170,7 +170,9 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
     expect(credential.statusCode).toBe(200)
     expect(credential.json()).toMatchObject({
       maskedPreview: 'sk-...abcd',
-      storageFormat: 'plaintext-v1',
+      storageFormat: 'envelope-v1',
+      keyVersion: 'test-kek-v1',
+      credentialVersion: 1,
       lastUsedAt: null
     })
     expect(credential.body).not.toContain('sk-isolated-provider-secret-abcd')
@@ -182,7 +184,7 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
     })
     expect(listed.statusCode).toBe(200)
     expect(listed.body).not.toContain('sk-isolated-provider-secret-abcd')
-    expect(listed.json().warning).toMatch(/plaintext-v1/)
+    expect(listed.json().warning).toBeNull()
     expect(listed.json().providers[0].credentials[0].maskedPreview).toBe('sk-...abcd')
 
     expect(runtime.relays).toEqual([
@@ -390,7 +392,7 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
     expect(listed.body).not.toContain('chatgpt-access-secret')
     expect(listed.body).not.toContain('chatgpt-refresh-secret')
     expect(listed.json().providers[0].credentials[0].storageFormat)
-      .toBe('plaintext-v1')
+      .toBe('envelope-v1')
 		const credentialId = listed.json().providers[0].credentials[0].id as string
 		expect(runtime.chatgptAccounts).toEqual([
 			expect.objectContaining({
@@ -565,7 +567,10 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
       .selectAll()
       .execute()
     expect(stored).toHaveLength(1)
-    expect(stored[0].secret_payload).toContain('shortcut-access-secret-two')
+    expect(stored[0].storage_kind).toBe('envelope-v1')
+    expect(stored[0].key_version).toBe('test-kek-v1')
+    expect(stored[0].credential_version).toBe(2)
+    expect(stored[0].secret_payload).not.toContain('shortcut-access-secret-two')
     expect(stored[0].secret_payload).not.toContain('shortcut-access-secret-one')
   })
 

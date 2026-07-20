@@ -21,8 +21,7 @@ import type {
 } from '../routing/standalone-route-adapter.js'
 import {
   assertCredentialStorageAllowed,
-  PLAINTEXT_STORAGE_WARNING,
-  requireDevelopmentPlaintext
+  PLAINTEXT_STORAGE_WARNING
 } from './credential-policy.js'
 import type { ChatgptLoginCoordinator } from './chatgpt-login-service.js'
 import {
@@ -343,6 +342,8 @@ function safeCredential(
 		id: record.id,
 		maskedPreview: maskSecret(record.secretPayload),
 		storageFormat: record.storageKind,
+		keyVersion: record.keyVersion,
+		credentialVersion: record.credentialVersion,
 		updatedAt: record.updatedAt,
 		lastUsedAt: account?.health.lastRequestAt || providerHealth?.lastCheckedAt || null,
 		label: account?.label || null,
@@ -480,7 +481,8 @@ function parseChatgptCredential(
 			daily_request_limit: Math.max(0, Math.floor(Number(settings['dailyRequestLimit']) || 0)),
 			daily_token_limit: Math.max(0, Math.floor(Number(settings['dailyTokenLimit']) || 0)),
 			reserved_models: safeStringList(settings['reservedModels']),
-			status: 'active'
+			status: 'active',
+			credential_version: credential.credentialVersion
 		}
   } catch {
     return null
@@ -647,7 +649,6 @@ export class ProviderService {
     body: Record<string, unknown>
   ) {
     await this.requireLevel1(identity, 'provider.credential.create', providerId)
-    requireDevelopmentPlaintext(this.config)
     await this.requireProvider(providerId)
     const secret = requiredText(body['secret'], 'Provider 凭据', 10_000)
     const now = this.clock.now().toISOString()
@@ -656,6 +657,8 @@ export class ProviderService {
       providerId,
       storageKind: 'plaintext-v1',
       secretPayload: secret,
+      keyVersion: null,
+      credentialVersion: 1,
       createdAt: now,
       updatedAt: now
     }
@@ -667,9 +670,14 @@ export class ProviderService {
       credential.id
     )
     await this.applyRuntimeConfiguration()
+    const stored = (await this.repository.listCredentials(providerId))
+      .find(item => item.id === credential.id)
+    if (!stored) throw this.notFound()
     return {
-      ...safeCredential(credential),
-      warning: PLAINTEXT_STORAGE_WARNING
+      ...safeCredential(stored),
+      warning: stored.storageKind === 'plaintext-v1'
+        ? PLAINTEXT_STORAGE_WARNING
+        : null
     }
   }
 
@@ -678,7 +686,6 @@ export class ProviderService {
     body: Record<string, unknown>
   ) {
     await this.requireLevel1(identity, 'provider.chatgpt_account.import', null)
-    requireDevelopmentPlaintext(this.config)
     const auth = parseChatgptAuthJson(body['authJson'] ?? body['auth_json'])
     const label = optionalText(body['label'], 80)
     if (body['routingEnabled'] !== undefined && typeof body['routingEnabled'] !== 'boolean') {
@@ -755,6 +762,8 @@ export class ProviderService {
           providerId: provider.id,
           storageKind: 'plaintext-v1',
           secretPayload: auth.serialized,
+          keyVersion: null,
+          credentialVersion: 1,
           createdAt: now,
           updatedAt: now
         })
@@ -815,7 +824,7 @@ export class ProviderService {
     return {
       ...result,
       accountIdPreview: accountIdPreview(auth.accountId),
-      warning: PLAINTEXT_STORAGE_WARNING
+      warning: null
     }
   }
 
@@ -1108,7 +1117,6 @@ export class ProviderService {
     body: Record<string, unknown>
   ) {
     await this.requireLevel1(identity, 'provider.chatgpt_account.login.start', null)
-    requireDevelopmentPlaintext(this.config)
     const label = optionalText(body['label'], 80)
     if (body['routingEnabled'] !== undefined && typeof body['routingEnabled'] !== 'boolean') {
       throw new SafeError({

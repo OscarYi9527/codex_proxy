@@ -23,6 +23,10 @@ import { createProviderWorkerServer } from '../src/provider-worker/server.js'
 import {
   ChatgptSubscriptionExecutor
 } from '../src/provider-worker/chatgpt-sub-executor.js'
+import {
+  DevelopmentWorkerCredentialVault,
+  loadWorkerCredentialVault
+} from '../src/provider-worker/credential-vault.js'
 
 const SIGNING_SECRET = 'provider-worker-test-secret-with-at-least-32-bytes'
 const openWorkers = new Set()
@@ -696,12 +700,134 @@ describe('Provider Worker local lifecycle', () => {
 })
 
 describe('Provider Worker ChatGPT subscription runtime', () => {
+  it('restores refreshed credentials securely across restarts and key rotation', async () => {
+    const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-worker-vault-'))
+    temporaryDirectories.add(dataRoot)
+    const options = {
+      dataRoot,
+      workerId: 'worker-vault-test',
+      region: 'local-development'
+    }
+    const first = new DevelopmentWorkerCredentialVault(options)
+    await first.snapshot([{
+      id: 'account-vault',
+      credential_version: 1,
+      access_token: 'access-original-secret',
+      refresh_token: 'refresh-original-secret'
+    }])
+    await first.snapshot([{
+      id: 'account-vault',
+      credential_version: 1,
+      access_token: 'access-refreshed-secret',
+      refresh_token: 'refresh-rotated-secret'
+    }])
+    const stored = fs.readFileSync(
+      path.join(dataRoot, 'provider-worker-chatgpt-credentials-v1.json'),
+      'utf8'
+    )
+    for (const secret of [
+      'access-original-secret',
+      'refresh-original-secret',
+      'access-refreshed-secret',
+      'refresh-rotated-secret'
+    ]) {
+      assert.equal(stored.includes(secret), false)
+    }
+
+    const restarted = new DevelopmentWorkerCredentialVault(options)
+    const restored = await restarted.restore([{
+      id: 'account-vault',
+      credential_version: 1,
+      access_token: 'stale-gateway-access',
+      refresh_token: 'stale-gateway-refresh'
+    }])
+    assert.equal(restored[0].access_token, 'access-refreshed-secret')
+    assert.equal(restored[0].refresh_token, 'refresh-rotated-secret')
+
+    const replaced = await restarted.restore([{
+      id: 'account-vault',
+      credential_version: 2,
+      access_token: 'admin-replacement-access',
+      refresh_token: 'admin-replacement-refresh'
+    }])
+    assert.equal(replaced[0].access_token, 'admin-replacement-access')
+    assert.equal(replaced[0].refresh_token, 'admin-replacement-refresh')
+
+    const oldVersion = await restarted.currentKeyVersion()
+    const newVersion = await restarted.rotate()
+    assert.notEqual(newVersion, oldVersion)
+    const afterRotation = await new DevelopmentWorkerCredentialVault(options)
+      .restore([{
+        id: 'account-vault',
+        credential_version: 1,
+        access_token: 'stale',
+        refresh_token: 'stale'
+      }])
+    assert.equal(afterRotation[0].refresh_token, 'refresh-rotated-secret')
+
+    const backupRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-worker-vault-backup-'))
+    temporaryDirectories.add(backupRoot)
+    for (const file of [
+      'provider-worker-credential-master-keys.worker-secret',
+      'provider-worker-chatgpt-credentials-v1.json'
+    ]) {
+      fs.copyFileSync(path.join(dataRoot, file), path.join(backupRoot, file))
+    }
+    const restoredBackup = await new DevelopmentWorkerCredentialVault({
+      ...options,
+      dataRoot: backupRoot
+    }).restore([{
+      id: 'account-vault',
+      credential_version: 1,
+      access_token: 'stale',
+      refresh_token: 'stale'
+    }])
+    assert.equal(restoredBackup[0].refresh_token, 'refresh-rotated-secret')
+
+    const vaultFile = path.join(
+      backupRoot,
+      'provider-worker-chatgpt-credentials-v1.json'
+    )
+    const tampered = JSON.parse(fs.readFileSync(vaultFile, 'utf8'))
+    tampered.records[0].payload.tag = Buffer.alloc(16, 9).toString('base64')
+    fs.writeFileSync(vaultFile, JSON.stringify(tampered))
+    const tamperedVault = new DevelopmentWorkerCredentialVault({
+      ...options,
+      dataRoot: backupRoot
+    })
+    await assert.rejects(
+      tamperedVault.restore([{
+        id: 'account-vault',
+        credential_version: 1,
+        access_token: 'stale',
+        refresh_token: 'stale'
+      }]),
+      /authentication/
+    )
+    assert.throws(() => loadWorkerCredentialVault({
+      environment: 'production',
+      ...options
+    }), /KMS\/Secret Manager/)
+  })
+
   it('syncs the pool, rotates cooled accounts, preserves tool IDs and reports usage', async () => {
     const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-worker-chatgpt-'))
     temporaryDirectories.add(dataRoot)
     const upstreamCalls = []
+    const refreshCalls = []
     let firstAccountFailureStatus = 429
     const fetchImpl = async (url, options = {}) => {
+      if (String(url) === 'https://auth.openai.com/oauth/token') {
+        const body = JSON.parse(options.body)
+        refreshCalls.push(body.refresh_token)
+        return new Response(JSON.stringify({
+          access_token: 'access-second-refreshed',
+          refresh_token: 'refresh-second-rotated'
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
       upstreamCalls.push({
         url: String(url),
         authorization: options.headers?.authorization,
@@ -734,10 +860,16 @@ describe('Provider Worker ChatGPT subscription runtime', () => {
         headers: { 'content-type': 'text/event-stream; charset=utf-8' }
       })
     }
+    const credentialVault = new DevelopmentWorkerCredentialVault({
+      dataRoot,
+      workerId: 'worker-local',
+      region: 'local-development'
+    })
     const executor = new ChatgptSubscriptionExecutor({
       dataRoot,
       environment: 'test',
-      fetchImpl
+      fetchImpl,
+      credentialVault
     })
     const { origin } = await startWorker({ executor })
     const configuration = {
@@ -758,6 +890,7 @@ describe('Provider Worker ChatGPT subscription runtime', () => {
         routing_enabled: true,
         routing_weight: 1,
         low_quota_threshold: 10,
+        credential_version: 1,
         status: 'active'
       }, {
         id: 'account-second',
@@ -765,10 +898,11 @@ describe('Provider Worker ChatGPT subscription runtime', () => {
         account_id: 'upstream-second',
         access_token: 'access-second',
         refresh_token: 'refresh-second',
-        expires_at: Date.now() + 60 * 60_000,
+        expires_at: Date.now() - 60_000,
         routing_enabled: true,
         routing_weight: 1,
         low_quota_threshold: 10,
+        credential_version: 1,
         status: 'active'
       }]
     }
@@ -822,11 +956,21 @@ describe('Provider Worker ChatGPT subscription runtime', () => {
     assert.match(await response.text(), /SUB_POOL_OK/)
     assert.equal(upstreamCalls.length, 2)
     assert.equal(upstreamCalls[0].authorization, 'Bearer access-first')
-    assert.equal(upstreamCalls[1].authorization, 'Bearer access-second')
+    assert.equal(upstreamCalls[1].authorization, 'Bearer access-second-refreshed')
+    assert.deepEqual(refreshCalls, ['refresh-second'])
     assert.match(upstreamCalls[0].body.input[0].id, /^fc_/)
     assert.equal(
       upstreamCalls[0].body.input[0].call_id,
       'tool_mrrmem914mxsqfk7'
+    )
+    const restoredAfterRefresh = await new DevelopmentWorkerCredentialVault({
+      dataRoot,
+      workerId: 'worker-local',
+      region: 'local-development'
+    }).restore(configuration.accounts)
+    assert.equal(
+      restoredAfterRefresh[1].refresh_token,
+      'refresh-second-rotated'
     )
 
     const poolRequest = signedRequest(
@@ -856,8 +1000,11 @@ describe('Provider Worker ChatGPT subscription runtime', () => {
     const authenticationConfiguration = structuredClone(configuration)
     authenticationConfiguration.accounts[0].access_token = 'access-first-v2'
     authenticationConfiguration.accounts[0].refresh_token = 'refresh-first-v2'
+    authenticationConfiguration.accounts[0].credential_version = 2
     authenticationConfiguration.accounts[1].access_token = 'access-second-v2'
     authenticationConfiguration.accounts[1].refresh_token = 'refresh-second-v2'
+    authenticationConfiguration.accounts[1].credential_version = 2
+    authenticationConfiguration.accounts[1].expires_at = Date.now() + 60 * 60_000
     const reconfigure = signedRequest(
       origin,
       '/internal/v1/runtime/chatgpt-sub',
@@ -894,9 +1041,11 @@ describe('Provider Worker ChatGPT subscription runtime', () => {
     const routingConfiguration = structuredClone(authenticationConfiguration)
     routingConfiguration.accounts[0].access_token = 'access-first-v3'
     routingConfiguration.accounts[0].refresh_token = 'refresh-first-v3'
+    routingConfiguration.accounts[0].credential_version = 3
     routingConfiguration.accounts[0].routing_enabled = false
     routingConfiguration.accounts[1].access_token = 'access-second-v3'
     routingConfiguration.accounts[1].refresh_token = 'refresh-second-v3'
+    routingConfiguration.accounts[1].credential_version = 3
     const routingConfigure = signedRequest(
       origin,
       '/internal/v1/runtime/chatgpt-sub',

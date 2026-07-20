@@ -242,6 +242,8 @@ export interface ProviderCredentialTable {
   provider_id: string
   storage_kind: 'plaintext-v1' | 'envelope-v1'
   secret_payload: string
+  key_version: NullableString
+  credential_version: Version
   created_at: Timestamp
   updated_at: Timestamp
 }

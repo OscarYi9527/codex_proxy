@@ -8,6 +8,10 @@ import { databaseHandle, type DatabaseHandle } from '../../src/db/database.js'
 import { createSqliteDatabase } from '../../src/db/dialects/sqlite.js'
 import type { ProviderRouteAdapter } from '../../src/routing/standalone-route-adapter.js'
 import type { ChatgptLoginCoordinator } from '../../src/providers/chatgpt-login-service.js'
+import { StaticCredentialKeyProvider } from '../../src/security/credential-keys.js'
+import {
+  EnvelopeCredentialProtector
+} from '../../src/security/envelope-credential-protector.js'
 
 export class MutableClock implements Clock {
   #nowMs: number
@@ -87,6 +91,14 @@ export async function createRealGatewayFixture(
       accessTokenKey: new Uint8Array(32).fill(7),
       digestKey: new Uint8Array(32).fill(9)
     },
+    credentialProtector: new EnvelopeCredentialProtector(
+      new StaticCredentialKeyProvider({
+        currentVersion: 'test-kek-v1',
+        keys: {
+          'test-kek-v1': new Uint8Array(32).fill(11)
+        }
+      })
+    ),
     bootstrapSink: (loginName, password) => {
       bootstrap = { loginName, password }
     },

@@ -2,6 +2,10 @@ import type { Kysely, Transaction } from 'kysely'
 import type { GatewayDatabase } from '../schema.js'
 import type { AccountRole } from '../../auth/types.js'
 import { addCredits, formatCredits } from '../../credits/decimal.js'
+import type {
+  CredentialProtector,
+  StoredCredentialSecret
+} from '../../security/envelope-credential-protector.js'
 
 type DatabaseExecutor = Kysely<GatewayDatabase> | Transaction<GatewayDatabase>
 export type ProviderKind = 'chatgpt' | 'openai' | 'deepseek' | 'relay'
@@ -22,6 +26,8 @@ export interface ProviderCredentialRecord {
   readonly providerId: string
   readonly storageKind: 'plaintext-v1' | 'envelope-v1'
   readonly secretPayload: string
+  readonly keyVersion: string | null
+  readonly credentialVersion: number
   readonly createdAt: string
   readonly updatedAt: string
 }
@@ -62,7 +68,8 @@ export class ProviderRepository {
     private readonly db: DatabaseExecutor,
     private readonly transactionRunner?: <T>(
       callback: (transaction: Transaction<GatewayDatabase>) => Promise<T>
-    ) => Promise<T>
+    ) => Promise<T>,
+    private readonly credentialProtector?: CredentialProtector
   ) {}
 
   async inTransaction<T>(callback: (repository: ProviderRepository) => Promise<T>): Promise<T> {
@@ -70,7 +77,11 @@ export class ProviderRepository {
       throw new Error('ProviderRepository transaction boundary is unavailable')
     }
     return this.transactionRunner(transaction =>
-      callback(new ProviderRepository(transaction))
+      callback(new ProviderRepository(
+        transaction,
+        undefined,
+        this.credentialProtector
+      ))
     )
   }
 
@@ -150,6 +161,30 @@ export class ProviderRepository {
   }
 
   async listCredentials(providerId?: string): Promise<ProviderCredentialRecord[]> {
+    const records = await this.listStoredCredentials(providerId)
+    return Promise.all(records.map(async record => {
+      if (record.storageKind === 'plaintext-v1') return record
+      if (!this.credentialProtector) {
+        throw new Error(
+          'Encrypted Provider credentials are present but no credential key provider is available'
+        )
+      }
+      return {
+        ...record,
+        secretPayload: await this.credentialProtector.reveal({
+          id: record.id,
+          providerId: record.providerId,
+          credentialVersion: record.credentialVersion
+        }, {
+          storageKind: 'envelope-v1',
+          keyVersion: record.keyVersion,
+          secretPayload: record.secretPayload
+        })
+      }
+    }))
+  }
+
+  async listStoredCredentials(providerId?: string): Promise<ProviderCredentialRecord[]> {
     let query = this.db.selectFrom('provider_credentials').selectAll()
     if (providerId) query = query.where('provider_id', '=', providerId)
     const rows = await query.orderBy('updated_at', 'desc').execute()
@@ -158,17 +193,22 @@ export class ProviderRepository {
       providerId: row.provider_id,
       storageKind: row.storage_kind,
       secretPayload: row.secret_payload,
+      keyVersion: row.key_version,
+      credentialVersion: row.credential_version,
       createdAt: row.created_at,
       updatedAt: row.updated_at
     }))
   }
 
   async insertCredential(record: ProviderCredentialRecord): Promise<void> {
+    const stored = await this.protectForWrite(record, record.credentialVersion)
     await this.db.insertInto('provider_credentials').values({
       id: record.id,
       provider_id: record.providerId,
-      storage_kind: record.storageKind,
-      secret_payload: record.secretPayload,
+      storage_kind: stored.storageKind,
+      secret_payload: stored.secretPayload,
+      key_version: stored.keyVersion,
+      credential_version: record.credentialVersion,
       created_at: record.createdAt,
       updated_at: record.updatedAt
     }).execute()
@@ -183,15 +223,36 @@ export class ProviderRepository {
       updatedAt: string
     }
   ): Promise<boolean> {
+    const current = await this.db
+      .selectFrom('provider_credentials')
+      .select(['credential_version'])
+      .where('id', '=', credentialId)
+      .where('provider_id', '=', providerId)
+      .executeTakeFirst()
+    if (!current) return false
+    const credentialVersion = current.credential_version + 1
+    const stored = await this.protectForWrite({
+      id: credentialId,
+      providerId,
+      storageKind: options.storageKind,
+      secretPayload: options.secretPayload,
+      keyVersion: null,
+      credentialVersion,
+      createdAt: options.updatedAt,
+      updatedAt: options.updatedAt
+    }, credentialVersion)
     const result = await this.db
       .updateTable('provider_credentials')
       .set({
-        storage_kind: options.storageKind,
-        secret_payload: options.secretPayload,
+        storage_kind: stored.storageKind,
+        secret_payload: stored.secretPayload,
+        key_version: stored.keyVersion,
+        credential_version: credentialVersion,
         updated_at: options.updatedAt
       })
       .where('id', '=', credentialId)
       .where('provider_id', '=', providerId)
+      .where('credential_version', '=', current.credential_version)
       .executeTakeFirst()
     return Number(result.numUpdatedRows) === 1
   }
@@ -308,6 +369,95 @@ export class ProviderRepository {
     return Number(row.count)
   }
 
+  async countEnvelopeCredentials(): Promise<number> {
+    const row = await this.db
+      .selectFrom('provider_credentials')
+      .select(({ fn }) => fn.countAll<number>().as('count'))
+      .where('storage_kind', '=', 'envelope-v1')
+      .executeTakeFirstOrThrow()
+    return Number(row.count)
+  }
+
+  async migratePlaintextCredential(
+    providerId: string,
+    credentialId: string,
+    updatedAt: string
+  ): Promise<'migrated' | 'skipped'> {
+    if (!this.credentialProtector) {
+      throw new Error('Credential migration requires a credential protector')
+    }
+    const current = (await this.listStoredCredentials(providerId))
+      .find(record => record.id === credentialId)
+    if (!current || current.storageKind === 'envelope-v1') return 'skipped'
+    const stored = await this.credentialProtector.protect({
+      id: current.id,
+      providerId: current.providerId,
+      credentialVersion: current.credentialVersion
+    }, current.secretPayload)
+    const verified = await this.credentialProtector.reveal({
+      id: current.id,
+      providerId: current.providerId,
+      credentialVersion: current.credentialVersion
+    }, stored)
+    if (verified !== current.secretPayload) {
+      throw new Error('Credential migration read-back verification failed')
+    }
+    const result = await this.db
+      .updateTable('provider_credentials')
+      .set({
+        storage_kind: stored.storageKind,
+        secret_payload: stored.secretPayload,
+        key_version: stored.keyVersion,
+        updated_at: updatedAt
+      })
+      .where('id', '=', credentialId)
+      .where('provider_id', '=', providerId)
+      .where('storage_kind', '=', 'plaintext-v1')
+      .where('credential_version', '=', current.credentialVersion)
+      .executeTakeFirst()
+    return Number(result.numUpdatedRows) === 1 ? 'migrated' : 'skipped'
+  }
+
+  async rewrapCredential(
+    providerId: string,
+    credentialId: string,
+    updatedAt: string
+  ): Promise<'rewrapped' | 'skipped'> {
+    if (!this.credentialProtector) {
+      throw new Error('Credential rotation requires a credential protector')
+    }
+    const current = (await this.listStoredCredentials(providerId))
+      .find(record => record.id === credentialId)
+    if (!current || current.storageKind !== 'envelope-v1') return 'skipped'
+    const targetKeyVersion = await this.credentialProtector.currentKeyVersion()
+    if (current.keyVersion === targetKeyVersion) return 'skipped'
+    const identity = {
+      id: current.id,
+      providerId: current.providerId,
+      credentialVersion: current.credentialVersion
+    }
+    const stored = await this.credentialProtector.rewrap(identity, {
+      storageKind: 'envelope-v1',
+      keyVersion: current.keyVersion,
+      secretPayload: current.secretPayload
+    })
+    await this.credentialProtector.reveal(identity, stored)
+    const result = await this.db
+      .updateTable('provider_credentials')
+      .set({
+        secret_payload: stored.secretPayload,
+        key_version: stored.keyVersion,
+        updated_at: updatedAt
+      })
+      .where('id', '=', credentialId)
+      .where('provider_id', '=', providerId)
+      .where('storage_kind', '=', 'envelope-v1')
+      .where('key_version', '=', current.keyVersion)
+      .where('credential_version', '=', current.credentialVersion)
+      .executeTakeFirst()
+    return Number(result.numUpdatedRows) === 1 ? 'rewrapped' : 'skipped'
+  }
+
   async insertAuditEvent(options: {
     id: string
     actorAccountId: string
@@ -339,5 +489,30 @@ export class ProviderRepository {
       .where('id', '=', accountId)
       .executeTakeFirst()
     return row?.role || null
+  }
+
+  private async protectForWrite(
+    record: ProviderCredentialRecord,
+    credentialVersion: number
+  ): Promise<StoredCredentialSecret | {
+    storageKind: 'plaintext-v1'
+    keyVersion: null
+    secretPayload: string
+  }> {
+    if (!this.credentialProtector) {
+      if (record.storageKind === 'envelope-v1') {
+        throw new Error('Encrypted credential writes require a credential protector')
+      }
+      return {
+        storageKind: 'plaintext-v1',
+        keyVersion: null,
+        secretPayload: record.secretPayload
+      }
+    }
+    return this.credentialProtector.protect({
+      id: record.id,
+      providerId: record.providerId,
+      credentialVersion
+    }, record.secretPayload)
   }
 }

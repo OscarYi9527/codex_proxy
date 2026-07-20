@@ -121,6 +121,9 @@ export async function createGatewayApp(options: {
   if (shouldMigrateGatewayDatabase(config)) {
     await database.migrateToLatest()
   }
+  if (config.environment === 'production') {
+    await database.verifyRuntimeSecurity()
+  }
 
   const app = Fastify({
     logger: false,

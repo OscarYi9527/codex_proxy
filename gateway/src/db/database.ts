@@ -9,7 +9,10 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { GatewayConfig } from '../config.js'
-import { createPostgresDatabase } from './dialects/postgres.js'
+import {
+  createPostgresDatabase,
+  verifyPostgresRuntimeRoleSecurity
+} from './dialects/postgres.js'
 import { createSqliteDatabase } from './dialects/sqlite.js'
 import type { GatewayDatabase } from './schema.js'
 
@@ -19,6 +22,7 @@ export interface DatabaseHandle {
     callback: (transaction: Transaction<GatewayDatabase>) => Promise<T>
   ): Promise<T>
   migrateToLatest(): Promise<void>
+  verifyRuntimeSecurity(): Promise<void>
   close(): Promise<void>
 }
 
@@ -52,10 +56,18 @@ export function createGatewayDatabase(config: GatewayConfig): DatabaseHandle {
         ...(config.database.postgresTls ? { tls: config.database.postgresTls } : {})
       })
     : createSqliteDatabase(config.database.sqliteFile)
-  return databaseHandle(db)
+  return databaseHandle(
+    db,
+    config.environment === 'production' && config.database.dialect === 'postgres'
+      ? () => verifyPostgresRuntimeRoleSecurity(db)
+      : undefined
+  )
 }
 
-export function databaseHandle(db: Kysely<GatewayDatabase>): DatabaseHandle {
+export function databaseHandle(
+  db: Kysely<GatewayDatabase>,
+  runtimeSecurityVerifier?: () => Promise<void>
+): DatabaseHandle {
   return {
     db,
     async inTransaction<T>(
@@ -77,6 +89,9 @@ export function databaseHandle(db: Kysely<GatewayDatabase>): DatabaseHandle {
         if (result.status === 'Error') throw new Error(`Migration failed: ${result.migrationName}`)
       }
       if (error) throw error
+    },
+    async verifyRuntimeSecurity() {
+      await runtimeSecurityVerifier?.()
     },
     async close() {
       await db.destroy()

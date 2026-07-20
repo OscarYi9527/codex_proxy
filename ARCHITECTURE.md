@@ -52,7 +52,11 @@ production Gateway 强制 PostgreSQL 使用显式可信 CA，`pg.Pool` 固定
 `rejectUnauthorized=true`，可选客户端证书和私钥必须成对配置。连接串不能携带会覆盖
 TLS 对象的 `ssl*` 参数。生产服务进程永不自动运行 Kysely migration；迁移和首次
 bootstrap 使用临时 migration 身份，服务恢复后切回仅有业务 DML 权限的运行时身份。
-云厂商 CA、权限 SQL 和真实回滚演练仍属于 T136b。
+生产启动会通过 `pg_roles`、`has_database_privilege`、
+`has_schema_privilege` 和预定义服务器文件角色进行只读自检；superuser、建角色、
+建库、复制、绕过 RLS、数据库 CREATE/TEMP、schema CREATE、应用对象所有权和
+服务器文件/程序执行权限任一存在都会 fail closed。云厂商 CA、授权 SQL 和真实回滚
+演练仍属于 T136b。
 
 真实认证使用 Authorization Code + PKCE S256 和严格的随机端口 loopback callback。
 Gateway 签发 5 分钟 HS256 Access Token 和滚动 30 天单次消费 Refresh Token；数据库只

@@ -24,7 +24,11 @@ Implemented:
   constructed config incorrectly requests it;
 - `AI_EDITOR_GATEWAY_MIGRATE_ON_START=true` is rejected in production;
 - `npm run gateway:bootstrap` is the explicit migration/bootstrap entry point
-  for a separately injected migration identity.
+  for a separately injected migration identity;
+- production startup inspects the effective runtime role and rejects
+  superuser, role/database creation, replication, RLS bypass, database
+  CREATE/TEMP, schema CREATE, application-object ownership and predefined
+  server file/program execution privileges.
 
 Production environment variables:
 
@@ -44,19 +48,20 @@ reports.
 ## Validation
 
 - Gateway TypeScript check: passed;
-- focused config and pool tests: `11/11`;
-- complete Gateway tests: `140/140`;
+- focused config, pool and runtime-role tests: `17/17`;
+- complete Gateway tests: `153/153`;
 - root Proxy/Edge/Worker tests: `170/170`;
 - Admin Web tests: `31/31`;
 - full `npm run release:check`: passed;
 - tests cover production PostgreSQL enforcement, missing CA, connection-string
   TLS override rejection, partial client identity rejection, CA-only managed
-  PostgreSQL, CA+client identity and production auto-migration denial.
+  PostgreSQL, CA+client identity, production auto-migration denial and every
+  forbidden runtime-role privilege.
 
 The release gate temporarily released only the isolated preview Edge through
 the repository script. Shared `47892` remained PID `32260`, `/live=ok`; the
 preview Edge was restored against the same Quick Tunnel/data root as PID
-`9680`, `/live=ok`.
+`35172`, `/live=ok`.
 
 ## Remaining cloud gate
 
@@ -64,7 +69,9 @@ After Oscar selects the PostgreSQL service:
 
 1. mount the vendor CA and configure the real endpoint;
 2. create separate migration and runtime database roles;
-3. verify the runtime role has no schema/role/database creation privileges;
+3. grant only required table/sequence DML, revoke database TEMP/CREATE, keep
+   application object ownership on the migration role, and let production
+   startup verify the effective runtime role;
 4. run migration and rollback dry runs on a disposable production-shaped
    database;
 5. complete encrypted off-host backup and restore drills;

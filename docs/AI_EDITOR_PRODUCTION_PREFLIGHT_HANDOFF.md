@@ -88,4 +88,7 @@ production deployment approval. T138 remains the 72-hour, three-network,
 
 The vendor-neutral PostgreSQL TLS and migration-identity boundary completed
 after this preflight is documented in
-`docs/AI_EDITOR_PRODUCTION_POSTGRES_TLS_HANDOFF.md`.
+`docs/AI_EDITOR_PRODUCTION_POSTGRES_TLS_HANDOFF.md`. Production startup now
+also fail-closes on an over-privileged PostgreSQL runtime role, so the future
+`database.leastPrivilegeVerified` decision must be backed by an executable
+runtime check rather than only an operator checkbox.

@@ -461,9 +461,11 @@ PostgreSQL。设置 `AI_EDITOR_GATEWAY_DB_DIALECT=postgres`、
 production Gateway 不会用运行时数据库身份自动执行迁移，也不允许
 `AI_EDITOR_GATEWAY_MIGRATE_ON_START=true`。部署者应使用独立、临时授权的 migration
 身份运行 `npm run gateway:bootstrap`，完成迁移/首次管理员初始化后，再用只具有业务
-DML 权限的 Gateway 运行时身份启动服务。两个方言仍通过同一个 `inTransaction` 边界
-执行原子业务操作。正式发布仍须完成选定云 PostgreSQL 的真实 TLS/权限/回滚演练以及
-T136b 其余 KMS、异机备份和恢复门禁。
+DML 权限的 Gateway 运行时身份启动服务。生产启动会查询 PostgreSQL 当前角色，并拒绝
+superuser、建角色、建库、复制、绕过 RLS、数据库 CREATE/TEMP、schema CREATE、
+应用对象所有者和服务器文件/程序执行权限。两个方言仍通过同一个 `inTransaction`
+边界执行原子业务操作。正式发布仍须完成选定云 PostgreSQL 的真实
+TLS/权限/回滚演练以及 T136b 其余 KMS、异机备份和恢复门禁。
 
 ## HTTP 接口
 

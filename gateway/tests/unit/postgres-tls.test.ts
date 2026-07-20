@@ -3,7 +3,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { shouldMigrateGatewayDatabase } from '../../src/app.js'
 import type { GatewayConfig } from '../../src/config.js'
-import { buildPostgresPoolConfig } from '../../src/db/dialects/postgres.js'
+import {
+  assertPostgresRuntimeRoleLeastPrivilege,
+  buildPostgresPoolConfig,
+  type PostgresRuntimeRoleSecurity
+} from '../../src/db/dialects/postgres.js'
 
 describe('production PostgreSQL TLS pool configuration', () => {
   const tlsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-editor-postgres-pool-'))
@@ -73,4 +77,45 @@ describe('production PostgreSQL TLS pool configuration', () => {
     expect(shouldMigrateGatewayDatabase(production)).toBe(false)
     expect(shouldMigrateGatewayDatabase(development)).toBe(true)
   })
+
+  it('accepts an unprivileged production runtime role', () => {
+    expect(() => assertPostgresRuntimeRoleLeastPrivilege(runtimeRole())).not.toThrow()
+  })
+
+  it.each([
+    'superuser',
+    'createRole',
+    'createDatabase',
+    'replication',
+    'bypassRls',
+    'databaseCreate',
+    'databaseTemporary',
+    'schemaCreate',
+    'ownsApplicationObjects',
+    'readServerFiles',
+    'writeServerFiles',
+    'executeServerProgram'
+  ] as const)('rejects the production runtime role privilege %s', privilege => {
+    expect(() => assertPostgresRuntimeRoleLeastPrivilege({
+      ...runtimeRole(),
+      [privilege]: true
+    })).toThrow(new RegExp(privilege))
+  })
 })
+
+function runtimeRole(): PostgresRuntimeRoleSecurity {
+  return {
+    superuser: false,
+    createRole: false,
+    createDatabase: false,
+    replication: false,
+    bypassRls: false,
+    databaseCreate: false,
+    databaseTemporary: false,
+    schemaCreate: false,
+    ownsApplicationObjects: false,
+    readServerFiles: false,
+    writeServerFiles: false,
+    executeServerProgram: false
+  }
+}

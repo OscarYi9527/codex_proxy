@@ -28,7 +28,8 @@ function workerError(
   code: string,
   statusCode: number,
   retryable = statusCode >= 500,
-  cause?: unknown
+  cause?: unknown,
+  retryAfterMs?: number
 ): SafeError {
   return new SafeError({
     code,
@@ -37,6 +38,7 @@ function workerError(
       : '境外模型通道拒绝了本次请求。',
     statusCode,
     retryable,
+    ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
     ...(cause !== undefined ? { cause } : {})
   })
 }
@@ -61,16 +63,34 @@ async function readLimited(response: IncomingMessage, limit: number): Promise<Bu
 
 function parseSafeWorkerError(
   statusCode: number,
-  body: Buffer
+  body: Buffer,
+  headers?: IncomingMessage['headers']
 ): SafeError {
   try {
     const value = JSON.parse(body.toString('utf8')) as {
-      error?: { code?: unknown; retryable?: unknown }
+      error?: {
+        code?: unknown
+        retryable?: unknown
+        retryAfterMs?: unknown
+      }
     }
     const code = typeof value.error?.code === 'string'
       ? value.error.code
       : 'provider_worker_rejected'
-    return workerError(code, statusCode, value.error?.retryable === true)
+    const bodyRetryAfterMs = Number(value.error?.retryAfterMs)
+    const headerRetryAfterMs = Number(safeHeader(headers || {}, 'retry-after')) * 1000
+    const retryAfterMs = Number.isFinite(bodyRetryAfterMs) && bodyRetryAfterMs > 0
+      ? bodyRetryAfterMs
+      : (Number.isFinite(headerRetryAfterMs) && headerRetryAfterMs > 0
+          ? headerRetryAfterMs
+          : undefined)
+    return workerError(
+      code,
+      statusCode,
+      value.error?.retryable === true,
+      undefined,
+      retryAfterMs
+    )
   } catch (error) {
     return workerError('provider_worker_invalid_error', 502, true, error)
   }
@@ -251,7 +271,11 @@ export class ProviderWorkerClient implements ProviderRouteAdapter {
       if (response.statusCode !== 200) {
         const payload = await readLimited(response, MAX_JSON_BYTES)
         try {
-          throw parseSafeWorkerError(response.statusCode || 502, payload)
+          throw parseSafeWorkerError(
+            response.statusCode || 502,
+            payload,
+            response.headers
+          )
         } finally {
           payload.fill(0)
         }
@@ -386,7 +410,11 @@ export class ProviderWorkerClient implements ProviderRouteAdapter {
           response.statusCode < 200 ||
           response.statusCode >= 300
         ) {
-          throw parseSafeWorkerError(response.statusCode || 502, payload)
+          throw parseSafeWorkerError(
+            response.statusCode || 502,
+            payload,
+            response.headers
+          )
         }
         return JSON.parse(payload.toString('utf8')) as T
       } catch (error) {

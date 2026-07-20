@@ -11,6 +11,12 @@ export function registerSafeErrors(app: FastifyInstance, logger: SafeLogger): vo
       statusCode: safe.statusCode,
       internalError: error
     })
+    if (safe.retryAfterMs !== undefined) {
+      void reply.header(
+        'retry-after',
+        String(Math.max(1, Math.ceil(safe.retryAfterMs / 1000)))
+      )
+    }
     void reply
       .status(safe.statusCode)
       .send(safeErrorBody(safe, request.safeRequestId || request.id))

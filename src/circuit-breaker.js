@@ -35,6 +35,16 @@ function isProviderFailure(status, error) {
   return status === 408 || (status >= 500 && status <= 599)
 }
 
+function unavailableError(name, message, retryAfterMs) {
+  const error = new Error(`Upstream circuit "${name}" ${message}`)
+  error.code = 'CIRCUIT_OPEN'
+  error.status = 503
+  error.statusCode = 503
+  error.retryable = true
+  error.retryAfterMs = Math.max(0, Number(retryAfterMs) || 0)
+  return error
+}
+
 export function assertCircuitAvailable(name, {
   resetTimeoutMs = DEFAULT_RESET_TIMEOUT_MS,
   probeStaleMs = DEFAULT_PROBE_STALE_MS
@@ -42,29 +52,32 @@ export function assertCircuitAvailable(name, {
   if (!name) return
   const circuit = stateFor(name)
   if (circuit.state === 'half-open') {
-    if (circuit.halfOpenProbeActive && Date.now() - circuit.halfOpenProbeStartedAt < probeStaleMs) {
-      const error = new Error(`Upstream circuit "${name}" is probing recovery`)
-      error.code = 'CIRCUIT_OPEN'
-      error.retryAfterMs = probeStaleMs
-      throw error
+    const probeAgeMs = Date.now() - circuit.halfOpenProbeStartedAt
+    if (circuit.halfOpenProbeActive && probeAgeMs < probeStaleMs) {
+      throw unavailableError(
+        name,
+        'is probing recovery',
+        probeStaleMs - probeAgeMs
+      )
     }
     circuit.halfOpenProbeActive = true
     circuit.halfOpenProbeStartedAt = Date.now()
-    return
+    return { probe: true }
   }
-  if (circuit.state !== 'open') return
+  if (circuit.state !== 'open') return { probe: false }
 
   if (Date.now() - circuit.openedAt >= resetTimeoutMs && !circuit.halfOpenProbeActive) {
     circuit.state = 'half-open'
     circuit.halfOpenProbeActive = true
     circuit.halfOpenProbeStartedAt = Date.now()
-    return
+    return { probe: true }
   }
 
-  const error = new Error(`Upstream circuit "${name}" is open`)
-  error.code = 'CIRCUIT_OPEN'
-  error.retryAfterMs = Math.max(0, resetTimeoutMs - (Date.now() - circuit.openedAt))
-  throw error
+  throw unavailableError(
+    name,
+    'is open',
+    resetTimeoutMs - (Date.now() - circuit.openedAt)
+  )
 }
 
 export function recordCircuitResult(name, {

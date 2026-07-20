@@ -457,6 +457,38 @@ describe('Provider Worker local lifecycle', () => {
     assert.equal((await response.json()).error.code, 'worker_turn_conflict')
   })
 
+  it('returns bounded circuit recovery metadata without leaking internals', async () => {
+    const executor = {
+      async supportsModel() {
+        return true
+      },
+      async execute() {
+        throw Object.assign(new Error('sensitive upstream circuit detail'), {
+          code: 'CIRCUIT_OPEN',
+          status: 503,
+          statusCode: 503,
+          retryable: true,
+          retryAfterMs: 4_200
+        })
+      }
+    }
+    const { origin } = await startWorker({ executor })
+    const request = signedRequest(origin, '/internal/v1/responses', {
+      method: 'POST',
+      turnId: 'turn_circuit_recovery',
+      body: { model: 'gpt-worker-mock', input: 'hello' }
+    })
+    const response = await request.fetch()
+    request.body.fill(0)
+    assert.equal(response.status, 503)
+    assert.equal(response.headers.get('retry-after'), '5')
+    const body = await response.json()
+    assert.equal(body.error.code, 'upstream_recovering')
+    assert.equal(body.error.retryable, true)
+    assert.equal(body.error.retryAfterMs, 4_200)
+    assert.doesNotMatch(body.error.message, /sensitive/)
+  })
+
   it('cancels a running Turn without exposing request content in status', async () => {
     let started
     const startedPromise = new Promise(resolve => { started = resolve })

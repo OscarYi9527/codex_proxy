@@ -47,7 +47,7 @@ function parseJson(body) {
   }
 }
 
-function sendJson(res, statusCode, value, requestId = '') {
+function sendJson(res, statusCode, value, requestId = '', headers = {}) {
   const payload = Buffer.from(JSON.stringify(value), 'utf8')
   res.writeHead(statusCode, {
     'content-type': 'application/json; charset=utf-8',
@@ -55,24 +55,32 @@ function sendJson(res, statusCode, value, requestId = '') {
     'cache-control': 'no-store',
     pragma: 'no-cache',
     'x-content-type-options': 'nosniff',
-    ...(requestId ? { 'x-request-id': requestId } : {})
+    ...(requestId ? { 'x-request-id': requestId } : {}),
+    ...headers
   })
   res.end(payload)
   payload.fill(0)
 }
 
 function sendSafeError(res, error, requestId) {
-  const statusCode = Number(error.statusCode) || 500
+  const statusCode = Number(error.statusCode || error.status) || 500
+  const retryAfterMs = Number(error.retryAfterMs)
+  const isCircuitRecovery = error.code === 'CIRCUIT_OPEN'
   sendJson(res, statusCode, {
     error: {
-      code: error.code || 'worker_internal_error',
+      code: isCircuitRecovery ? 'upstream_recovering' : (error.code || 'worker_internal_error'),
       message: statusCode >= 500
         ? 'Provider Worker is temporarily unavailable'
         : error.message,
       requestId,
-      retryable: error.retryable === true || statusCode >= 500
+      retryable: error.retryable === true || statusCode >= 500,
+      ...(Number.isFinite(retryAfterMs) && retryAfterMs > 0
+        ? { retryAfterMs }
+        : {})
     }
-  }, requestId)
+  }, requestId, Number.isFinite(retryAfterMs) && retryAfterMs > 0
+    ? { 'retry-after': String(Math.max(1, Math.ceil(retryAfterMs / 1000))) }
+    : {})
 }
 
 function isLoopback(remoteAddress = '') {

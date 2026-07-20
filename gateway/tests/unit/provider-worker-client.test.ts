@@ -261,4 +261,38 @@ describe('ProviderWorkerClient', () => {
       await close(worker)
     }
   })
+
+  it('preserves bounded Worker recovery timing for Gateway responses', async () => {
+    const worker = http.createServer((_request, response) => {
+      response.writeHead(503, {
+        'content-type': 'application/json',
+        'retry-after': '5'
+      })
+      response.end(JSON.stringify({
+        error: {
+          code: 'upstream_recovering',
+          message: 'internal-sensitive-detail',
+          retryable: true,
+          retryAfterMs: 4_200
+        }
+      }))
+    })
+    const origin = await listen(worker)
+    try {
+      const client = new ProviderWorkerClient({
+        origin,
+        gatewayId: 'gateway-test',
+        signingSecret: SIGNING_SECRET,
+        tls: null
+      })
+      await expect(client.listModels()).rejects.toMatchObject({
+        code: 'upstream_recovering',
+        statusCode: 503,
+        retryable: true,
+        retryAfterMs: 4_200
+      })
+    } finally {
+      await close(worker)
+    }
+  })
 })

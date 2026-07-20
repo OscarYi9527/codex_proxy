@@ -11,12 +11,14 @@ export class SafeError extends Error {
   readonly code: string
   readonly statusCode: number
   readonly retryable: boolean
+  readonly retryAfterMs?: number
 
   constructor(options: {
     code: string
     message: string
     statusCode: number
     retryable?: boolean
+    retryAfterMs?: number
     cause?: unknown
   }) {
     super(options.message, { cause: options.cause })
@@ -24,6 +26,12 @@ export class SafeError extends Error {
     this.code = options.code
     this.statusCode = options.statusCode
     this.retryable = options.retryable === true
+    if (
+      Number.isFinite(options.retryAfterMs) &&
+      Number(options.retryAfterMs) > 0
+    ) {
+      this.retryAfterMs = Number(options.retryAfterMs)
+    }
   }
 }
 

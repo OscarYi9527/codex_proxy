@@ -70,4 +70,23 @@ describe('Gateway common deterministic and safe primitives', () => {
       }
     })
   })
+
+  it('keeps retry timing on safe errors without changing the public body', () => {
+    const error = new SafeError({
+      code: 'upstream_recovering',
+      message: 'retry later',
+      statusCode: 503,
+      retryable: true,
+      retryAfterMs: 4_200
+    })
+    expect(error.retryAfterMs).toBe(4_200)
+    expect(safeErrorBody(error, 'req_retry')).toEqual({
+      error: {
+        code: 'upstream_recovering',
+        message: 'retry later',
+        requestId: 'req_retry',
+        retryable: true
+      }
+    })
+  })
 })

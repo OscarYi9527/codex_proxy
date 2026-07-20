@@ -841,12 +841,115 @@ describe('Provider 熔断器', () => {
     assert.doesNotThrow(() => assertCircuitAvailable('stuck-provider', { resetTimeoutMs: 0 }))
     assert.strictEqual(getCircuitStates()[0].state, 'half-open')
     // 探测还很新鲜时，其余请求应继续被拒绝
-    assert.throws(() => assertCircuitAvailable('stuck-provider', { probeStaleMs: 60_000 }), /probing recovery/)
+    let recoveryError
+    try {
+      assertCircuitAvailable('stuck-provider', { probeStaleMs: 60_000 })
+    } catch (error) {
+      recoveryError = error
+    }
+    assert.match(recoveryError?.message || '', /probing recovery/)
+    assert.strictEqual(recoveryError?.status, 503)
+    assert.strictEqual(recoveryError?.statusCode, 503)
+    assert.strictEqual(recoveryError?.retryable, true)
+    assert.ok(recoveryError?.retryAfterMs > 0)
     // 探测过期（probeStaleMs=0）后，下一次请求应被允许作为新的探测
     assert.doesNotThrow(() => assertCircuitAvailable('stuck-provider', { probeStaleMs: 0 }))
     recordCircuitResult('stuck-provider', { status: 200 })
     assert.strictEqual(getCircuitStates()[0].state, 'closed')
     resetCircuits()
+  })
+
+  it('半开探测使用短超时，普通长请求仍保留调用方超时', async () => {
+    const delayedResponse = delayMs => async (_url, { signal }) =>
+      new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => resolve(new Response('{}', { status: 200 })),
+          delayMs
+        )
+        const abort = () => {
+          clearTimeout(timer)
+          reject(signal.reason || new Error('aborted'))
+        }
+        if (signal.aborted) abort()
+        else signal.addEventListener('abort', abort, { once: true })
+      })
+
+    resetCircuits()
+    recordCircuitResult('probe-timeout', { status: 503, failureThreshold: 1 })
+    const startedAt = Date.now()
+    await assert.rejects(
+      fetchWithRetry(delayedResponse(5_000), 'https://example.test', {
+        circuitKey: 'probe-timeout',
+        circuitResetTimeoutMs: 0,
+        circuitProbeTimeoutMs: 20,
+        attemptTimeoutMs: 5_000
+      }, 1),
+      /timed out after 20 ms/
+    )
+    assert.ok(Date.now() - startedAt < 1_000)
+    assert.strictEqual(getCircuitStates()[0].state, 'open')
+    assert.strictEqual(getCircuitStates()[0].halfOpenProbeActive, false)
+
+    resetCircuits()
+    const normal = await fetchWithRetry(
+      delayedResponse(40),
+      'https://example.test',
+      {
+        circuitKey: 'normal-request',
+        circuitProbeTimeoutMs: 10,
+        attemptTimeoutMs: 200
+      },
+      1
+    )
+    assert.strictEqual(normal.status, 200)
+    resetCircuits()
+  })
+
+  it('HTTP 将熔断恢复状态返回为 503 和 Retry-After，而不是 502', async () => {
+    const originalAccounts = proxyConfig.chatgptAccounts
+    proxyConfig.chatgptAccounts = [{
+      id: 'circuit-http-account',
+      label: 'Circuit HTTP Test',
+      account_id: 'upstream-circuit-http',
+      access_token: 'test-access',
+      refresh_token: 'test-refresh',
+      expires_at: Date.now() + 60 * 60_000,
+      routing_enabled: true,
+      status: 'active'
+    }]
+    resetCircuits()
+    recordCircuitResult(
+      chatGptAccountCircuitKey('circuit-http-account'),
+      { status: 503, failureThreshold: 1 }
+    )
+    const server = createServer({
+      fetchImpl: async () => assert.fail('open circuit must reject before fetch')
+    })
+    await new Promise((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    try {
+      const { port } = server.address()
+      const response = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'gpt-5.6-sol',
+          input: 'circuit status test',
+          stream: true
+        })
+      })
+      assert.strictEqual(response.status, 503)
+      assert.ok(Number(response.headers.get('retry-after')) >= 1)
+      const body = await response.json()
+      assert.strictEqual(body.error.type, 'upstream_recovering')
+      assert.strictEqual(body.error.retryable, true)
+    } finally {
+      await new Promise(resolve => server.close(resolve))
+      proxyConfig.chatgptAccounts = originalAccounts
+      resetCircuits()
+    }
   })
 })
 

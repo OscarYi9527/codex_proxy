@@ -99,6 +99,9 @@ export async function fetchWithRetry(fetchImpl, url, options, maxAttempts = 5) {
     providerKey = circuitKey,
     retryStatuses = [429, 502, 503, 504],
     attemptTimeoutMs = 0,
+    circuitResetTimeoutMs = undefined,
+    circuitProbeStaleMs = undefined,
+    circuitProbeTimeoutMs = 30_000,
     maxRetryDelayMs = 30_000,
     ...fetchOptions
   } = options || {}
@@ -129,9 +132,17 @@ export async function fetchWithRetry(fetchImpl, url, options, maxAttempts = 5) {
     return RETRYABLE_ERRORS.some(pat => msg.includes(pat))
   }
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    assertCircuitAvailable(circuitKey)
+    const circuit = assertCircuitAvailable(circuitKey, {
+      resetTimeoutMs: circuitResetTimeoutMs,
+      probeStaleMs: circuitProbeStaleMs
+    })
     if (fetchOptions.signal?.aborted) throw fetchOptions.signal.reason || new Error('Request aborted')
-    const attemptAbort = attemptSignal(fetchOptions.signal, attemptTimeoutMs)
+    const effectiveAttemptTimeoutMs = circuit?.probe && circuitProbeTimeoutMs > 0
+      ? (attemptTimeoutMs > 0
+          ? Math.min(attemptTimeoutMs, circuitProbeTimeoutMs)
+          : circuitProbeTimeoutMs)
+      : attemptTimeoutMs
+    const attemptAbort = attemptSignal(fetchOptions.signal, effectiveAttemptTimeoutMs)
     let retryDelayMs = Math.round(500 * Math.pow(2, attempt) * (0.85 + Math.random() * 0.3))
     let preserveSignalForResponseBody = false
     const attemptStartedAt = Date.now()

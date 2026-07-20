@@ -31,6 +31,28 @@ const INSTANCE_FILE = process.env.CODEX_PROXY_INSTANCE_FILE || (
 
 const BASE_INSTRUCTIONS = 'You are Codex, a coding agent. Use the provided tools to inspect, edit, and verify the user\u0027s workspace. Preserve unrelated changes and report completed work concisely.'
 
+function proxyErrorStatus(error) {
+  if (error?.code === 'CIRCUIT_OPEN') return 503
+  const status = Number(error?.status || error?.statusCode)
+  return status >= 400 && status <= 599 ? status : 502
+}
+
+function sendProxyError(res, error) {
+  const status = proxyErrorStatus(error)
+  const retryAfterMs = Number(error?.retryAfterMs)
+  return sendJson(res, status, {
+    error: {
+      type: error?.code === 'CIRCUIT_OPEN'
+        ? 'upstream_recovering'
+        : 'proxy_error',
+      message: error?.message || 'Upstream request failed',
+      retryable: error?.retryable === true || status >= 500
+    }
+  }, Number.isFinite(retryAfterMs) && retryAfterMs > 0
+    ? { 'retry-after': String(Math.max(1, Math.ceil(retryAfterMs / 1000))) }
+    : {})
+}
+
 function processIsAlive(pid) {
   try {
     process.kill(Number(pid), 0)
@@ -221,14 +243,15 @@ export function createServer({ fetchImpl = fetch } = {}) {
           })
         }
       } catch (error) {
+        const status = proxyErrorStatus(error)
         markCodeTurnRequest(codeTurn, {
           state: 'failed',
           requestId: req.requestId,
-          status: res.statusCode || 502
+          status
         })
         if (req.clientAbortSignal.aborted || res.destroyed) return
         console.error('[codex-proxy] request failed:', error.message)
-        if (!res.headersSent) return sendJson(res, 502, { error: { type: 'proxy_error', message: error.message } })
+        if (!res.headersSent) return sendProxyError(res, error)
         if (!res.writableEnded) res.end()
       }
       return
@@ -255,7 +278,7 @@ export function createServer({ fetchImpl = fetch } = {}) {
       } catch (error) {
         if (req.clientAbortSignal.aborted || res.destroyed) return
         console.error('[codex-proxy] chat/completions failed:', error.message)
-        if (!res.headersSent) return sendJson(res, 502, { error: { type: 'proxy_error', message: error.message } })
+        if (!res.headersSent) return sendProxyError(res, error)
         if (!res.writableEnded) res.end()
       }
       return

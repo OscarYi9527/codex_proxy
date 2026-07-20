@@ -28,6 +28,8 @@ export function registerAdminOrganizationRoutes(app: FastifyInstance, options: {
   authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>
   service: OrganizationService
 }): void {
+  app.get('/api/v1/admin/capacity', { preHandler: options.authenticate }, request =>
+    options.service.publicMvpCapacity(identity(request)))
   app.get('/api/v1/admin/organizations', { preHandler: options.authenticate }, request =>
     options.service.organizations(identity(request)))
   app.post('/api/v1/admin/organizations', { preHandler: options.authenticate }, request =>

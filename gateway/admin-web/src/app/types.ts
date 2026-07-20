@@ -109,6 +109,17 @@ export interface InvitationCreation {
   readonly maxUses: number
 }
 
+export interface PublicMvpCapacity {
+  readonly phase: 'public_mvp'
+  readonly hardLimit: number
+  readonly admittedAccountCount: number
+  readonly remainingAccountCount: number | null
+  readonly longTermCoreReady: boolean
+  readonly account31Blocked: boolean
+  readonly includesAdministrators: true
+  readonly updatedAt: string
+}
+
 export interface UsageResponse {
   readonly summary: {
     readonly requests: number

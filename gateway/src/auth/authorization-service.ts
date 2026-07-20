@@ -228,6 +228,13 @@ export class AuthorizationService {
           statusCode: 400
         })
       }
+      if (!await repository.reservePublicMvpAccountSlot(now)) {
+        throw new SafeError({
+          code: 'public_mvp_capacity_reached',
+          message: '公网 MVP 已达到 30 个产品账号上限，完成长期高可用架构后才能继续注册。',
+          statusCode: 409
+        })
+      }
       if (!await repository.consumeInvitation(invitation.id, invitation.useCount)) {
         throw new SafeError({
           code: 'invitation_invalid',

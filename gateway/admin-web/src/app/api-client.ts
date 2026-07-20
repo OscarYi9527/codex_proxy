@@ -15,6 +15,7 @@ import type {
   OrganizationAccountSummary,
   OrganizationCreditView,
   OrganizationSummary,
+  PublicMvpCapacity,
   ProviderDiagnostics,
   ProviderListResponse,
   ProviderSummary,
@@ -46,6 +47,7 @@ export interface ManagementApiClient {
   }): Promise<void>
   revokeDevice(deviceSessionId: string, confirmCurrent: boolean): Promise<void>
   usage(accountId: string): Promise<UsageResponse>
+  publicMvpCapacity(): Promise<PublicMvpCapacity>
   organizations(): Promise<readonly OrganizationSummary[]>
   createOrganization(name: string): Promise<OrganizationSummary>
   organizationAccounts(): Promise<readonly OrganizationAccountSummary[]>
@@ -168,6 +170,7 @@ export const managementApi: ManagementApiClient = {
   usage: accountId => requestJson(
     `/api/v1/admin/accounts/${encodeURIComponent(accountId)}/usage`
   ),
+  publicMvpCapacity: () => requestJson('/api/v1/admin/capacity'),
   organizations: () => requestJson('/api/v1/admin/organizations'),
   createOrganization: name => requestJson('/api/v1/admin/organizations', {
     method: 'POST',

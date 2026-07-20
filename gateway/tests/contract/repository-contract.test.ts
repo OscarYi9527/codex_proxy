@@ -3,6 +3,9 @@ import { databaseHandle, type DatabaseHandle } from '../../src/db/database.js'
 import { createPostgresDatabase } from '../../src/db/dialects/postgres.js'
 import { createSqliteDatabase } from '../../src/db/dialects/sqlite.js'
 import { up as applyInitialMigration } from '../../src/db/migrations/001_initial.js'
+import { up as applyAuditContextMigration } from '../../src/db/migrations/002_audit_event_context.js'
+import { up as applyCredentialEnvelopeMigration } from '../../src/db/migrations/003_provider_credential_envelope.js'
+import { up as applyPublicMvpCapacityMigration } from '../../src/db/migrations/004_public_mvp_capacity.js'
 import { GatewayMetaRepository } from '../../src/db/repositories/gateway-meta-repository.js'
 
 type Factory = () => DatabaseHandle
@@ -28,6 +31,9 @@ describe.each(factories)('%s repository contract', (_dialect, factory) => {
     // exercises the complete schema without weakening the dual-dialect test.
     if (_dialect === 'postgres') {
       await applyInitialMigration(handle.db)
+      await applyAuditContextMigration(handle.db)
+      await applyCredentialEnvelopeMigration(handle.db)
+      await applyPublicMvpCapacityMigration(handle.db)
     } else {
       await handle.migrateToLatest()
     }
@@ -40,6 +46,7 @@ describe.each(factories)('%s repository contract', (_dialect, factory) => {
   it('migrates every declared entity table', async () => {
     const required = [
       'gateway_meta',
+      'deployment_capacity',
       'accounts',
       'password_credentials',
       'organizations',

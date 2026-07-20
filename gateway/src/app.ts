@@ -244,7 +244,13 @@ export async function createGatewayApp(options: {
       database.db,
       callback => database.inTransaction(callback)
     )
-    const organizations = new OrganizationService(organizationRepository, digest, clock, ids)
+    const organizations = new OrganizationService(
+      organizationRepository,
+      digest,
+      clock,
+      ids,
+      repository
+    )
     const auditRepository = new AuditRepository(
       database.db,
       callback => database.inTransaction(callback)

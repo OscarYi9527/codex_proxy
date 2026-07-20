@@ -196,4 +196,32 @@ describe('organization administration pages (T062/T068)', () => {
     await waitFor(() => expect(api.revokeInvitation).toHaveBeenCalledWith('inv_a'))
     expect(refresh).toHaveBeenCalledTimes(2)
   })
+
+  it('disables new invitations when all 30 public MVP account slots are admitted', () => {
+    const api = client()
+    render(
+      <InvitationsPage
+        client={api as unknown as ManagementApiClient}
+        role="level1"
+        organizations={organizations}
+        invitations={[]}
+        publicMvpCapacity={{
+          phase: 'public_mvp',
+          hardLimit: 30,
+          admittedAccountCount: 30,
+          remainingAccountCount: 0,
+          longTermCoreReady: false,
+          account31Blocked: true,
+          includesAdministrators: true,
+          updatedAt: '2026-07-21T00:00:00.000Z'
+        }}
+        onRefresh={async () => undefined}
+      />
+    )
+
+    expect(screen.getByText('公网 MVP 账号容量：30 / 30')).toBeInTheDocument()
+    expect(screen.getByText(/已阻止第 31 个账号注册/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '账号容量已满' })).toBeDisabled()
+    expect(api.createInvitation).not.toHaveBeenCalled()
+  })
 })

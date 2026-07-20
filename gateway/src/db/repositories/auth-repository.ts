@@ -8,6 +8,16 @@ import type {
 
 type DatabaseExecutor = Kysely<GatewayDatabase> | Transaction<GatewayDatabase>
 
+export const PUBLIC_MVP_CAPACITY_ID = 'public_mvp'
+export const PUBLIC_MVP_ACCOUNT_LIMIT = 30
+
+export interface PublicMvpCapacity {
+  readonly hardLimit: number
+  readonly admittedAccountCount: number
+  readonly longTermCoreReady: boolean
+  readonly updatedAt: string
+}
+
 export interface PasswordCredentialRecord {
   readonly accountId: string
   readonly passwordHash: string
@@ -151,6 +161,42 @@ export class AuthRepository {
       .select(({ fn }) => fn.countAll<number>().as('count'))
       .executeTakeFirstOrThrow()
     return Number(row.count)
+  }
+
+  async getPublicMvpCapacity(): Promise<PublicMvpCapacity> {
+    const row = await this.db
+      .selectFrom('deployment_capacity')
+      .select([
+        'hard_limit',
+        'admitted_account_count',
+        'long_term_core_ready',
+        'updated_at'
+      ])
+      .where('id', '=', PUBLIC_MVP_CAPACITY_ID)
+      .executeTakeFirstOrThrow()
+    return {
+      hardLimit: row.hard_limit,
+      admittedAccountCount: row.admitted_account_count,
+      longTermCoreReady: row.long_term_core_ready !== 0,
+      updatedAt: row.updated_at
+    }
+  }
+
+  async reservePublicMvpAccountSlot(now: string): Promise<boolean> {
+    const result = await this.db
+      .updateTable('deployment_capacity')
+      .set(expression => ({
+        admitted_account_count: expression('admitted_account_count', '+', 1),
+        updated_at: now,
+        version: expression('version', '+', 1)
+      }))
+      .where('id', '=', PUBLIC_MVP_CAPACITY_ID)
+      .where(expression => expression.or([
+        expression('long_term_core_ready', '=', 1),
+        expression('admitted_account_count', '<', expression.ref('hard_limit'))
+      ]))
+      .executeTakeFirst()
+    return Number(result.numUpdatedRows) === 1
   }
 
   async insertAccountAndCredential(input: NewAccountInput): Promise<void> {

@@ -25,6 +25,9 @@ export class BootstrapService {
     try {
       return await this.repository.inTransaction(async repository => {
         if (await repository.countAccounts() > 0) return { created: false }
+        if (!await repository.reservePublicMvpAccountSlot(now)) {
+          throw new Error('Public MVP account capacity is exhausted before bootstrap')
+        }
         await repository.insertAccountAndCredential({
           id: this.ids.opaque('acct'),
           loginName: 'admin',

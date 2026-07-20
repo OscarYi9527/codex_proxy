@@ -88,6 +88,54 @@ describe('organization administration routes (T060/T065/T067)', () => {
     expect(repeated.json().error.code).toBe('invitation_not_active')
   })
 
+  it('shows the public MVP capacity only to Level 1', async () => {
+    const response = await fixture.gateway.app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/capacity',
+      headers: headers()
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({
+      phase: 'public_mvp',
+      hardLimit: 30,
+      admittedAccountCount: 1,
+      remainingAccountCount: 29,
+      longTermCoreReady: false,
+      account31Blocked: true,
+      includesAdministrators: true
+    })
+  })
+
+  it('stops issuing invitations after the public MVP capacity is full', async () => {
+    const organizationId = await createOrganization('Capacity Full Organization')
+    await fixture.database.db
+      .updateTable('deployment_capacity')
+      .set({ admitted_account_count: 30 })
+      .where('id', '=', 'public_mvp')
+      .execute()
+
+    const response = await fixture.gateway.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/invitations',
+      headers: headers(),
+      payload: {
+        organizationId,
+        expiresAt: new Date(fixture.clock.nowMs() + 60_000).toISOString(),
+        maxUses: 1
+      }
+    })
+    expect(response.statusCode).toBe(409)
+    expect(response.json().error).toMatchObject({
+      code: 'public_mvp_capacity_reached',
+      retryable: false
+    })
+    expect(await fixture.database.db
+      .selectFrom('invitations')
+      .select(({ fn }) => fn.countAll<number>().as('count'))
+      .executeTakeFirstOrThrow()
+    ).toEqual({ count: 0 })
+  })
+
   it('protects the final active Level-1 account transactionally', async () => {
     const response = await fixture.gateway.app.inject({
       method: 'POST',
@@ -233,5 +281,13 @@ describe('organization administration routes (T060/T065/T067)', () => {
     })
     expect(invitation.statusCode).toBe(200)
     expect(invitation.json().organizationId).toBe(organizationA)
+
+    const capacity = await fixture.gateway.app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/capacity',
+      headers: headers()
+    })
+    expect(capacity.statusCode).toBe(403)
+    expect(capacity.json().error.code).toBe('forbidden')
   })
 })

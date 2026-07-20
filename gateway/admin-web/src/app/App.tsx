@@ -24,6 +24,7 @@ import type {
   OrganizationSummary,
   ProviderDiagnostics,
   ProviderListResponse,
+  PublicMvpCapacity,
   UsageResponse
 } from './types'
 
@@ -32,6 +33,7 @@ interface LoadedManagementData {
   readonly account: AccountDetails
   readonly devices: readonly DeviceSession[]
   readonly usage: UsageResponse
+  readonly publicMvpCapacity: PublicMvpCapacity | null
   readonly organizations: readonly OrganizationSummary[]
   readonly organizationAccounts: readonly OrganizationAccountSummary[]
   readonly invitations: readonly InvitationSummary[]
@@ -99,6 +101,7 @@ export function App({
               account,
               devices,
               usage,
+              publicMvpCapacity: null,
               organizations: [],
               organizationAccounts: [],
               invitations: [],
@@ -125,19 +128,22 @@ export function App({
                   client.organizationCredits(organization.id)
                 )
               )
-          const [providers, models, diagnostics] = session.account.role === 'level1'
-            ? await Promise.all([
-                client.providers(),
-                client.models(),
-                client.diagnostics()
-              ])
-            : [null, null, null]
+          const [providers, models, diagnostics, publicMvpCapacity] =
+            session.account.role === 'level1'
+              ? await Promise.all([
+                  client.providers(),
+                  client.models(),
+                  client.diagnostics(),
+                  client.publicMvpCapacity().catch(() => null)
+                ])
+              : [null, null, null, null]
           setRoute(initialRoute)
           setData({
             session,
             account,
             devices,
             usage,
+            publicMvpCapacity,
             organizations,
             organizationAccounts,
             invitations,
@@ -199,10 +205,13 @@ export function App({
 
   const refreshOrganizationData = async () => {
     if (data.session.account.role === 'user') return
-    const [organizations, organizationAccounts, invitations] = await Promise.all([
+    const [organizations, organizationAccounts, invitations, publicMvpCapacity] = await Promise.all([
       client.organizations(),
       client.organizationAccounts(),
-      client.invitations()
+      client.invitations(),
+      data.session.account.role === 'level1'
+        ? client.publicMvpCapacity().catch(() => data.publicMvpCapacity)
+        : Promise.resolve(null)
     ])
     const creditViews = await Promise.all(
       organizations.map(organization => client.organizationCredits(organization.id))
@@ -213,6 +222,7 @@ export function App({
           organizations,
           organizationAccounts,
           invitations,
+          publicMvpCapacity,
           creditViews
         }
       : current)
@@ -279,6 +289,7 @@ export function App({
             role={data.session.account.role}
             organizations={data.organizations}
             invitations={data.invitations}
+            publicMvpCapacity={data.publicMvpCapacity}
             onRefresh={refreshOrganizationData}
           />
         )}

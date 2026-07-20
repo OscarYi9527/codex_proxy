@@ -93,6 +93,16 @@ function clientFor(role: AccountRole): ManagementApiClient {
         completedAt: '2026-07-17T01:00:00.000Z'
       }]
     }),
+    publicMvpCapacity: jest.fn(async () => ({
+      phase: 'public_mvp' as const,
+      hardLimit: 30,
+      admittedAccountCount: 1,
+      remainingAccountCount: 29,
+      longTermCoreReady: false,
+      account31Blocked: true,
+      includesAdministrators: true as const,
+      updatedAt: '2026-07-21T00:00:00.000Z'
+    })),
     organizations: jest.fn(async () => [{
       id: 'org_test',
       name: '示例组织',
@@ -398,6 +408,7 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
     expect(client.organizations).not.toHaveBeenCalled()
     expect(client.organizationAccounts).not.toHaveBeenCalled()
     expect(client.invitations).not.toHaveBeenCalled()
+    expect(client.publicMvpCapacity).not.toHaveBeenCalled()
     expect(client.providers).not.toHaveBeenCalled()
     expect(client.models).not.toHaveBeenCalled()
     expect(client.diagnostics).not.toHaveBeenCalled()
@@ -443,6 +454,16 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
     fireEvent.click(screen.getByRole('button', { name: '邀请码' }))
     expect(await screen.findByText(/2\/10/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '生成邀请码' })).toBeInTheDocument()
+  })
+
+  it('shows the Level-1-only public MVP account capacity on the invitation page', async () => {
+    const client = clientFor('level1')
+    render(<App client={client} />)
+    bootstrap('invitations')
+
+    expect(await screen.findByText('公网 MVP 账号容量：1 / 30')).toBeInTheDocument()
+    expect(screen.getByText(/剩余 29 个名额/)).toBeInTheDocument()
+    expect(client.publicMvpCapacity).toHaveBeenCalledTimes(1)
   })
 
   it('submits password changes from the security page without retaining credentials in the DOM', async () => {

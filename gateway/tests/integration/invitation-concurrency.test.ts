@@ -1,4 +1,5 @@
 import { HmacSha256Digest } from '../../src/common/digests.js'
+import { AuthRepository } from '../../src/db/repositories/auth-repository.js'
 import {
   beginAuthorization,
   createRealGatewayFixture,
@@ -140,5 +141,134 @@ describe('invitation registration boundaries (T061/T066)', () => {
       .where('id', '=', 'inv_expired')
       .executeTakeFirstOrThrow()
     expect(invitation).toEqual({ use_count: 0, status: 'active' })
+  })
+
+  it('counts the bootstrap administrator toward the 30-account public MVP limit', async () => {
+    fixture = await createRealGatewayFixture()
+
+    const capacity = await new AuthRepository(fixture.database.db).getPublicMvpCapacity()
+    expect(capacity).toMatchObject({
+      hardLimit: 30,
+      admittedAccountCount: 1,
+      longTermCoreReady: false
+    })
+    expect(await new AuthRepository(fixture.database.db).countAccounts()).toBe(1)
+  })
+
+  it('atomically rejects account 31 without consuming another invitation use', async () => {
+    fixture = await createRealGatewayFixture()
+    await seedInvitation(fixture, {
+      id: 'inv_capacity',
+      code: 'INVITE-CAPACITY',
+      expiresAt: new Date(fixture.clock.nowMs() + 60_000).toISOString(),
+      maxUses: 2
+    })
+    await fixture.database.db.insertInto('accounts').values(
+      Array.from({ length: 28 }, (_, index) => ({
+        id: `acct_capacity_${index}`,
+        login_name: null,
+        email: `capacity-${index}@example.test`,
+        role: 'user' as const,
+        organization_id: 'org_invitation',
+        status: 'active' as const,
+        expires_at: null,
+        must_change_password: 0,
+        must_provide_email: 0,
+        created_at: fixture.clock.now().toISOString(),
+        updated_at: fixture.clock.now().toISOString(),
+        disabled_at: null,
+        disabled_by: null,
+        version: 1
+      }))
+    ).execute()
+    await fixture.database.db
+      .updateTable('deployment_capacity')
+      .set({ admitted_account_count: 29 })
+      .where('id', '=', 'public_mvp')
+      .execute()
+
+    const [firstAuthorization, secondAuthorization] = await Promise.all([
+      beginAuthorization(fixture, { state: 'state-capacity-first-012345' }),
+      beginAuthorization(fixture, { state: 'state-capacity-second-01234' })
+    ])
+    const responses = await Promise.all([
+      fixture.gateway.app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/register',
+        payload: {
+          authorizationTransactionId: firstAuthorization.transactionId,
+          invitationCode: 'INVITE-CAPACITY',
+          email: 'capacity-final-a@example.test',
+          password: 'StrongPassword123'
+        }
+      }),
+      fixture.gateway.app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/register',
+        payload: {
+          authorizationTransactionId: secondAuthorization.transactionId,
+          invitationCode: 'INVITE-CAPACITY',
+          email: 'capacity-final-b@example.test',
+          password: 'StrongPassword123'
+        }
+      })
+    ])
+
+    expect(responses.filter(response => response.statusCode === 200)).toHaveLength(1)
+    const rejected = responses.find(response => response.statusCode !== 200)
+    expect(rejected?.statusCode).toBe(409)
+    expect(rejected?.json().error).toMatchObject({
+      code: 'public_mvp_capacity_reached',
+      retryable: false
+    })
+
+    const invitation = await fixture.database.db
+      .selectFrom('invitations')
+      .select(['use_count', 'status'])
+      .where('id', '=', 'inv_capacity')
+      .executeTakeFirstOrThrow()
+    expect(invitation).toEqual({ use_count: 1, status: 'active' })
+    expect(await new AuthRepository(fixture.database.db).countAccounts()).toBe(30)
+    expect(await new AuthRepository(fixture.database.db).getPublicMvpCapacity())
+      .toMatchObject({ admittedAccountCount: 30, hardLimit: 30 })
+  })
+
+  it('rolls back both a capacity reservation and invitation use on registration failure', async () => {
+    fixture = await createRealGatewayFixture()
+    await seedInvitation(fixture, {
+      id: 'inv_capacity_rollback',
+      code: 'INVITE-CAPACITY-ROLLBACK',
+      expiresAt: new Date(fixture.clock.nowMs() + 60_000).toISOString(),
+      maxUses: 2
+    })
+    const repository = new AuthRepository(
+      fixture.database.db,
+      callback => fixture.database.inTransaction(callback)
+    )
+    const invitationDigest = new HmacSha256Digest(Buffer.alloc(32, 9))
+      .digest('invitation', 'INVITE-CAPACITY-ROLLBACK')
+    const failure = new Error('simulated account insertion failure')
+
+    await expect(repository.inTransaction(async transaction => {
+      const invitation = await transaction.findInvitation(invitationDigest)
+      expect(invitation).not.toBeNull()
+      expect(await transaction.reservePublicMvpAccountSlot(
+        fixture.clock.now().toISOString()
+      )).toBe(true)
+      expect(await transaction.consumeInvitation(
+        invitation?.id as string,
+        invitation?.useCount as number
+      )).toBe(true)
+      throw failure
+    })).rejects.toBe(failure)
+
+    const invitation = await fixture.database.db
+      .selectFrom('invitations')
+      .select(['use_count', 'status'])
+      .where('id', '=', 'inv_capacity_rollback')
+      .executeTakeFirstOrThrow()
+    expect(invitation).toEqual({ use_count: 0, status: 'active' })
+    expect(await repository.getPublicMvpCapacity())
+      .toMatchObject({ admittedAccountCount: 1 })
   })
 })

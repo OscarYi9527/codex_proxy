@@ -11,6 +11,7 @@ function client(): ManagementApiClient {
     changePassword: async () => undefined,
     revokeDevice: async () => undefined,
     usage: async () => { throw new Error('not used') },
+    publicMvpCapacity: async () => { throw new Error('not used') },
     organizations: async () => [],
     createOrganization: async () => { throw new Error('not used') },
     organizationAccounts: async () => [],

@@ -1,18 +1,25 @@
 import { FormEvent, useMemo, useState } from 'react'
 import type { ManagementApiClient } from '../../app/api-client'
-import type { AccountRole, InvitationSummary, OrganizationSummary } from '../../app/types'
+import type {
+  AccountRole,
+  InvitationSummary,
+  OrganizationSummary,
+  PublicMvpCapacity
+} from '../../app/types'
 
 export function InvitationsPage({
   client,
   role,
   organizations,
   invitations,
+  publicMvpCapacity = null,
   onRefresh
 }: {
   readonly client: ManagementApiClient
   readonly role: AccountRole
   readonly organizations: readonly OrganizationSummary[]
   readonly invitations: readonly InvitationSummary[]
+  readonly publicMvpCapacity?: PublicMvpCapacity | null
   readonly onRefresh: () => Promise<void>
 }) {
   const defaultOrganization = organizations[0]?.id || ''
@@ -27,6 +34,8 @@ export function InvitationsPage({
     () => new Map(organizations.map(item => [item.id, item.name])),
     [organizations]
   )
+  const capacityReached = publicMvpCapacity?.remainingAccountCount === 0 &&
+    publicMvpCapacity.account31Blocked
 
   const create = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -61,6 +70,20 @@ export function InvitationsPage({
   return (
     <section className="content-card">
       <h2>邀请码</h2>
+      {publicMvpCapacity && (
+        <div className={capacityReached ? 'capacity-summary capacity-summary--full' : 'capacity-summary'}>
+          <strong>
+            公网 MVP 账号容量：{publicMvpCapacity.admittedAccountCount} / {publicMvpCapacity.hardLimit}
+          </strong>
+          <p>
+            剩余 {publicMvpCapacity.remainingAccountCount ?? '不受短期上限限制'} 个名额；
+            一级、二级管理员和普通用户均计入容量。
+          </p>
+          {capacityReached && (
+            <p>已阻止第 31 个账号注册；完成长期高可用核心架构并通过验收后才能继续放量。</p>
+          )}
+        </div>
+      )}
       <form className="security-form" onSubmit={event => void create(event)}>
         <label>
           组织
@@ -83,7 +106,9 @@ export function InvitationsPage({
           可使用次数
           <input required type="number" min={1} max={10000} value={maxUses} onChange={event => setMaxUses(Number(event.target.value))} />
         </label>
-        <button type="submit" disabled={busy || !organizationId}>生成邀请码</button>
+        <button type="submit" disabled={busy || !organizationId || capacityReached}>
+          {capacityReached ? '账号容量已满' : '生成邀请码'}
+        </button>
       </form>
       {createdCode && (
         <p role="alert" className="warning">

@@ -238,6 +238,26 @@ dd {
   background: #fff8e8;
 }
 
+.capacity-summary {
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  border: 1px solid #b8d4f5;
+  border-radius: 10px;
+  color: #183b66;
+  background: #f3f8ff;
+}
+
+.capacity-summary p,
+.warning p {
+  margin: 6px 0 0;
+}
+
+.capacity-summary--full {
+  border-color: #efc46a;
+  color: #6f4900;
+  background: #fff8e8;
+}
+
 .provider-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

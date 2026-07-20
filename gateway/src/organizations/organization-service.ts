@@ -3,6 +3,7 @@ import type { KeyedDigest } from '../common/digests.js'
 import { SafeError } from '../common/errors.js'
 import type { IdSource } from '../common/ids.js'
 import type { AccessIdentity, AccountRole } from '../auth/types.js'
+import type { AuthRepository } from '../db/repositories/auth-repository.js'
 import {
   assertLevel1CanBeChanged,
   requireAccountManager,
@@ -20,8 +21,26 @@ export class OrganizationService {
     private readonly repository: OrganizationRepository,
     private readonly digest: KeyedDigest,
     private readonly clock: Clock,
-    private readonly ids: IdSource
+    private readonly ids: IdSource,
+    private readonly capacityRepository: Pick<AuthRepository, 'getPublicMvpCapacity'>
   ) {}
+
+  async publicMvpCapacity(identity: AccessIdentity) {
+    requireLevel1(identity)
+    const capacity = await this.capacityRepository.getPublicMvpCapacity()
+    return {
+      phase: 'public_mvp' as const,
+      hardLimit: capacity.hardLimit,
+      admittedAccountCount: capacity.admittedAccountCount,
+      remainingAccountCount: capacity.longTermCoreReady
+        ? null
+        : Math.max(0, capacity.hardLimit - capacity.admittedAccountCount),
+      longTermCoreReady: capacity.longTermCoreReady,
+      account31Blocked: !capacity.longTermCoreReady,
+      includesAdministrators: true,
+      updatedAt: capacity.updatedAt
+    }
+  }
 
   async organizations(identity: AccessIdentity) {
     if (identity.role === 'level2' && identity.organizationId) {
@@ -170,6 +189,17 @@ export class OrganizationService {
     }
     if (organization.status !== 'active') {
       throw new SafeError({ code: 'organization_disabled', message: '组织已被禁用。', statusCode: 409 })
+    }
+    const capacity = await this.capacityRepository.getPublicMvpCapacity()
+    if (
+      !capacity.longTermCoreReady &&
+      capacity.admittedAccountCount >= capacity.hardLimit
+    ) {
+      throw new SafeError({
+        code: 'public_mvp_capacity_reached',
+        message: '公网 MVP 已达到 30 个产品账号上限，当前不能继续生成邀请码。',
+        statusCode: 409
+      })
     }
     const expiresAt = typeof input.expiresAt === 'string' ? input.expiresAt : ''
     const maxUses = Number(input.maxUses)

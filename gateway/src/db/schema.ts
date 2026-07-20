@@ -11,6 +11,16 @@ export interface GatewayMetaTable {
   updated_at: Timestamp
 }
 
+export interface DeploymentCapacityTable {
+  id: string
+  hard_limit: number
+  admitted_account_count: number
+  long_term_core_ready: Generated<number>
+  created_at: Timestamp
+  updated_at: Timestamp
+  version: Version
+}
+
 export interface AccountTable {
   id: string
   login_name: string | null
@@ -273,6 +283,7 @@ export interface MockStateTable {
 
 export interface GatewayDatabase {
   gateway_meta: GatewayMetaTable
+  deployment_capacity: DeploymentCapacityTable
   accounts: AccountTable
   password_credentials: PasswordCredentialTable
   organizations: OrganizationTable

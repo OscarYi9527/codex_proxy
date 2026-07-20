@@ -1,0 +1,110 @@
+name: ai-editor-preview
+
+x-ai-editor-runtime: &ai-editor-runtime
+  build:
+    context: ../..
+    dockerfile: deploy/preview/Dockerfile
+  image: ai-editor-preview-runtime:local
+  network_mode: host
+  user: ${AI_EDITOR_PREVIEW_UID:-1000}:${AI_EDITOR_PREVIEW_GID:-1000}
+  env_file:
+    - .runtime.env
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+services:
+  provider-worker:
+    <<: *ai-editor-runtime
+    command:
+      - node
+      - src/launcher.js
+      - --mode
+      - provider-worker
+    environment:
+      NODE_ENV: preview
+      AI_EDITOR_PROVIDER_WORKER_HOST: 127.0.0.1
+      AI_EDITOR_PROVIDER_WORKER_PORT: "47930"
+      AI_EDITOR_PROVIDER_WORKER_DATA_ROOT: /opt/ai-editor/.ai-editor-dev/preview/provider-worker
+      AI_EDITOR_PROVIDER_WORKER_ID: worker-preview-local
+      AI_EDITOR_PROVIDER_WORKER_REGION: preview-local
+      AI_EDITOR_PROVIDER_WORKER_GATEWAY_IDS: gateway-preview-local
+      AI_EDITOR_PROVIDER_WORKER_EXECUTOR: ${AI_EDITOR_PREVIEW_EXECUTOR:-mock}
+      HTTPS_PROXY: ${AI_EDITOR_WORKER_HTTPS_PROXY:-}
+      HTTP_PROXY: ${AI_EDITOR_WORKER_HTTPS_PROXY:-}
+    volumes:
+      - ./state/provider-worker:/opt/ai-editor/.ai-editor-dev/preview/provider-worker
+
+  gateway:
+    <<: *ai-editor-runtime
+    command:
+      - node
+      - gateway/dist/server.js
+    depends_on:
+      - provider-worker
+    environment:
+      NODE_ENV: preview
+      AI_EDITOR_GATEWAY_HOST: 127.0.0.1
+      AI_EDITOR_GATEWAY_PORT: "47920"
+      AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: ${AI_EDITOR_PREVIEW_PUBLIC_ORIGIN:?Set by start-preview.sh}
+      AI_EDITOR_GATEWAY_DATA_ROOT: /opt/ai-editor/.ai-editor-dev/preview/gateway
+      AI_EDITOR_GATEWAY_AUTH_MODE: real
+      AI_EDITOR_PROVIDER_WORKER_ORIGIN: http://127.0.0.1:47930
+      AI_EDITOR_PROVIDER_WORKER_GATEWAY_ID: gateway-preview-local
+      AI_EDITOR_PROVIDER_WORKER_ID: worker-preview-local
+      AI_EDITOR_PROVIDER_WORKER_REGION: preview-local
+    volumes:
+      - ./state/gateway:/opt/ai-editor/.ai-editor-dev/preview/gateway
+
+  cloudflared-quick:
+    image: ${AI_EDITOR_CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}
+    profiles:
+      - quick
+    network_mode: host
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --url
+      - http://127.0.0.1:47920
+
+  cloudflared-named:
+    image: ${AI_EDITOR_CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}
+    profiles:
+      - named
+    network_mode: host
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --config
+      - /etc/cloudflared/config.yml
+      - run
+    volumes:
+      - ./state/cloudflared:/etc/cloudflared:ro
+
+  mihomo:
+    image: ${AI_EDITOR_MIHOMO_IMAGE:-metacubex/mihomo:stable}
+    profiles:
+      - clash
+    network_mode: host
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    command:
+      - -d
+      - /root/.config/mihomo
+    volumes:
+      - ./state/mihomo:/root/.config/mihomo

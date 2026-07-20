@@ -1,0 +1,9 @@
+# Copy to state/cloudflared/config.yml only for a named preview tunnel.
+# Keep the referenced credentials JSON in state/cloudflared/ with mode 0600.
+tunnel: replace-with-cloudflare-tunnel-id
+credentials-file: /etc/cloudflared/replace-with-cloudflare-tunnel-id.json
+
+ingress:
+  - hostname: preview.cocoduck.live
+    service: http://127.0.0.1:47920
+  - service: http_status:404

@@ -116,12 +116,12 @@ function validateResponsesUrl(value, environment) {
     )
   }
   if (
-    environment === 'production' &&
+    (environment === 'preview' || environment === 'production') &&
     url.protocol !== 'https:'
   ) {
     throw safeError(
       'worker_runtime_configuration_invalid',
-      'Production ChatGPT Responses URL must use HTTPS',
+      'Preview/production ChatGPT Responses URL must use HTTPS',
       400
     )
   }

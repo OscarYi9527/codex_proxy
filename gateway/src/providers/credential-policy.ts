@@ -9,9 +9,12 @@ export function assertCredentialStorageAllowed(
   plaintextCredentialCount: number
 ): void {
   if (plaintextCredentialCount <= 0) return
-  if (config.environment === 'production') {
+  if (
+    config.environment === 'preview' ||
+    config.environment === 'production'
+  ) {
     throw new Error(
-      'Production Gateway refuses startup while plaintext-v1 Provider credentials exist'
+      'Preview/production Gateway refuses startup while plaintext-v1 Provider credentials exist'
     )
   }
   if (config.host !== '127.0.0.1') {
@@ -22,7 +25,11 @@ export function assertCredentialStorageAllowed(
 }
 
 export function requireDevelopmentPlaintext(config: GatewayConfig): void {
-  if (config.environment === 'production' || config.host !== '127.0.0.1') {
+  if (
+    config.environment === 'preview' ||
+    config.environment === 'production' ||
+    config.host !== '127.0.0.1'
+  ) {
     throw new SafeError({
       code: 'plaintext_credentials_forbidden',
       message: '当前部署不允许创建明文 Provider 凭据。',

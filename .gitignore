@@ -63,3 +63,8 @@ gateway/admin-web/*.tsbuildinfo
 *.gateway-backup
 *.edge-secret
 *.handoff-secret
+
+# AI Editor public-preview runtime state and credentials
+deploy/preview/.runtime.env
+deploy/preview/state/
+deploy/preview/secrets/

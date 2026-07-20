@@ -73,6 +73,43 @@ describe('Gateway fixed development configuration', () => {
     }, { repositoryRoot })).toThrow(/at least 32 bytes/)
   })
 
+  it('supports a loopback-only HTTPS preview behind an outbound tunnel', () => {
+    const preview = loadGatewayConfig({
+      NODE_ENV: 'preview',
+      AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: 'https://preview.cocoduck.live',
+      AI_EDITOR_PROVIDER_WORKER_ORIGIN: 'http://127.0.0.1:47930',
+      AI_EDITOR_PROVIDER_WORKER_GATEWAY_ID: 'gateway-preview',
+      AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET:
+        'provider-worker-preview-secret-32bytes-minimum'
+    }, { repositoryRoot })
+    expect(preview).toMatchObject({
+      environment: 'preview',
+      host: '127.0.0.1',
+      port: 47920,
+      publicOrigin: 'https://preview.cocoduck.live',
+      authMode: 'real',
+      providerWorker: {
+        origin: 'http://127.0.0.1:47930',
+        gatewayId: 'gateway-preview',
+        tls: null
+      }
+    })
+    expect(() => loadGatewayConfig({
+      NODE_ENV: 'preview',
+      AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: 'http://preview.cocoduck.live'
+    }, { repositoryRoot })).toThrow(/HTTPS origin/)
+    expect(() => loadGatewayConfig({
+      NODE_ENV: 'preview',
+      AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: 'https://preview.cocoduck.live',
+      AI_EDITOR_GATEWAY_HOST: '0.0.0.0'
+    }, { repositoryRoot })).toThrow(/127\.0\.0\.1/)
+    expect(() => loadGatewayConfig({
+      NODE_ENV: 'preview',
+      AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: 'https://preview.cocoduck.live',
+      AI_EDITOR_GATEWAY_AUTH_MODE: 'mock'
+    }, { repositoryRoot })).toThrow(/Mock authentication is forbidden/)
+  })
+
   it('requires HTTPS and mTLS client credentials for a production Worker', () => {
     const dataRoot = path.resolve('F:/production-gateway-data')
     const base = {

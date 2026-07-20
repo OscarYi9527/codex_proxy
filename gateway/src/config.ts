@@ -21,7 +21,7 @@ export interface ProviderWorkerGatewayConfig {
 }
 
 export interface GatewayConfig {
-  readonly environment: 'development' | 'test' | 'production'
+  readonly environment: 'development' | 'test' | 'preview' | 'production'
   readonly host: string
   readonly port: number
   readonly publicOrigin?: string
@@ -191,7 +191,7 @@ export function loadGatewayConfig(
   const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
   const repositoryRoot = path.resolve(options.repositoryRoot || sourceRoot)
   const environment = (env.NODE_ENV || 'development') as GatewayConfig['environment']
-  if (!['development', 'test', 'production'].includes(environment)) {
+  if (!['development', 'test', 'preview', 'production'].includes(environment)) {
     throw new Error(`Unsupported Gateway environment: ${environment}`)
   }
   const dataRoot = ensureIsolatedDataRoot(
@@ -205,8 +205,11 @@ export function loadGatewayConfig(
     throw new Error('AI_EDITOR_GATEWAY_POSTGRES_URL is required for the postgres dialect')
   }
   const authMode = env.AI_EDITOR_GATEWAY_AUTH_MODE === 'mock' ? 'mock' : 'real'
-  if (environment === 'production' && authMode === 'mock') {
-    throw new Error('Mock authentication is forbidden in production Gateway mode')
+  if (
+    (environment === 'preview' || environment === 'production') &&
+    authMode === 'mock'
+  ) {
+    throw new Error('Mock authentication is forbidden in preview/production Gateway mode')
   }
   const host = parseHost(env.AI_EDITOR_GATEWAY_HOST, environment)
   const port = parsePort(env.AI_EDITOR_GATEWAY_PORT, GATEWAY_DEVELOPMENT_PORT, environment)
@@ -220,12 +223,21 @@ export function loadGatewayConfig(
     publicUrl.hash ||
     publicUrl.username ||
     publicUrl.password ||
-    (environment === 'production' && publicUrl.protocol !== 'https:') ||
-    (environment !== 'production' && publicUrl.origin !== `http://${host}:${port}`)
+    (
+      (environment === 'preview' || environment === 'production') &&
+      publicUrl.protocol !== 'https:'
+    ) ||
+    (
+      environment !== 'preview' &&
+      environment !== 'production' &&
+      publicUrl.origin !== `http://${host}:${port}`
+    )
   ) {
-    throw new Error(environment === 'production'
-      ? 'Production Gateway public origin must be an HTTPS origin'
-      : 'Development Gateway public origin must match its fixed listener')
+    throw new Error(
+      environment === 'preview' || environment === 'production'
+        ? 'Preview/production Gateway public origin must be an HTTPS origin'
+        : 'Development Gateway public origin must match its fixed listener'
+    )
   }
   const providerWorker = parseProviderWorker(env, environment)
   return {

@@ -252,6 +252,28 @@ describe('Provider Worker configuration and signed protocol', () => {
     }, { repositoryRoot }), /Unsupported Provider Worker executor/)
   })
 
+  it('keeps preview Worker traffic on fixed loopback without production mTLS', () => {
+    const repositoryRoot = path.resolve('D:/example/codex-proxy')
+    const config = loadProviderWorkerConfig({
+      NODE_ENV: 'preview',
+      AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET: SIGNING_SECRET,
+      AI_EDITOR_PROVIDER_WORKER_EXECUTOR: 'chatgpt-sub'
+    }, { repositoryRoot })
+    assert.equal(config.environment, 'preview')
+    assert.equal(config.host, '127.0.0.1')
+    assert.equal(config.port, 47930)
+    assert.equal(config.tls, null)
+    assert.equal(
+      config.dataRoot,
+      path.join(repositoryRoot, '.ai-editor-dev', 'provider-worker')
+    )
+    assert.throws(() => loadProviderWorkerConfig({
+      NODE_ENV: 'preview',
+      AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET: SIGNING_SECRET,
+      AI_EDITOR_PROVIDER_WORKER_HOST: '0.0.0.0'
+    }, { repositoryRoot }), /127\.0\.0\.1/)
+  })
+
   it('requires all mTLS files before production can start', () => {
     assert.throws(() => loadProviderWorkerConfig({
       NODE_ENV: 'production',

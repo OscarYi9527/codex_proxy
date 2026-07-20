@@ -7,7 +7,7 @@ export const PROVIDER_WORKER_DEVELOPMENT_PORT = 47930
 
 function parseEnvironment(value) {
   const environment = value || 'development'
-  if (!['development', 'test', 'production'].includes(environment)) {
+  if (!['development', 'test', 'preview', 'production'].includes(environment)) {
     throw new Error(`Unsupported Provider Worker environment: ${environment}`)
   }
   return environment

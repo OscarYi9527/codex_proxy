@@ -174,6 +174,18 @@ flowchart TD
 8. 只有 Access Token 的 CPA/sub2 账号可按临时账号导入；系统记录 Token 到期时间、
    显示倒计时并在到期后自动停止路由；非 Codex OAuth 客户端签发的 Token 会标记为
    不兼容且禁止路由，不会将邮箱 OAuth 或仅能查额度的 Token 误当作可用订阅凭据。
+9. 账号用途分为稳定保险池和日抛优先池。日抛候选在同一预留策略内优先于稳定候选，
+   且额度保护线固定为 0；稳定账号继续使用全局/账号安全余量。日抛周额度归零会记录
+   `disposable_exhausted_at`，7 天内恢复即清除，逾期则写入
+   `disposable_discarded_at`、关闭路由并保留记录供人工核对。
+10. `pool_tier` 在文件导入或隔离 OAuth 登录会话启动时确定，并随最终凭据一起写入；
+    单账号官方登录默认 `stable`，CPA/sub2 批量登录默认 `disposable`。登录会话只保存
+    分类枚举，不接收或持久化浏览器中的账号密码。
+11. 管理端显式同步和全池低频任务使用 `refreshAccountQuotaSnapshot` 顺序更新 usage 与
+    reset-credit；两者独立记录错误，重置次数查询失败不会覆盖最后一次有效计数。
+12. `checkChatgptAccountStatus` 使用非消耗式账号端点生成持久化 `health_check`，只在上游
+    明确返回 deactivated/suspended/banned 时归类疑似封禁；401、403、429、5xx、超时、
+    凭据兼容性和本地额度窗口分别进入可解释状态。实际模型请求的鉴权/限流结果可更新该状态。
 
 ## 调度与请求连续性
 
@@ -261,6 +273,8 @@ flowchart TD
 | `GET` | `/admin/api/runtime-info` | 运行版本、路径和部署一致性 |
 | `POST` | `/admin/api/deploy-update` | 启动本机安全部署流程 |
 | `GET` | `/admin/api/chatgpt-login/preflight` | CLI、OAuth app-server 与浏览器预检 |
+| `POST` | `/admin/api/chatgpt-accounts/refresh-usage-all` | 同步全池用量与重置次数 |
+| `POST` | `/admin/api/chatgpt-accounts/check-all` | 非消耗式逐号状态检查和故障分类 |
 | `GET` | `/admin/api/config-snapshots` | 配置快照列表 |
 | `POST` | `/admin/api/config-rollback` | 回滚快照 |
 | `GET` | `/admin/api/account-backups` | 加密账号备份列表 |

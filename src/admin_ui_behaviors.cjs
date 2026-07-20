@@ -224,6 +224,47 @@
     }
   }
 
+  function accountPoolTierDisplay(account, now = Date.now()) {
+    const inferredTier = account?.credential_mode === 'temporary_access' ? 'disposable' : 'stable'
+    const tier = ['stable', 'disposable'].includes(account?.pool_tier)
+      ? account.pool_tier
+      : inferredTier
+    const exhaustedAt = Date.parse(account?.disposable_exhausted_at || '')
+    const discardedAt = Date.parse(account?.disposable_discarded_at || '')
+    const exhausted = tier === 'disposable' && Number.isFinite(exhaustedAt)
+    const discarded = tier === 'disposable' && Number.isFinite(discardedAt)
+    const discardDeadline = exhausted ? exhaustedAt + 7 * 24 * 60 * 60 * 1000 : null
+    const remainingMs = discardDeadline == null ? null : discardDeadline - now
+    const countdown = remainingMs == null
+      ? null
+      : remainingMs <= 0
+        ? '等待自动弃号'
+        : (() => {
+            const totalHours = Math.max(1, Math.ceil(remainingMs / 3_600_000))
+            const days = Math.floor(totalHours / 24)
+            const hours = totalHours % 24
+            return days > 0 ? `${days}天 ${hours}小时` : `${hours}小时`
+          })()
+    return {
+      tier,
+      stable: tier === 'stable',
+      disposable: tier === 'disposable',
+      exhausted,
+      discarded,
+      exhausted_at: exhausted ? new Date(exhaustedAt).toISOString() : null,
+      discard_deadline_at: discardDeadline == null ? null : new Date(discardDeadline).toISOString(),
+      discard_remaining_ms: remainingMs,
+      countdown,
+      label: tier === 'stable'
+        ? '稳定保险池'
+        : discarded
+          ? '日抛 · 已弃号'
+          : exhausted
+            ? `日抛 · 待重置 ${countdown}`
+            : '日抛优先池'
+    }
+  }
+
   function inspectDirectImportFiles(files, now = Date.now()) {
     const codexClientId = 'app_EMoamEEZ73f0CkXaXp7hrann'
     const clean = value => typeof value === 'string' ? value.trim() : ''
@@ -358,6 +399,7 @@
     loginPollDecision,
     extractOfficialLoginCandidates,
     accountCredentialDisplay,
+    accountPoolTierDisplay,
     inspectDirectImportFiles,
     quotaResetFinalMessage
   }

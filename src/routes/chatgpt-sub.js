@@ -6,7 +6,7 @@ import { requestLog } from '../logger.js'
 import { sendJson, pipeResponsesUpstream, fetchWithRetry, setProxyMeta } from '../server-utils.js'
 import { recordUsage, recordAccountOutcome, recordOperationalEvent, saveStats } from '../stats.js'
 import { chinaFetch, withChinaDispatcher } from '../china-fetch.js'
-import { pickActiveAccount, ensureFreshToken, markAccountCooldown, markAccountAuthFailure, extractUsageFromHeaders, applyAccountUsage, accountSessionKey, noteAccountSuccess, reserveAccountRequest, renewAccountRequestLease, releaseAccountRequest, accountActiveRequestCount, accountConcurrencyLimit, accountCredentialLifecycle, accountRemainingPercent, accountPolicyState, noteAccountAdaptiveOutcome, refreshAccountUsage } from '../chatgpt-accounts.js'
+import { pickActiveAccount, ensureFreshToken, markAccountCooldown, markAccountAuthFailure, extractUsageFromHeaders, applyAccountUsage, accountSessionKey, noteAccountSuccess, reserveAccountRequest, renewAccountRequestLease, releaseAccountRequest, accountActiveRequestCount, accountConcurrencyLimit, accountCredentialLifecycle, accountPoolTierState, accountRemainingPercent, accountPolicyState, noteAccountAdaptiveOutcome, refreshAccountUsage } from '../chatgpt-accounts.js'
 import { recordRouteDecision } from '../route-decisions.js'
 
 const RESPONSES_LITE_HEADER = 'x-openai-internal-codex-responses-lite'
@@ -333,7 +333,9 @@ export async function sendWithAccountRotation(
         continue
       }
       if (upstream.status === 401 || upstream.status === 403) {
-        markAuthFailure(account.id, upstream.status)
+        let authFailureBody = ''
+        try { authFailureBody = await upstream.clone().text() } catch {}
+        markAuthFailure(account.id, upstream.status, authFailureBody)
         releaseAccount(account.id, req.accountLeaseId)
         const previousAccountId = account.id
         account = await acquireAccount(req, model, tried, sessionKey, chatGptFetch)
@@ -409,7 +411,9 @@ async function isResponsesLiteUnsupported(response) {
 }
 
 function hasEnabledAccountPool() {
-  return (proxyConfig.chatgptAccounts || []).some(account => account.routing_enabled !== false)
+  return (proxyConfig.chatgptAccounts || []).some(account =>
+    account.routing_enabled !== false && !accountPoolTierState(account).discarded
+  )
 }
 
 export function poolAvailabilityDetails(model) {
@@ -422,6 +426,10 @@ export function poolAvailabilityDetails(model) {
     incompatible: 0,
     expiring_soon: 0,
     temporary_expired: 0,
+    stable_pool: 0,
+    disposable_pool: 0,
+    disposable_exhausted: 0,
+    discarded: 0,
     stored_only: 0,
     auth_error: 0,
     busy: 0,
@@ -435,10 +443,15 @@ export function poolAvailabilityDetails(model) {
   }
   for (const account of (proxyConfig.chatgptAccounts || [])) {
     const credential = accountCredentialLifecycle(account, now)
+    const poolTier = accountPoolTierState(account, now)
     if (credential.temporary) details.temporary++
     if (!credential.compatible) details.incompatible++
     if (credential.expiring_soon) details.expiring_soon++
     if (credential.expired) details.temporary_expired++
+    if (poolTier.stable) details.stable_pool++
+    if (poolTier.disposable && !poolTier.discarded) details.disposable_pool++
+    if (poolTier.exhausted && !poolTier.discarded) details.disposable_exhausted++
+    if (poolTier.discarded) details.discarded++
     if (account.routing_enabled === false) {
       details.stored_only++
       continue

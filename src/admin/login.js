@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { proxyConfig } from '../config.js'
-import { addChatgptAccount, parseAuthJson } from '../chatgpt-accounts.js'
+import { addChatgptAccount, normalizeAccountPoolTier, parseAuthJson } from '../chatgpt-accounts.js'
 import { readJson, sendJson } from '../server-utils.js'
 import { publicProxyConfig } from './shared.js'
 
@@ -284,6 +284,7 @@ function publicLoginSession() {
     verificationUrl: loginSession.verificationUrl || null,
     userCode: loginSession.userCode || null,
     privateBrowserKind: loginSession.privateBrowserKind || null,
+    poolTier: loginSession.poolTier || 'stable',
     codexSource: loginSession.codexSource || null,
     codexVersion: loginSession.codexVersion || null
   }
@@ -435,7 +436,10 @@ async function importCompletedLogin(session) {
         `登录的是已存在账号「${duplicate.label || duplicate.account_id}」，未覆盖任何账号。请重新开始并在无痕窗口中选择另一个账号。`
       )
     }
-    const newCfg = addChatgptAccount(raw, session.label, { routingEnabled: session.routingEnabled })
+    const newCfg = addChatgptAccount(raw, session.label, {
+      routingEnabled: session.routingEnabled,
+      poolTier: session.poolTier
+    })
     const account = newCfg.chatgptAccounts.find(item => item.account_id === incoming.account_id)
     let usageMessage = ''
     try {
@@ -448,9 +452,11 @@ async function importCompletedLogin(session) {
     finishLoginSession(
       session,
       'success',
-      upgradingTemporary
-        ? `官方登录成功，临时账号已升级为可自动续约账号${usageMessage}`
-        : `官方登录成功，账号已自动加入账号池${usageMessage}`
+      `${upgradingTemporary
+        ? '官方登录成功，临时账号已升级为可自动续约账号'
+        : '官方登录成功，账号已自动加入账号池'}（${
+        session.poolTier === 'disposable' ? '日抛优先池' : '稳定保险池'
+      }）${usageMessage}`
     )
   } catch (error) {
     try { session.child?.kill() } catch {}
@@ -561,6 +567,7 @@ export async function handleChatgptLoginStart(req, res) {
       label: String(body.label || body.email || '').trim(),
       email: String(body.email || '').trim(),
       routingEnabled: body.routingEnabled === true,
+      poolTier: normalizeAccountPoolTier(body.poolTier, 'refreshable'),
       tempHome,
       authFile,
       child: null,

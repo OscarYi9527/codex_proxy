@@ -1,5 +1,6 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const {
   quotaResetState,
   applyQuotaResetButtonState,
@@ -7,6 +8,7 @@ const {
   loginPollDecision,
   extractOfficialLoginCandidates,
   accountCredentialDisplay,
+  accountPoolTierDisplay,
   inspectDirectImportFiles,
   quotaResetFinalMessage
 } = require('../src/admin_ui_behaviors.cjs')
@@ -59,6 +61,35 @@ describe('admin quota reset DOM behavior', () => {
 })
 
 describe('admin error guide and login polling behavior', () => {
+  it('asks for account classification in single and batch official login flows', () => {
+    const source = fs.readFileSync(require.resolve('../src/admin_app.js'), 'utf8')
+    assert.match(source, /id="login_pool_tier"/)
+    assert.match(source, /id="batch_login_pool_tier"/)
+    assert.match(source, /JSON\.stringify\(\{label,email:label,routingEnabled,poolTier\}\)/)
+    assert.match(source, /email:current\.email,routingEnabled,poolTier/)
+  })
+
+  it('cancels stale login sessions when the modal closes or reopens', () => {
+    const source = fs.readFileSync(require.resolve('../src/admin_app.js'), 'utf8')
+    assert.match(source, /const shouldCancelLogin=Boolean\(activeLoginUi\)\|\|batchWaiting/)
+    assert.match(source, /if\(shouldCancelLogin\)fetch\(API\+'\/chatgpt-login\/cancel'/)
+    assert.match(source, /async function cancelStaleOfficialLogin\(\)/)
+    assert.match(source, /if\(ignoreAccidentalModalTrigger\(event\)\)return/)
+    assert.match(source, /openOfficialLogin\(event\)/)
+  })
+
+  it('offers synchronized quota refresh and a non-consuming all-account status check', () => {
+    const appSource = fs.readFileSync(require.resolve('../src/admin_app.js'), 'utf8')
+    const accountSource = fs.readFileSync(require.resolve('../src/admin_modules/accounts.js'), 'utf8')
+    assert.match(appSource, /async function checkAllAccountStatus\(\)/)
+    assert.match(appSource, /chatgpt-accounts\/check-all/)
+    assert.match(appSource, /非消耗式状态检查/)
+    assert.match(appSource, /正在同步账号用量和重置次数/)
+    assert.match(accountSource, /检查所有账号/)
+    assert.match(accountSource, /检查异常/)
+    assert.match(accountSource, /同步全部额度\/次数/)
+  })
+
   const guides = [
     { status: 402, title: 'Payment Required', meaning: '余额不足', causes: ['账单'], actions: ['充值'] },
     { status: 503, title: 'Unavailable', meaning: '账号池不可用', causes: ['排队超时'], actions: ['检查账号'] }
@@ -150,6 +181,28 @@ describe('admin error guide and login polling behavior', () => {
       credential_compatibility: 'incompatible_oauth_client',
       expires_at: now + 60_000
     }, now).category, 'incompatible')
+  })
+
+  it('classifies stable insurance and disposable account lifecycle states', () => {
+    const now = Date.parse('2026-07-20T00:00:00Z')
+    assert.equal(accountPoolTierDisplay({
+      credential_mode: 'refreshable'
+    }, now).label, '稳定保险池')
+    assert.equal(accountPoolTierDisplay({
+      credential_mode: 'temporary_access'
+    }, now).label, '日抛优先池')
+    const waiting = accountPoolTierDisplay({
+      pool_tier: 'disposable',
+      disposable_exhausted_at: '2026-07-19T00:00:00Z'
+    }, now)
+    assert.equal(waiting.exhausted, true)
+    assert.equal(waiting.discarded, false)
+    assert.equal(waiting.countdown, '6天 0小时')
+    assert.equal(accountPoolTierDisplay({
+      pool_tier: 'disposable',
+      disposable_exhausted_at: '2026-07-12T00:00:00Z',
+      disposable_discarded_at: '2026-07-19T00:00:00Z'
+    }, now).label, '日抛 · 已弃号')
   })
 
   it('previews each direct-import file without returning token contents', () => {

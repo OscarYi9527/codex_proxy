@@ -1,5 +1,5 @@
 import { proxyConfig } from './config.js'
-import { accountActiveRequestCount, accountConcurrencyLimit, accountCredentialLifecycle, accountPolicyState, accountRemainingPercent } from './chatgpt-accounts.js'
+import { accountActiveRequestCount, accountConcurrencyLimit, accountCredentialLifecycle, accountPolicyState, accountPoolTierState, accountRemainingPercent } from './chatgpt-accounts.js'
 import { getCircuitStates } from './circuit-breaker.js'
 import { getHttpErrorGuide } from './error-guide.js'
 import { getProviderHealth } from './provider-health.js'
@@ -30,6 +30,10 @@ export function accountPoolDiagnosis({ model = null, now = Date.now() } = {}) {
     incompatible: 0,
     expiring_soon: 0,
     temporary_expired: 0,
+    stable_pool: 0,
+    disposable_pool: 0,
+    disposable_exhausted: 0,
+    discarded: 0,
     stored_only: 0,
     auth_error: 0,
     cooling: 0,
@@ -39,15 +43,37 @@ export function accountPoolDiagnosis({ model = null, now = Date.now() } = {}) {
     reserved_for_other_work: 0,
     busy: 0,
     emergency_continue: 0,
-    eligible: 0
+    eligible: 0,
+    health_checked: 0,
+    health_healthy: 0,
+    health_banned: 0,
+    health_temporary_unavailable: 0,
+    health_quota_exhausted: 0,
+    health_permission_denied: 0,
+    health_unknown_error: 0,
+    reset_credits_sync_error: 0
   }
   let earliestRecoveryAt = null
   for (const account of accounts) {
     const credential = accountCredentialLifecycle(account, now)
+    const poolTier = accountPoolTierState(account, now)
+    const healthState = String(account.health_check?.state || '')
+    if (healthState && healthState !== 'checking') counts.health_checked++
+    if (healthState === 'healthy') counts.health_healthy++
+    if (healthState === 'banned') counts.health_banned++
+    if (healthState === 'temporary_unavailable') counts.health_temporary_unavailable++
+    if (healthState === 'quota_exhausted') counts.health_quota_exhausted++
+    if (healthState === 'permission_denied') counts.health_permission_denied++
+    if (healthState === 'unknown_error') counts.health_unknown_error++
+    if (account.reset_credits_error) counts.reset_credits_sync_error++
     if (credential.temporary) counts.temporary++
     if (!credential.compatible) counts.incompatible++
     if (credential.expiring_soon) counts.expiring_soon++
     if (credential.expired) counts.temporary_expired++
+    if (poolTier.stable) counts.stable_pool++
+    if (poolTier.disposable && !poolTier.discarded) counts.disposable_pool++
+    if (poolTier.exhausted && !poolTier.discarded) counts.disposable_exhausted++
+    if (poolTier.discarded) counts.discarded++
     if (account.routing_enabled === false) {
       counts.stored_only++
       continue
@@ -101,6 +127,36 @@ export function buildAutomaticDiagnosis({
   const stats = getStats()
   const issues = []
 
+  if (pool.health_banned > 0) addIssue(issues, {
+    id: 'account_banned',
+    level: 'critical',
+    title: `${pool.health_banned} 个账号疑似被封禁或停用`,
+    conclusion: '状态检查收到了上游明确的停用、暂停或封禁信息；请到官方页面核实，不要连续重试。',
+    count: pool.health_banned,
+    actions: [action('open_accounts', '查看检查结果', '#accounts', '查看每个账号的状态检查原因')]
+  })
+  if (pool.health_permission_denied > 0) addIssue(issues, {
+    id: 'account_permission_denied',
+    level: 'critical',
+    title: `${pool.health_permission_denied} 个账号权限不足`,
+    conclusion: '账号可以被识别，但套餐、地区或服务权限不允许当前访问。',
+    count: pool.health_permission_denied,
+    actions: [action('open_accounts', '查看账号', '#accounts', '核对套餐、地区和最近 HTTP 状态')]
+  })
+  if (pool.health_temporary_unavailable > 0) addIssue(issues, {
+    id: 'account_temporary_unavailable',
+    title: `${pool.health_temporary_unavailable} 个账号本次暂时无法连接`,
+    conclusion: '这通常是网络、超时或上游短时异常，不能直接判定为封号；等待后重新执行状态检查。',
+    count: pool.health_temporary_unavailable,
+    actions: [action('check_accounts', '重新检查全部账号', '/admin/api/chatgpt-accounts/check-all', '执行不发送模型请求的账号检查')]
+  })
+  if (pool.reset_credits_sync_error > 0) addIssue(issues, {
+    id: 'reset_credits_sync_error',
+    title: `${pool.reset_credits_sync_error} 个账号的重置次数未同步`,
+    conclusion: '用量和重置次数来自两个独立端点；界面保留了上次次数，并已标记本次查询错误。',
+    count: pool.reset_credits_sync_error,
+    actions: [action('refresh_quota', '同步额度和次数', '/admin/api/chatgpt-accounts/refresh-usage-all', '重新同步两个端点')]
+  })
   if (pool.stored_only > 0) addIssue(issues, {
     id: 'stored_only',
     title: `${pool.stored_only} 个账号仅保存`,
@@ -130,6 +186,20 @@ export function buildAutomaticDiagnosis({
     conclusion: 'Token 可以查询部分账号信息，但不是 Codex 官方 OAuth 客户端签发，不能调用订阅 Responses。',
     count: pool.incompatible,
     actions: [action('official_login', '批量官方登录', '#accounts', '用官方 OAuth 将临时账号升级为可续约账号')]
+  })
+  if (pool.disposable_exhausted > 0) addIssue(issues, {
+    id: 'disposable_waiting_reset',
+    title: `${pool.disposable_exhausted} 个日抛账号已用到 0，正在等待周额度重置`,
+    conclusion: '稳定订阅池会作为保险继续服务；日抛账号连续 7 天未恢复时将自动停用。',
+    count: pool.disposable_exhausted,
+    actions: [action('open_accounts', '查看日抛池', '#accounts', '查看弃号倒计时和额度状态')]
+  })
+  if (pool.discarded > 0) addIssue(issues, {
+    id: 'disposable_discarded',
+    title: `${pool.discarded} 个日抛账号已自动弃用`,
+    conclusion: '这些账号在额度归零后 7 天内没有恢复，已停止路由但保留记录供核对。',
+    count: pool.discarded,
+    actions: [action('open_accounts', '查看已弃号', '#accounts', '按“已弃号”分类查看账号')]
   })
   if (pool.below_reserve > 0) addIssue(issues, {
     id: 'below_reserve',

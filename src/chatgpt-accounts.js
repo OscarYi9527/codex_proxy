@@ -32,12 +32,15 @@ const REQUEST_LEASE_TTL_MS = 6 * 60 * 1000
 const ADAPTIVE_MIN_CONCURRENCY = 1
 const ADAPTIVE_MAX_CONCURRENCY = MAX_ACCOUNT_CONCURRENT_REQUESTS
 const ADAPTIVE_SUCCESS_STEP = 8
+const DISPOSABLE_RESET_GRACE_MS = 7 * 24 * 60 * 60 * 1000
 const stickyAccounts = new Map()
 const accountRequestLeases = new Map()
 const adaptiveConcurrency = new Map()
 const usageRefreshFailures = new Map()
 const tokenRefreshInFlight = new Map()
 const usageRefreshInFlight = new Map()
+const resetCreditsRefreshInFlight = new Map()
+const accountStatusCheckInFlight = new Map()
 const resetCreditConsumeInFlight = new Set()
 let roundRobinCursor = 0
 
@@ -52,6 +55,8 @@ export const ACCOUNT_ROUTING_STRATEGIES = [
   'random',
   'lkgp'
 ]
+
+export const ACCOUNT_POOL_TIERS = ['stable', 'disposable']
 
 export function normalizeAccountRoutingStrategy(strategy) {
   const normalized = String(strategy || '').trim().toLowerCase()
@@ -86,6 +91,12 @@ export function parseAuthJson(raw, { allowAccessOnly = false } = {}) {
   return { access_token, refresh_token: refresh_token || null, id_token, account_id }
 }
 
+export function normalizeAccountPoolTier(tier, credentialMode = 'refreshable') {
+  const normalized = String(tier || '').trim().toLowerCase()
+  if (ACCOUNT_POOL_TIERS.includes(normalized)) return normalized
+  return credentialMode === 'temporary_access' ? 'disposable' : 'stable'
+}
+
 export function chatgptAccessTokenCompatibility(token) {
   try {
     const payloadSegment = String(token || '').split('.')[1]
@@ -115,7 +126,8 @@ export function addChatgptAccount(raw, label, {
   allowAccessOnly = false,
   sourceFormat = null,
   email = null,
-  planType = null
+  planType = null,
+  poolTier = null
 } = {}) {
   const { access_token, refresh_token, id_token, account_id } = parseAuthJson(raw, { allowAccessOnly })
   const existing = (proxyConfig.chatgptAccounts || []).find(account => account.account_id === account_id)
@@ -124,6 +136,12 @@ export function addChatgptAccount(raw, label, {
     throw new Error('临时 Access Token 已过期或无法读取到期时间，不能导入')
   }
   const credentialMode = refresh_token ? 'refreshable' : 'temporary_access'
+  const resolvedPoolTier = normalizeAccountPoolTier(
+    poolTier || existing?.pool_tier,
+    credentialMode
+  )
+  const poolTierChanged = existing && existing.pool_tier && existing.pool_tier !== resolvedPoolTier
+  const nowIso = new Date().toISOString()
   const compatibility = chatgptAccessTokenCompatibility(access_token)
   const temporaryIncompatible = credentialMode === 'temporary_access' && !compatibility.compatible
   const account = {
@@ -138,8 +156,24 @@ export function addChatgptAccount(raw, label, {
     credential_mode: credentialMode,
     credential_compatibility: compatibility.mode,
     credential_source_format: sourceFormat || existing?.credential_source_format || null,
+    pool_tier: resolvedPoolTier,
+    pool_tier_assigned_at: poolTierChanged
+      ? nowIso
+      : (existing?.pool_tier_assigned_at || existing?.added_at || nowIso),
+    disposable_exhausted_at: resolvedPoolTier === 'disposable'
+      ? (existing?.disposable_exhausted_at || null)
+      : null,
+    disposable_discarded_at: resolvedPoolTier === 'disposable'
+      ? (existing?.disposable_discarded_at || null)
+      : null,
+    disposable_last_reset_at: resolvedPoolTier === 'disposable'
+      ? (existing?.disposable_last_reset_at || null)
+      : null,
+    discard_reason: resolvedPoolTier === 'disposable'
+      ? (existing?.discard_reason || null)
+      : null,
     temporary_imported_at: credentialMode === 'temporary_access'
-      ? (existing?.temporary_imported_at || new Date().toISOString())
+      ? (existing?.temporary_imported_at || nowIso)
       : null,
     email: email || existing?.email || null,
     plan_type: planType || existing?.plan_type || null,
@@ -147,17 +181,18 @@ export function addChatgptAccount(raw, label, {
     auth_error: temporaryIncompatible
       ? {
           type: 'incompatible_oauth_client',
-          at: new Date().toISOString()
+          at: nowIso
         }
       : null,
+    health_check: null,
     usage_sync_status: existing?.usage_updated_at ? 'synced' : 'pending',
     usage_sync_error: null,
     routing_enabled: temporaryIncompatible
       ? false
       : (routingEnabled ?? existing?.routing_enabled ?? true),
     cooldown_until: null,
-    last_refresh: new Date().toISOString(),
-    added_at: existing?.added_at || new Date().toISOString()
+    last_refresh: nowIso,
+    added_at: existing?.added_at || nowIso
   }
   return persistAccount(account)
 }
@@ -202,6 +237,71 @@ export function accountCredentialLifecycle(account, now = Date.now()) {
   }
 }
 
+function timestampMs(value) {
+  const parsed = Date.parse(value || '')
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function disposableQuotaRemaining(account) {
+  const weekly = account?.usage?.secondary
+  if (weekly?.remaining_percent != null && Number.isFinite(Number(weekly.remaining_percent))) {
+    return Math.max(0, Math.min(100, Number(weekly.remaining_percent)))
+  }
+  if (weekly?.used_percent != null && Number.isFinite(Number(weekly.used_percent))) {
+    return Math.max(0, Math.min(100, 100 - Number(weekly.used_percent)))
+  }
+  return accountRemainingPercent(account)
+}
+
+export function accountPoolTierState(account, now = Date.now()) {
+  const credentialMode = account?.credential_mode === 'temporary_access'
+    ? 'temporary_access'
+    : 'refreshable'
+  const tier = normalizeAccountPoolTier(account?.pool_tier, credentialMode)
+  const exhaustedAt = timestampMs(account?.disposable_exhausted_at)
+  const discardedAt = timestampMs(account?.disposable_discarded_at)
+  const discardDeadline = exhaustedAt == null ? null : exhaustedAt + DISPOSABLE_RESET_GRACE_MS
+  const disposable = tier === 'disposable'
+  return {
+    tier,
+    stable: tier === 'stable',
+    disposable,
+    quota_remaining: disposable ? disposableQuotaRemaining(account) : accountRemainingPercent(account),
+    exhausted: disposable && exhaustedAt != null,
+    exhausted_at: exhaustedAt == null ? null : new Date(exhaustedAt).toISOString(),
+    discard_deadline_at: discardDeadline == null ? null : new Date(discardDeadline).toISOString(),
+    discard_remaining_ms: discardDeadline == null ? null : discardDeadline - now,
+    discard_due: disposable && !discardedAt && discardDeadline != null && discardDeadline <= now,
+    discarded: disposable && discardedAt != null,
+    discarded_at: discardedAt == null ? null : new Date(discardedAt).toISOString(),
+    discard_reason: account?.discard_reason || null
+  }
+}
+
+export function enforceDisposableAccountLifecycle(account, now = Date.now()) {
+  const state = accountPoolTierState(account, now)
+  if (!state.disposable || state.discarded) return false
+  let changed = false
+  if (state.quota_remaining != null && state.quota_remaining <= 0 && !state.exhausted) {
+    account.disposable_exhausted_at = new Date(now).toISOString()
+    changed = true
+  } else if (state.quota_remaining != null && state.quota_remaining > 0 && state.exhausted) {
+    account.disposable_last_reset_at = new Date(now).toISOString()
+    account.disposable_exhausted_at = null
+    changed = true
+  }
+  const latest = accountPoolTierState(account, now)
+  if (latest.discard_due) {
+    account.disposable_discarded_at = new Date(now).toISOString()
+    account.discard_reason = 'quota_not_reset_within_7_days'
+    account.routing_enabled = false
+    account.status = 'discarded'
+    account.auth_error = null
+    changed = true
+  }
+  return changed
+}
+
 export function accountUsageIsFresh(account, now = Date.now()) {
   const updatedAt = Date.parse(account?.usage_updated_at || '')
   return Number.isFinite(updatedAt) && now - updatedAt <= USAGE_FRESH_MS
@@ -216,10 +316,13 @@ export function accountPolicyState(account, {
 } = {}) {
   const emergencyUntil = Date.parse(account?.emergency_continue_until || '')
   const emergency = Number.isFinite(emergencyUntil) && emergencyUntil > now
+  const poolTier = accountPoolTierState(account, now)
   const configuredReserve = Number(account?.low_quota_threshold)
-  const reserve = Number.isFinite(configuredReserve)
-    ? Math.max(0, Math.min(100, configuredReserve))
-    : Math.max(0, Math.min(100, Number(globalReserve) || 0))
+  const reserve = poolTier.disposable
+    ? 0
+    : (Number.isFinite(configuredReserve)
+        ? Math.max(0, Math.min(100, configuredReserve))
+        : Math.max(0, Math.min(100, Number(globalReserve) || 0)))
   const reservedModels = Array.isArray(account?.reserved_models) ? account.reserved_models.filter(Boolean) : []
   const reservedSessions = Array.isArray(account?.reserved_session_ids) ? account.reserved_session_ids.filter(Boolean) : []
   const hasReservation = reservedModels.length > 0 || reservedSessions.length > 0
@@ -238,6 +341,8 @@ export function accountPolicyState(account, {
   return {
     emergency,
     emergency_until: emergency ? new Date(emergencyUntil).toISOString() : null,
+    pool_tier: poolTier.tier,
+    discarded: poolTier.discarded,
     reserve,
     has_reservation: hasReservation,
     reservation_match: reservationMatch,
@@ -246,8 +351,172 @@ export function accountPolicyState(account, {
     token_limited: !emergency && tokenLimited,
     daily_requests: dailyRequests,
     daily_tokens: dailyTokens,
-    eligible: emergency || (!requestLimited && !tokenLimited && (!hasReservation || reservationMatch))
+    eligible: !poolTier.discarded &&
+      (emergency || (!requestLimited && !tokenLimited && (!hasReservation || reservationMatch)))
   }
+}
+
+const ACCOUNT_CHECK_STATE_DETAILS = {
+  healthy: {
+    label: '基础检查正常',
+    severity: 'healthy',
+    retryable: false,
+    reason: '登录凭据和用量接口均可访问；本次检查不会发送模型请求或消耗额度。'
+  },
+  quota_low: {
+    label: '额度接近保护线',
+    severity: 'warning',
+    retryable: true,
+    reason: '账号可以访问，但剩余额度已达到配置的安全余量。'
+  },
+  quota_exhausted: {
+    label: '额度不足',
+    severity: 'warning',
+    retryable: true,
+    reason: '账号额度已耗尽，需要等待额度窗口自动重置或使用有效的重置机会。'
+  },
+  rate_limited: {
+    label: '短时限流',
+    severity: 'warning',
+    retryable: true,
+    reason: '账号当前受到短期限流，等待 Retry-After 或冷却时间结束后再试。'
+  },
+  banned: {
+    label: '疑似封禁或停用',
+    severity: 'critical',
+    retryable: false,
+    reason: '上游明确返回账号已停用、封禁或暂停；需要到官方页面核实账号状态。'
+  },
+  auth_invalid: {
+    label: '登录凭据失效',
+    severity: 'critical',
+    retryable: false,
+    reason: 'Access Token 或 Refresh Token 已失效，需要重新完成官方登录。'
+  },
+  token_expired: {
+    label: '临时令牌到期',
+    severity: 'critical',
+    retryable: false,
+    reason: '临时 Access Token 已到期且没有 Refresh Token，无法自动续约。'
+  },
+  incompatible: {
+    label: 'OAuth 权限不兼容',
+    severity: 'critical',
+    retryable: false,
+    reason: '该 Token 不是 Codex 官方 OAuth 客户端签发，不能用于订阅 Responses 路由。'
+  },
+  permission_denied: {
+    label: '账号权限不足',
+    severity: 'critical',
+    retryable: false,
+    reason: '账号可以被识别，但当前套餐、地区或权限不允许访问所需服务。'
+  },
+  temporary_unavailable: {
+    label: '暂时无法连接',
+    severity: 'warning',
+    retryable: true,
+    reason: '网络、超时或上游服务异常导致本次检查失败，不能据此判断账号已封禁。'
+  },
+  discarded: {
+    label: '已弃号',
+    severity: 'critical',
+    retryable: false,
+    reason: '日抛账号在额度归零后连续 7 天未恢复，已按策略停止路由。'
+  },
+  unknown_error: {
+    label: '未知异常',
+    severity: 'warning',
+    retryable: true,
+    reason: '检查失败，但返回信息不足以判断是登录、额度还是网络问题。'
+  }
+}
+
+function accountCheckResult(state, {
+  checkedAt = new Date().toISOString(),
+  reason = null,
+  httpStatus = null,
+  errorCode = null,
+  usageSynced = false,
+  resetCreditsSynced = false,
+  remainingPercent = null,
+  source = 'status_check'
+} = {}) {
+  const details = ACCOUNT_CHECK_STATE_DETAILS[state] || ACCOUNT_CHECK_STATE_DETAILS.unknown_error
+  return {
+    state: ACCOUNT_CHECK_STATE_DETAILS[state] ? state : 'unknown_error',
+    label: details.label,
+    severity: details.severity,
+    retryable: details.retryable,
+    reason: reason || details.reason,
+    checked_at: checkedAt,
+    http_status: Number(httpStatus) || null,
+    error_code: errorCode ? String(errorCode).slice(0, 80) : null,
+    usage_synced: usageSynced === true,
+    reset_credits_synced: resetCreditsSynced === true,
+    remaining_percent: remainingPercent == null
+      ? null
+      : (Number.isFinite(Number(remainingPercent)) ? Number(remainingPercent) : null),
+    source
+  }
+}
+
+export function classifyAccountCheckFailure(error, account = null) {
+  const credential = accountCredentialLifecycle(account || {})
+  if (!credential.compatible || error?.code === 'TOKEN_OAUTH_CLIENT_INCOMPATIBLE') {
+    return accountCheckResult('incompatible', {
+      httpStatus: error?.status,
+      errorCode: error?.upstreamCode || error?.code
+    })
+  }
+  if (credential.expired || error?.code === 'TOKEN_TEMPORARY_ACCESS_EXPIRED') {
+    return accountCheckResult('token_expired', {
+      httpStatus: error?.status,
+      errorCode: error?.upstreamCode || error?.code
+    })
+  }
+
+  const status = Number(error?.status) || null
+  const errorCode = String(error?.upstreamCode || error?.code || '').slice(0, 80)
+  const searchable = [
+    errorCode,
+    error?.upstreamMessage,
+    error?.message
+  ].filter(Boolean).join(' ')
+  const common = { httpStatus: status, errorCode }
+
+  if (/account[_ -]?(?:deactivated|disabled|suspended|banned)|user[_ -]?banned|workspace[_ -]?(?:deactivated|suspended)|账号.{0,6}(?:封禁|停用|暂停)/i.test(searchable)) {
+    return accountCheckResult('banned', common)
+  }
+  if (
+    error?.code === 'TOKEN_REFRESH_RELOGIN_REQUIRED' ||
+    /invalid_grant|token[_ -]?(?:expired|invalid|revoked)|authentication[_ -]?(?:failed|required)|invalid[_ -]?(?:token|auth)/i.test(searchable) ||
+    status === 401
+  ) {
+    return accountCheckResult('auth_invalid', common)
+  }
+  if (
+    status === 402 ||
+    /insufficient[_ -]?quota|usage[_ -]?limit|plan[_ -]?limit|quota[_ -]?(?:exceeded|exhausted)|billing[_ -]?(?:limit|required)/i.test(searchable)
+  ) {
+    return accountCheckResult('quota_exhausted', common)
+  }
+  if (status === 429) {
+    return accountCheckResult('rate_limited', common)
+  }
+  if (status === 403) {
+    return accountCheckResult('permission_denied', common)
+  }
+  if (
+    error?.code === 'TOKEN_REFRESH_TRANSIENT' ||
+    error?.code === 'TOKEN_REFRESH_ACTIVE_SOURCE_STALE' ||
+    error?.name === 'AbortError' ||
+    error?.name === 'TimeoutError' ||
+    [408, 425, 500, 502, 503, 504].includes(status) ||
+    /network|fetch failed|timeout|timed out|socket|econn|enotfound|暂时无法|网络错误/i.test(searchable)
+  ) {
+    return accountCheckResult('temporary_unavailable', common)
+  }
+  return accountCheckResult('unknown_error', common)
 }
 
 function adaptiveState(accountId) {
@@ -453,6 +722,8 @@ export function pickActiveAccount(excludeIds = null, {
   const reservationMatches = new Set()
   for (const account of accounts) {
     if (excludeIds && excludeIds.has(account.id)) continue
+    if (enforceDisposableAccountLifecycle(account, now)) persistAccount(account)
+    if (accountPoolTierState(account, now).discarded) continue
     const credential = accountCredentialLifecycle(account, now)
     if (!credential.routable) {
       const authErrorType = credential.compatible
@@ -537,7 +808,14 @@ export function pickActiveAccount(excludeIds = null, {
   // quota remains eligible, but a known account at/below the reserve does not.
   const candidates = freshHealthy.length ? freshHealthy : healthy
   if (!candidates.length) return null
-  return selectByStrategy(candidates, normalizeAccountRoutingStrategy(strategy), sessionKey)
+  // Disposable accounts are intentionally consumed before touching the
+  // stable subscription pool. Stable accounts therefore remain an insurance
+  // fallback whenever at least one disposable account can still serve.
+  const disposableCandidates = candidates.filter(item =>
+    accountPoolTierState(item.account, now).disposable
+  )
+  const tierCandidates = disposableCandidates.length ? disposableCandidates : candidates
+  return selectByStrategy(tierCandidates, normalizeAccountRoutingStrategy(strategy), sessionKey)
 }
 
 export async function ensureFreshToken(account, fetchImpl = fetch) {
@@ -660,13 +938,15 @@ export async function markAccountCooldown(accountId, response, { model = null, s
   if (!account) return
 
   let cooldownMs = DEFAULT_COOLDOWN_MS
+  let responseText = ''
   const retryAfter = response?.headers?.get?.('retry-after')
   if (retryAfter && Number.isFinite(Number(retryAfter))) {
     cooldownMs = Number(retryAfter) * 1000
-  } else if (response) {
+  }
+  if (response) {
     try {
-      const text = await response.text()
-      cooldownMs = cooldownMsFromResponseText(text) ?? cooldownMs
+      responseText = await response.text()
+      if (!retryAfter) cooldownMs = cooldownMsFromResponseText(responseText) ?? cooldownMs
     } catch {}
   }
 
@@ -682,19 +962,33 @@ export async function markAccountCooldown(accountId, response, { model = null, s
     account.cooldown_until = cooldownUntil
     account.last_cooldown_reason = 'rate_limit'
   }
+  const check = classifyAccountCheckFailure({
+    status: 429,
+    upstreamMessage: responseText,
+    message: 'ChatGPT account request was rate limited'
+  }, account)
+  check.retry_at = new Date(cooldownUntil).toISOString()
+  check.source = 'model_request'
+  account.health_check = check
   persistAccount(account)
 }
 
 export function markAccountAuthFailure(accountId, status, message = null) {
   const account = (proxyConfig.chatgptAccounts || []).find(item => item.id === accountId)
   if (!account) return
+  const check = classifyAccountCheckFailure({
+    status: Number(status) || null,
+    upstreamMessage: message,
+    message: `ChatGPT account request failed with status ${Number(status) || 0}`
+  }, account)
+  check.source = 'model_request'
   account.status = 'auth_error'
   account.auth_error = {
-    type: 'upstream_authentication',
+    type: check.state === 'banned' ? 'account_banned' : `upstream_${check.state}`,
     status: Number(status) || null,
-    message: message ? String(message).slice(0, 200) : null,
     at: new Date().toISOString()
   }
+  account.health_check = check
   persistAccount(account)
 }
 
@@ -829,6 +1123,42 @@ export function extractUsageFromHeaders(headers) {
   }
 }
 
+function upstreamErrorDetails(text) {
+  let parsed = null
+  try { parsed = JSON.parse(String(text || '')) } catch {}
+  const root = parsed?.error && typeof parsed.error === 'object' ? parsed.error : parsed
+  const code = root?.code || root?.type || parsed?.code || parsed?.type || null
+  const message = root?.message || parsed?.message || null
+  return {
+    code: code == null ? null : String(code).slice(0, 80),
+    message: message == null ? String(text || '').slice(0, 500) : String(message).slice(0, 500)
+  }
+}
+
+function responseRetryAfterMs(response, text = '') {
+  const retryAfter = response?.headers?.get?.('retry-after')
+  if (retryAfter) {
+    const seconds = Number(retryAfter)
+    if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000
+    const date = Date.parse(retryAfter)
+    if (Number.isFinite(date)) return Math.max(0, date - Date.now())
+  }
+  return cooldownMsFromResponseText(text)
+}
+
+async function accountBackendResponseError(response, operation) {
+  let text = ''
+  try { text = await response.text() } catch {}
+  const details = upstreamErrorDetails(text)
+  const suffix = details.code ? `, code ${details.code}` : ''
+  const error = new Error(`${operation}失败 (status ${response.status}${suffix})`)
+  error.status = response.status
+  error.upstreamCode = details.code
+  error.upstreamMessage = details.message
+  error.retryAfterMs = responseRetryAfterMs(response, text)
+  return error
+}
+
 function normalizeResetCreditExpiry(value) {
   if (value == null || value === '') return null
   let timestamp
@@ -910,7 +1240,7 @@ async function fetchAccountResetCredits(account, fetchImpl = fetch) {
     }
   }))
   if (!response.ok) {
-    throw new Error(`获取 Codex 重置次数失败 (status ${response.status})`)
+    throw await accountBackendResponseError(response, '获取 Codex 重置次数')
   }
   let data = null
   try { data = await response.json() } catch {}
@@ -920,19 +1250,30 @@ async function fetchAccountResetCredits(account, fetchImpl = fetch) {
 }
 
 export async function refreshAccountResetCredits(account, fetchImpl = fetch) {
+  if (resetCreditsRefreshInFlight.has(account.id)) return resetCreditsRefreshInFlight.get(account.id)
   const currentAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || account
+  const refreshPromise = (async () => {
+    try {
+      const result = await fetchAccountResetCredits(currentAccount, fetchImpl)
+      const latestAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || result.account
+      latestAccount.reset_credits = publicResetCredits(result.parsed)
+      latestAccount.reset_credits_error = null
+      persistAccount(latestAccount)
+      return latestAccount.reset_credits
+    } catch (error) {
+      const latestAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || currentAccount
+      latestAccount.reset_credits_error = String(error?.message || error).slice(0, 300)
+      persistAccount(latestAccount)
+      throw error
+    }
+  })()
+  resetCreditsRefreshInFlight.set(account.id, refreshPromise)
   try {
-    const result = await fetchAccountResetCredits(currentAccount, fetchImpl)
-    const latestAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || result.account
-    latestAccount.reset_credits = publicResetCredits(result.parsed)
-    latestAccount.reset_credits_error = null
-    persistAccount(latestAccount)
-    return latestAccount.reset_credits
-  } catch (error) {
-    const latestAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || currentAccount
-    latestAccount.reset_credits_error = String(error?.message || error).slice(0, 300)
-    persistAccount(latestAccount)
-    throw error
+    return await refreshPromise
+  } finally {
+    if (resetCreditsRefreshInFlight.get(account.id) === refreshPromise) {
+      resetCreditsRefreshInFlight.delete(account.id)
+    }
   }
 }
 
@@ -1049,6 +1390,7 @@ export function applyAccountUsage(accountId, usage) {
   account.plan_type = usage.plan_type || account.plan_type || null
   account.usage = mergeAccountUsageWindows(account.usage, usage)
   const now = Date.now()
+  enforceDisposableAccountLifecycle(account, now)
   account.usage_updated_at = new Date(now).toISOString()
   account.usage_history ||= []
   const snapshot = {
@@ -1144,7 +1486,7 @@ async function refreshAccountUsageOnce(account, fetchImpl = fetch) {
     }
   }))
   if (!response.ok) {
-    throw new Error(`获取账号用量失败 (status ${response.status})`)
+    throw await accountBackendResponseError(response, '获取账号用量')
   }
   let data = null
   try { data = await response.json() } catch {}
@@ -1175,13 +1517,198 @@ export async function refreshAccountUsage(account, fetchImpl = fetch) {
   }
 }
 
+export async function refreshAccountQuotaSnapshot(account, fetchImpl = fetch) {
+  let usageError = null
+  let resetCreditsError = null
+  try {
+    await refreshAccountUsage(account, fetchImpl)
+  } catch (error) {
+    usageError = error
+  }
+
+  const afterUsage = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || account
+  try {
+    await refreshAccountResetCredits(afterUsage, fetchImpl)
+  } catch (error) {
+    resetCreditsError = error
+  }
+
+  return {
+    account: (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || afterUsage,
+    usage_synced: !usageError,
+    reset_credits_synced: !resetCreditsError,
+    usage_error: usageError,
+    reset_credits_error: resetCreditsError,
+    warnings: [
+      usageError ? `用量：${String(usageError?.message || usageError).slice(0, 260)}` : null,
+      resetCreditsError ? `重置次数：${String(resetCreditsError?.message || resetCreditsError).slice(0, 260)}` : null
+    ].filter(Boolean)
+  }
+}
+
+function successfulAccountCheckState(account, snapshot, checkedAt) {
+  const remaining = accountRemainingPercent(account)
+  const policy = accountPolicyState(account)
+  const poolTier = accountPoolTierState(account)
+  const resetWarning = snapshot.reset_credits_synced
+    ? null
+    : '账号用量检查成功，但重置次数查询失败；界面会保留上次次数并标明查询错误。'
+  const reasonWithResetWarning = state => resetWarning
+    ? `${ACCOUNT_CHECK_STATE_DETAILS[state].reason} ${resetWarning}`
+    : null
+  const common = {
+    checkedAt,
+    usageSynced: true,
+    resetCreditsSynced: snapshot.reset_credits_synced,
+    remainingPercent: remaining
+  }
+
+  if (poolTier.discarded) return accountCheckResult('discarded', common)
+  if (remaining != null && remaining <= 0) {
+    return accountCheckResult('quota_exhausted', {
+      ...common,
+      reason: reasonWithResetWarning('quota_exhausted')
+    })
+  }
+  if (account.status === 'auth_error') {
+    const status = Number(account.auth_error?.status) || null
+    const type = String(account.auth_error?.type || '')
+    if (/incompatible_oauth_client/.test(type)) return accountCheckResult('incompatible', common)
+    if (/temporary_access_expired/.test(type)) return accountCheckResult('token_expired', common)
+    if (/banned|deactivated|disabled|suspended/.test(type)) {
+      return accountCheckResult('banned', {
+        ...common,
+        httpStatus: status,
+        errorCode: type
+      })
+    }
+    if (status === 403) {
+      return accountCheckResult('permission_denied', {
+        ...common,
+        httpStatus: status,
+        errorCode: type,
+        reason: '用量接口可以访问，但最近一次模型路由返回 HTTP 403；请核对账号套餐、地区和服务权限。'
+      })
+    }
+    return accountCheckResult('auth_invalid', {
+      ...common,
+      httpStatus: status,
+      errorCode: type,
+      reason: '用量接口可以访问，但账号仍保留最近一次模型路由的鉴权失败状态；建议重新官方登录后再检查。'
+    })
+  }
+  if (account.status === 'cooldown' && Number(account.cooldown_until) > Date.now()) {
+    return accountCheckResult('rate_limited', common)
+  }
+  if (remaining != null && remaining <= policy.reserve) {
+    return accountCheckResult('quota_low', {
+      ...common,
+      reason: reasonWithResetWarning('quota_low')
+    })
+  }
+  return accountCheckResult('healthy', {
+    ...common,
+    reason: reasonWithResetWarning('healthy')
+  })
+}
+
+function persistAccountCheck(accountId, result) {
+  const latestAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === accountId)
+  if (!latestAccount) return result
+  latestAccount.health_check = result
+  if (['banned', 'auth_invalid', 'token_expired', 'incompatible', 'permission_denied'].includes(result.state)) {
+    latestAccount.status = 'auth_error'
+    latestAccount.auth_error = {
+      type: `health_check_${result.state}`,
+      status: result.http_status,
+      at: result.checked_at
+    }
+  } else if (
+    ['quota_exhausted', 'rate_limited'].includes(result.state) &&
+    result.usage_synced !== true
+  ) {
+    const retryAt = Date.parse(result.retry_at || '')
+    latestAccount.status = 'cooldown'
+    latestAccount.cooldown_until = Number.isFinite(retryAt)
+      ? retryAt
+      : Date.now() + DEFAULT_COOLDOWN_MS
+    latestAccount.last_cooldown_reason = result.state
+  }
+  persistAccount(latestAccount)
+  return result
+}
+
+export async function checkChatgptAccountStatus(account, fetchImpl = fetch) {
+  if (accountStatusCheckInFlight.has(account.id)) return accountStatusCheckInFlight.get(account.id)
+  const checkPromise = (async () => {
+    const checkedAt = new Date().toISOString()
+    const currentAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || account
+    const credential = accountCredentialLifecycle(currentAccount)
+    const poolTier = accountPoolTierState(currentAccount)
+
+    if (poolTier.discarded) {
+      return persistAccountCheck(account.id, accountCheckResult('discarded', { checkedAt }))
+    }
+    if (!credential.compatible) {
+      return persistAccountCheck(account.id, accountCheckResult('incompatible', { checkedAt }))
+    }
+    if (credential.expired) {
+      return persistAccountCheck(account.id, accountCheckResult('token_expired', { checkedAt }))
+    }
+
+    currentAccount.health_check = {
+      state: 'checking',
+      label: '检查中',
+      severity: 'warning',
+      retryable: true,
+      reason: '正在同步账号用量和重置次数。',
+      checked_at: checkedAt
+    }
+    persistAccount(currentAccount)
+
+    const latestBeforeRefresh = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || currentAccount
+    const snapshot = await refreshAccountQuotaSnapshot(latestBeforeRefresh, fetchImpl)
+    if (!snapshot.usage_synced) {
+      const result = classifyAccountCheckFailure(snapshot.usage_error, snapshot.account)
+      result.checked_at = checkedAt
+      result.reset_credits_synced = snapshot.reset_credits_synced
+      if (['quota_exhausted', 'rate_limited'].includes(result.state)) {
+        const retryMs = Number(snapshot.usage_error?.retryAfterMs)
+        result.retry_at = new Date(
+          Date.now() + (Number.isFinite(retryMs)
+            ? Math.max(1000, Math.min(retryMs, MAX_REASONABLE_COOLDOWN_MS))
+            : DEFAULT_COOLDOWN_MS)
+        ).toISOString()
+      }
+      return persistAccountCheck(account.id, result)
+    }
+    return persistAccountCheck(
+      account.id,
+      successfulAccountCheckState(snapshot.account, snapshot, checkedAt)
+    )
+  })()
+  accountStatusCheckInFlight.set(account.id, checkPromise)
+  try {
+    return await checkPromise
+  } finally {
+    if (accountStatusCheckInFlight.get(account.id) === checkPromise) {
+      accountStatusCheckInFlight.delete(account.id)
+    }
+  }
+}
+
 async function refreshAllUsageQuiet() {
   for (const account of (proxyConfig.chatgptAccounts || []).filter(a => a.routing_enabled !== false)) {
     const failure = usageRefreshFailures.get(account.id)
     if (failure?.nextAttemptAt > Date.now()) continue
     try {
-      await refreshAccountUsage(account, chinaFetch(fetch))
+      const snapshot = await refreshAccountQuotaSnapshot(account, chinaFetch(fetch))
+      if (snapshot.usage_error) throw snapshot.usage_error
       usageRefreshFailures.delete(account.id)
+      if (snapshot.reset_credits_error) {
+        console.warn('[codex-proxy] reset-credit refresh failed for %s: %s',
+          account.label || account.id, snapshot.reset_credits_error.message)
+      }
     } catch (error) {
       const failures = Math.min(4, (failure?.failures || 0) + 1)
       usageRefreshFailures.set(account.id, {
@@ -1227,6 +1754,7 @@ export function repairAccountRuntimeState(now = Date.now()) {
   reapExpiredLeases(null, now)
   for (const account of (proxyConfig.chatgptAccounts || [])) {
     let changed = false
+    if (enforceDisposableAccountLifecycle(account, now)) changed = true
     const credential = accountCredentialLifecycle(account, now)
     if (credential.temporary && !credential.compatible) {
       if (account.credential_compatibility !== credential.compatibility) {
@@ -1296,11 +1824,15 @@ export function getAccountRuntimeDiagnostics() {
       adaptive_reason: adaptive.lastReason,
       token_refresh_in_flight: tokenRefreshInFlight.has(account.id),
       usage_refresh_in_flight: usageRefreshInFlight.has(account.id),
+      reset_credits_refresh_in_flight: resetCreditsRefreshInFlight.has(account.id),
+      status_check_in_flight: accountStatusCheckInFlight.has(account.id),
       remaining_percent: accountRemainingPercent(account),
       cooldown_until: account.cooldown_until || null,
       model_cooldowns: Object.keys(account.model_cooldowns || {}).length,
       usage_forecast: account.usage_forecast || null,
-      credential: accountCredentialLifecycle(account)
+      health_check: account.health_check || null,
+      credential: accountCredentialLifecycle(account),
+      pool_tier: accountPoolTierState(account)
     }
   })
 }
@@ -1310,7 +1842,7 @@ export function getAccountRuntimeDiagnostics() {
 // current account no more than every ~5 minutes. Failures back off exponentially.
 if (!process.env.NODE_ENV || process.env.NODE_ENV !== 'test') {
   repairAccountRuntimeState()
-  setInterval(() => reapExpiredLeases(), 60_000).unref()
+  setInterval(() => repairAccountRuntimeState(), 60_000).unref()
   scheduleWithJitter(refreshAllUsageQuiet, GLOBAL_USAGE_REFRESH_MS)
   scheduleWithJitter(refreshActiveUsageQuiet, ACTIVE_USAGE_REFRESH_MS)
 }

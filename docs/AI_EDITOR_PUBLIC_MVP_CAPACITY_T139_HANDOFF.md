@@ -101,7 +101,8 @@ password in a script to bypass this gate.
 
 The existing public Quick Tunnel remains a preview-only endpoint and continues
 to serve the prior VMware build until an authorized guest deployment is
-performed.
+performed. The Windows isolated Edge was restored after the release gate as PID
+`37496` on `127.0.0.1:47921`, still targeting the existing Quick Tunnel.
 
 ## Remaining human-gated work
 

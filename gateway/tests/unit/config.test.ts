@@ -1,8 +1,24 @@
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { loadGatewayConfig } from '../../src/config.js'
 
 describe('Gateway fixed development configuration', () => {
   const repositoryRoot = path.resolve('F:/isolated-repository')
+  const tlsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-editor-postgres-tls-'))
+  const postgresCaFile = path.join(tlsRoot, 'postgres-ca.pem')
+  const postgresCertFile = path.join(tlsRoot, 'postgres-client.pem')
+  const postgresKeyFile = path.join(tlsRoot, 'postgres-client-key.pem')
+
+  beforeAll(() => {
+    fs.writeFileSync(postgresCaFile, 'test postgres ca')
+    fs.writeFileSync(postgresCertFile, 'test postgres client certificate')
+    fs.writeFileSync(postgresKeyFile, 'test postgres client key')
+  })
+
+  afterAll(() => {
+    fs.rmSync(tlsRoot, { recursive: true, force: true })
+  })
 
   it('uses fixed loopback ports and isolated data roots by default', () => {
     const config = loadGatewayConfig({ NODE_ENV: 'test' }, { repositoryRoot })
@@ -11,6 +27,7 @@ describe('Gateway fixed development configuration', () => {
     expect(config.publicOrigin).toBe('http://127.0.0.1:47920')
     expect(config.dataRoot).toBe(path.join(repositoryRoot, '.ai-editor-dev', 'gateway'))
     expect(config.database.sqliteFile).toBe(path.join(config.dataRoot, 'gateway.sqlite'))
+    expect(config.database.migrateOnStart).toBe(true)
     expect(config.authMode).toBe('real')
     expect(config.requestBody).toEqual({
       maxBytes: 64 * 1024 * 1024,
@@ -142,6 +159,9 @@ describe('Gateway fixed development configuration', () => {
       NODE_ENV: 'production',
       AI_EDITOR_GATEWAY_DATA_ROOT: dataRoot,
       AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: 'https://gateway.example.test',
+      AI_EDITOR_GATEWAY_DB_DIALECT: 'postgres',
+      AI_EDITOR_GATEWAY_POSTGRES_URL: 'postgres://gateway@database.example.test/gateway',
+      AI_EDITOR_GATEWAY_POSTGRES_TLS_CA: postgresCaFile,
       AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET:
         'provider-worker-config-test-secret-32bytes-minimum'
     }
@@ -165,6 +185,10 @@ describe('Gateway fixed development configuration', () => {
       AI_EDITOR_GATEWAY_DATA_ROOT: dataRoot,
       AI_EDITOR_GATEWAY_DB_DIALECT: 'postgres',
       AI_EDITOR_GATEWAY_POSTGRES_URL: 'postgres://gateway@example.test/gateway',
+      AI_EDITOR_GATEWAY_POSTGRES_TLS_CA: postgresCaFile,
+      AI_EDITOR_GATEWAY_POSTGRES_TLS_CERT: postgresCertFile,
+      AI_EDITOR_GATEWAY_POSTGRES_TLS_KEY: postgresKeyFile,
+      AI_EDITOR_GATEWAY_POSTGRES_TLS_SERVER_NAME: 'database.example.test',
       AI_EDITOR_MOCK_STATE: 'login_required'
     }, { repositoryRoot })
     expect(production).toMatchObject({
@@ -177,7 +201,14 @@ describe('Gateway fixed development configuration', () => {
       mockState: 'login_required',
       database: {
         dialect: 'postgres',
-        postgresUrl: 'postgres://gateway@example.test/gateway'
+        postgresUrl: 'postgres://gateway@example.test/gateway',
+        postgresTls: {
+          caFile: postgresCaFile,
+          certFile: postgresCertFile,
+          keyFile: postgresKeyFile,
+          serverName: 'database.example.test'
+        },
+        migrateOnStart: false
       }
     })
     expect(() => loadGatewayConfig({
@@ -188,11 +219,50 @@ describe('Gateway fixed development configuration', () => {
     expect(() => loadGatewayConfig({
       NODE_ENV: 'production',
       AI_EDITOR_GATEWAY_DATA_ROOT: dataRoot,
+      AI_EDITOR_GATEWAY_DB_DIALECT: 'postgres',
+      AI_EDITOR_GATEWAY_POSTGRES_URL: 'postgres://gateway@example.test/gateway'
+    }, { repositoryRoot })).toThrow(/trusted CA/)
+    expect(() => loadGatewayConfig({
+      NODE_ENV: 'production',
+      AI_EDITOR_GATEWAY_DATA_ROOT: dataRoot,
+      AI_EDITOR_GATEWAY_DB_DIALECT: 'postgres',
+      AI_EDITOR_GATEWAY_POSTGRES_URL: 'postgres://gateway@example.test/gateway?ssl=true',
+      AI_EDITOR_GATEWAY_POSTGRES_TLS_CA: postgresCaFile
+    }, { repositoryRoot })).toThrow(/connection-string SSL parameters/)
+    expect(() => loadGatewayConfig({
+      NODE_ENV: 'production',
+      AI_EDITOR_GATEWAY_DATA_ROOT: dataRoot,
+      AI_EDITOR_GATEWAY_DB_DIALECT: 'postgres',
+      AI_EDITOR_GATEWAY_POSTGRES_URL: 'postgres://gateway@example.test/gateway',
+      AI_EDITOR_GATEWAY_POSTGRES_TLS_CA: postgresCaFile,
+      AI_EDITOR_GATEWAY_POSTGRES_TLS_CERT: postgresCertFile
+    }, { repositoryRoot })).toThrow(/certificate and key/)
+    expect(() => loadGatewayConfig({
+      NODE_ENV: 'production',
+      AI_EDITOR_GATEWAY_DATA_ROOT: dataRoot
+    }, { repositoryRoot })).toThrow(/requires PostgreSQL/)
+    expect(() => loadGatewayConfig({
+      NODE_ENV: 'production',
+      AI_EDITOR_GATEWAY_DATA_ROOT: dataRoot,
+      AI_EDITOR_GATEWAY_DB_DIALECT: 'postgres',
+      AI_EDITOR_GATEWAY_POSTGRES_URL: 'postgres://gateway@example.test/gateway',
+      AI_EDITOR_GATEWAY_POSTGRES_TLS_CA: postgresCaFile,
       AI_EDITOR_GATEWAY_AUTH_MODE: 'mock'
     }, { repositoryRoot })).toThrow(/Mock authentication is forbidden/)
     expect(() => loadGatewayConfig({
       NODE_ENV: 'production',
       AI_EDITOR_GATEWAY_DATA_ROOT: dataRoot,
+      AI_EDITOR_GATEWAY_DB_DIALECT: 'postgres',
+      AI_EDITOR_GATEWAY_POSTGRES_URL: 'postgres://gateway@example.test/gateway',
+      AI_EDITOR_GATEWAY_POSTGRES_TLS_CA: postgresCaFile,
+      AI_EDITOR_GATEWAY_MIGRATE_ON_START: 'true'
+    }, { repositoryRoot })).toThrow(/cannot auto-migrate/)
+    expect(() => loadGatewayConfig({
+      NODE_ENV: 'production',
+      AI_EDITOR_GATEWAY_DATA_ROOT: dataRoot,
+      AI_EDITOR_GATEWAY_DB_DIALECT: 'postgres',
+      AI_EDITOR_GATEWAY_POSTGRES_URL: 'postgres://gateway@example.test/gateway',
+      AI_EDITOR_GATEWAY_POSTGRES_TLS_CA: postgresCaFile,
       AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: 'http://gateway.example.test'
     }, { repositoryRoot })).toThrow(/HTTPS origin/)
   })

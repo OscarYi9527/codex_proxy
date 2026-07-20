@@ -47,7 +47,10 @@ class FileUrlMigrationProvider implements MigrationProvider {
 
 export function createGatewayDatabase(config: GatewayConfig): DatabaseHandle {
   const db = config.database.dialect === 'postgres'
-    ? createPostgresDatabase({ connectionString: config.database.postgresUrl as string })
+    ? createPostgresDatabase({
+        connectionString: config.database.postgresUrl as string,
+        ...(config.database.postgresTls ? { tls: config.database.postgresTls } : {})
+      })
     : createSqliteDatabase(config.database.sqliteFile)
   return databaseHandle(db)
 }

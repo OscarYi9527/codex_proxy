@@ -22,6 +22,13 @@ export interface ProviderWorkerGatewayConfig {
   } | null
 }
 
+export interface PostgresTlsConfig {
+  readonly caFile: string
+  readonly certFile?: string
+  readonly keyFile?: string
+  readonly serverName?: string
+}
+
 export interface GatewayConfig {
   readonly environment: 'development' | 'test' | 'preview' | 'production'
   readonly host: string
@@ -32,6 +39,8 @@ export interface GatewayConfig {
     readonly dialect: 'sqlite' | 'postgres'
     readonly sqliteFile: string
     readonly postgresUrl?: string
+    readonly postgresTls?: PostgresTlsConfig
+    readonly migrateOnStart: boolean
   }
   readonly authMode: 'real' | 'mock'
   readonly mockState: MockAccountState
@@ -219,6 +228,74 @@ function ensureIsolatedDataRoot(
   return resolved
 }
 
+function parsePostgresTls(
+  env: NodeJS.ProcessEnv,
+  environment: GatewayConfig['environment'],
+  dialect: GatewayConfig['database']['dialect'],
+  postgresUrl: string | undefined
+): PostgresTlsConfig | undefined {
+  if (dialect !== 'postgres') return undefined
+  if (!postgresUrl) {
+    throw new Error('AI_EDITOR_GATEWAY_POSTGRES_URL is required for the postgres dialect')
+  }
+  let url: URL
+  try {
+    url = new URL(postgresUrl)
+  } catch {
+    throw new Error('AI_EDITOR_GATEWAY_POSTGRES_URL must be a valid PostgreSQL URL')
+  }
+  if (!['postgres:', 'postgresql:'].includes(url.protocol)) {
+    throw new Error('AI_EDITOR_GATEWAY_POSTGRES_URL must use postgres:// or postgresql://')
+  }
+  if ([...url.searchParams.keys()].some(key => key.toLowerCase().startsWith('ssl'))) {
+    throw new Error(
+      'PostgreSQL TLS must use the dedicated Gateway TLS file settings, not connection-string SSL parameters'
+    )
+  }
+
+  const ca = env.AI_EDITOR_GATEWAY_POSTGRES_TLS_CA
+  const cert = env.AI_EDITOR_GATEWAY_POSTGRES_TLS_CERT
+  const key = env.AI_EDITOR_GATEWAY_POSTGRES_TLS_KEY
+  const serverName = env.AI_EDITOR_GATEWAY_POSTGRES_TLS_SERVER_NAME
+  const suppliedClientFiles = [cert, key].filter(Boolean).length
+  if (suppliedClientFiles !== 0 && suppliedClientFiles !== 2) {
+    throw new Error('PostgreSQL client TLS certificate and key must be configured together')
+  }
+  if (environment === 'production' && !ca) {
+    throw new Error('Production PostgreSQL requires a trusted CA file')
+  }
+  if (!ca && suppliedClientFiles === 0 && !serverName) return undefined
+  if (!ca) {
+    throw new Error('PostgreSQL TLS requires a trusted CA file')
+  }
+  if (
+    serverName &&
+    (
+      serverName.length > 253 ||
+      !/^[A-Za-z0-9.-]+$/.test(serverName) ||
+      serverName.startsWith('.') ||
+      serverName.endsWith('.')
+    )
+  ) {
+    throw new Error('PostgreSQL TLS server name is invalid')
+  }
+
+  const tls = {
+    caFile: path.resolve(ca),
+    ...(cert ? { certFile: path.resolve(cert) } : {}),
+    ...(key ? { keyFile: path.resolve(key) } : {}),
+    ...(serverName ? { serverName } : {})
+  }
+  for (const file of [tls.caFile, tls.certFile, tls.keyFile].filter(
+    (candidate): candidate is string => typeof candidate === 'string'
+  )) {
+    if (!fs.existsSync(file)) {
+      throw new Error(`PostgreSQL TLS file does not exist: ${file}`)
+    }
+  }
+  return tls
+}
+
 export function loadGatewayConfig(
   env: NodeJS.ProcessEnv = process.env,
   options: { repositoryRoot?: string } = {}
@@ -236,9 +313,18 @@ export function loadGatewayConfig(
   )
   const dialect = env.AI_EDITOR_GATEWAY_DB_DIALECT === 'postgres' ? 'postgres' : 'sqlite'
   const postgresUrl = env.AI_EDITOR_GATEWAY_POSTGRES_URL
-  if (dialect === 'postgres' && !postgresUrl) {
-    throw new Error('AI_EDITOR_GATEWAY_POSTGRES_URL is required for the postgres dialect')
+  if (environment === 'production' && dialect !== 'postgres') {
+    throw new Error('Production Gateway requires PostgreSQL')
   }
+  const postgresTls = parsePostgresTls(env, environment, dialect, postgresUrl)
+  const requestedMigrateOnStart = env.AI_EDITOR_GATEWAY_MIGRATE_ON_START
+  if (environment === 'production' && requestedMigrateOnStart === 'true') {
+    throw new Error(
+      'Production Gateway cannot auto-migrate with its runtime database identity'
+    )
+  }
+  const migrateOnStart = environment !== 'production' &&
+    requestedMigrateOnStart !== 'false'
   const authMode = env.AI_EDITOR_GATEWAY_AUTH_MODE === 'mock' ? 'mock' : 'real'
   if (
     (environment === 'preview' || environment === 'production') &&
@@ -284,7 +370,9 @@ export function loadGatewayConfig(
     database: {
       dialect,
       sqliteFile: path.join(dataRoot, 'gateway.sqlite'),
-      ...(postgresUrl ? { postgresUrl } : {})
+      ...(postgresUrl ? { postgresUrl } : {}),
+      ...(postgresTls ? { postgresTls } : {}),
+      migrateOnStart
     },
     authMode,
     mockState: parseMockState(env.AI_EDITOR_MOCK_STATE),

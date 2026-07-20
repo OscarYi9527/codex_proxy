@@ -19,6 +19,7 @@
     "gateway:dev": "npm run dev --workspace @ai-editor/gateway",
     "gateway:build": "npm run build --workspace @ai-editor/gateway",
     "gateway:test": "npm run test --workspace @ai-editor/gateway",
+    "gateway:bootstrap": "tsx gateway/src/bootstrap-cli.ts",
     "gateway:credentials": "tsx gateway/src/credential-security-cli.ts",
     "admin:dev": "npm run dev --workspace @ai-editor/admin-web",
     "admin:build": "npm run build --workspace @ai-editor/admin-web",

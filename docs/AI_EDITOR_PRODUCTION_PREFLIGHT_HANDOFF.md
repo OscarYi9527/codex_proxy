@@ -85,3 +85,7 @@ After those choices, implement and cloud-test the selected KMS adapters,
 perform database/backup/certificate drills, then request a separate T137
 production deployment approval. T138 remains the 72-hour, three-network,
 20-SSE and 30-minute connection acceptance.
+
+The vendor-neutral PostgreSQL TLS and migration-identity boundary completed
+after this preflight is documented in
+`docs/AI_EDITOR_PRODUCTION_POSTGRES_TLS_HANDOFF.md`.

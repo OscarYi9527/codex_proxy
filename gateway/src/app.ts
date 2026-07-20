@@ -91,6 +91,11 @@ export interface GatewayApp {
   close(): Promise<void>
 }
 
+export function shouldMigrateGatewayDatabase(config: GatewayConfig): boolean {
+  return config.environment !== 'production' &&
+    config.database.migrateOnStart !== false
+}
+
 export async function createGatewayApp(options: {
   config?: GatewayConfig
   clock?: Clock
@@ -113,7 +118,9 @@ export async function createGatewayApp(options: {
     ? new MockStateService({ state: config.mockState, clock, ids })
     : null
   fs.mkdirSync(config.dataRoot, { recursive: true, mode: 0o700 })
-  await database.migrateToLatest()
+  if (shouldMigrateGatewayDatabase(config)) {
+    await database.migrateToLatest()
+  }
 
   const app = Fastify({
     logger: false,

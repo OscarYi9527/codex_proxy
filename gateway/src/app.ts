@@ -10,7 +10,11 @@ import { SafeError } from './common/errors.js'
 import { HmacSha256Digest } from './common/digests.js'
 import { SafeLogger } from './common/logging.js'
 import type { GatewayConfig } from './config.js'
-import { loadGatewayConfig } from './config.js'
+import {
+  DEFAULT_REQUEST_BODY_MAX_MIB,
+  DEFAULT_REQUEST_BODY_TIMEOUT_MS,
+  loadGatewayConfig
+} from './config.js'
 import type { DatabaseHandle } from './db/database.js'
 import { createGatewayDatabase } from './db/database.js'
 import {
@@ -114,9 +118,11 @@ export async function createGatewayApp(options: {
   const app = Fastify({
     logger: false,
     genReqId: () => ids.opaque('req'),
-    bodyLimit: 16 * 1024 * 1024,
+    bodyLimit: config.requestBody?.maxBytes ??
+      DEFAULT_REQUEST_BODY_MAX_MIB * 1024 * 1024,
     trustProxy: false,
-    requestTimeout: 30_000
+    requestTimeout: config.requestBody?.timeoutMs ??
+      DEFAULT_REQUEST_BODY_TIMEOUT_MS
   })
   await app.register(helmet, {
     contentSecurityPolicy: false,

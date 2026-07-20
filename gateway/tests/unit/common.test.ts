@@ -1,6 +1,6 @@
 import { FixedClock, SystemClock } from '../../src/common/clock.js'
 import { HmacSha256Digest } from '../../src/common/digests.js'
-import { safeErrorBody, SafeError } from '../../src/common/errors.js'
+import { safeErrorBody, SafeError, toSafeError } from '../../src/common/errors.js'
 import { CryptoIdSource, SequenceIdSource } from '../../src/common/ids.js'
 import { SafeLogger } from '../../src/common/logging.js'
 import { redactValue } from '../../src/common/redaction.js'
@@ -88,5 +88,15 @@ describe('Gateway common deterministic and safe primitives', () => {
         retryable: true
       }
     })
+  })
+
+  it('maps Fastify body limit failures to a stable 413 error', () => {
+    const error = toSafeError(Object.assign(
+      new Error('body limit'),
+      { code: 'FST_ERR_CTP_BODY_TOO_LARGE' }
+    ))
+    expect(error.code).toBe('request_too_large')
+    expect(error.statusCode).toBe(413)
+    expect(error.retryable).toBe(false)
   })
 })

@@ -10,7 +10,23 @@ import {
 import { LocalHandoffService } from './local-handoff.js'
 import { GatewayClient } from './gateway-client.js'
 
-const BODY_LIMIT = 16 * 1024 * 1024
+const DEFAULT_MAX_BODY_MIB = 64
+const DEFAULT_BODY_TIMEOUT_MS = 60_000
+
+function boundedPositiveNumber(value, fallback, max) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return Math.min(parsed, max)
+}
+
+const BODY_LIMIT = Math.floor(
+  boundedPositiveNumber(process.env.CODEX_PROXY_MAX_BODY_MIB, DEFAULT_MAX_BODY_MIB, 256) *
+  1024 *
+  1024
+)
+const BODY_TIMEOUT_MS = Math.floor(
+  boundedPositiveNumber(process.env.CODEX_PROXY_BODY_TIMEOUT_MS, DEFAULT_BODY_TIMEOUT_MS, 300_000)
+)
 
 function opaque(prefix) {
   return `${prefix}_${crypto.randomUUID().replaceAll('-', '')}`
@@ -26,31 +42,92 @@ function isLoopback(remoteAddress = '') {
     remoteAddress.endsWith(':127.0.0.1')
 }
 
-async function readJson(req) {
-  const chunks = []
-  let size = 0
-  for await (const chunk of req) {
-    size += chunk.length
-    if (size > BODY_LIMIT) {
-      for (const item of chunks) item.fill(0)
-      throw Object.assign(new Error('Request body too large'), {
-        statusCode: 413,
-        code: 'request_too_large'
-      })
-    }
-    chunks.push(Buffer.from(chunk))
-  }
-  if (!chunks.length) return {}
-  const combined = Buffer.concat(chunks)
-  try {
-    return JSON.parse(combined.toString('utf8'))
-  } finally {
-    combined.fill(0)
-    for (const chunk of chunks) chunk.fill(0)
-  }
+function bodyError(statusCode, code, message) {
+  return Object.assign(new Error(message), { statusCode, code })
 }
 
-function sendJson(res, status, value, requestId) {
+export function readJson(req, {
+  maxBodyBytes = BODY_LIMIT,
+  bodyTimeoutMs = BODY_TIMEOUT_MS
+} = {}) {
+  const limit = Math.max(1, Math.floor(Number(maxBodyBytes) || BODY_LIMIT))
+  const timeout = Math.max(1, Math.floor(Number(bodyTimeoutMs) || BODY_TIMEOUT_MS))
+  const declaredLength = Number(req.headers?.['content-length'])
+  if (Number.isFinite(declaredLength) && declaredLength > limit) {
+    req.resume()
+    return Promise.reject(bodyError(
+      413,
+      'request_too_large',
+      `Request body exceeds ${Math.ceil(limit / 1024 / 1024)} MiB`
+    ))
+  }
+
+  return new Promise((resolve, reject) => {
+    const chunks = []
+    let size = 0
+    let settled = false
+    const clearChunks = () => {
+      for (const chunk of chunks) chunk.fill(0)
+      chunks.length = 0
+    }
+    const cleanup = () => {
+      clearTimeout(timer)
+      req.off('data', onData)
+      req.off('end', onEnd)
+      req.off('error', onError)
+      req.off('aborted', onAborted)
+    }
+    const fail = error => {
+      if (settled) return
+      settled = true
+      cleanup()
+      clearChunks()
+      req.resume()
+      reject(error)
+    }
+    const onData = chunkValue => {
+      const chunk = Buffer.from(chunkValue)
+      size += chunk.length
+      if (size > limit) {
+        chunk.fill(0)
+        return fail(bodyError(
+          413,
+          'request_too_large',
+          `Request body exceeds ${Math.ceil(limit / 1024 / 1024)} MiB`
+        ))
+      }
+      chunks.push(chunk)
+    }
+    const onEnd = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (!chunks.length) return resolve({})
+      const combined = Buffer.concat(chunks, size)
+      try {
+        resolve(JSON.parse(combined.toString('utf8')))
+      } catch {
+        reject(bodyError(400, 'invalid_json', 'Request body is not valid JSON'))
+      } finally {
+        combined.fill(0)
+        clearChunks()
+      }
+    }
+    const onError = error => fail(error)
+    const onAborted = () => fail(bodyError(408, 'request_aborted', 'Request body upload was aborted'))
+    const timer = setTimeout(
+      () => fail(bodyError(408, 'request_timeout', `Request body upload timed out after ${timeout} ms`)),
+      timeout
+    )
+    timer.unref?.()
+    req.on('data', onData)
+    req.once('end', onEnd)
+    req.once('error', onError)
+    req.once('aborted', onAborted)
+  })
+}
+
+function sendJson(res, status, value, requestId, headers = {}) {
   const payload = status === 204 ? '' : JSON.stringify(value)
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
@@ -58,7 +135,8 @@ function sendJson(res, status, value, requestId) {
     'cache-control': 'no-store',
     pragma: 'no-cache',
     'x-content-type-options': 'nosniff',
-    'x-request-id': requestId
+    'x-request-id': requestId,
+    ...headers
   })
   res.end(payload)
 }
@@ -328,7 +406,7 @@ export function createEdgeServer(options = {}) {
           requestId,
           retryable: error.retryable === true || statusCode >= 500
         }
-      }, requestId)
+      }, requestId, statusCode === 413 ? { connection: 'close' } : {})
     }
   })
 

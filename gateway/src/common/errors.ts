@@ -37,6 +37,18 @@ export class SafeError extends Error {
 
 export function toSafeError(error: unknown): SafeError {
   if (error instanceof SafeError) return error
+  if (
+    error &&
+    typeof error === 'object' &&
+    (error as { code?: unknown }).code === 'FST_ERR_CTP_BODY_TOO_LARGE'
+  ) {
+    return new SafeError({
+      code: 'request_too_large',
+      message: 'Request body exceeds the configured upload limit.',
+      statusCode: 413,
+      cause: error
+    })
+  }
   return new SafeError({
     code: 'internal_error',
     message: '服务暂时不可用，请稍后重试。',

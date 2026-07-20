@@ -6,6 +6,8 @@ export const GATEWAY_DEVELOPMENT_HOST = '127.0.0.1'
 export const GATEWAY_DEVELOPMENT_PORT = 47920
 export const EDGE_DEVELOPMENT_PORT = 47921
 export const PROVIDER_WORKER_DEVELOPMENT_PORT = 47930
+export const DEFAULT_REQUEST_BODY_MAX_MIB = 64
+export const DEFAULT_REQUEST_BODY_TIMEOUT_MS = 60_000
 
 export interface ProviderWorkerGatewayConfig {
   readonly origin: string
@@ -33,6 +35,10 @@ export interface GatewayConfig {
   }
   readonly authMode: 'real' | 'mock'
   readonly mockState: MockAccountState
+  readonly requestBody?: {
+    readonly maxBytes: number
+    readonly timeoutMs: number
+  }
   readonly providerWorker?: ProviderWorkerGatewayConfig
 }
 
@@ -78,6 +84,35 @@ function parseMockState(value: string | undefined): MockAccountState {
   const state = (value || 'ready') as MockAccountState
   if (!allowedMockStates.has(state)) throw new Error(`Unsupported mock account state: ${value}`)
   return state
+}
+
+function boundedPositiveNumber(
+  value: string | undefined,
+  fallback: number,
+  max: number
+): number {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return Math.min(parsed, max)
+}
+
+export function parseGatewayRequestBodyConfig(
+  env: NodeJS.ProcessEnv
+): NonNullable<GatewayConfig['requestBody']> {
+  const maxMiB = boundedPositiveNumber(
+    env.CODEX_PROXY_MAX_BODY_MIB,
+    DEFAULT_REQUEST_BODY_MAX_MIB,
+    256
+  )
+  const timeoutMs = boundedPositiveNumber(
+    env.CODEX_PROXY_BODY_TIMEOUT_MS,
+    DEFAULT_REQUEST_BODY_TIMEOUT_MS,
+    300_000
+  )
+  return {
+    maxBytes: Math.floor(maxMiB * 1024 * 1024),
+    timeoutMs: Math.floor(timeoutMs)
+  }
 }
 
 function parseProviderWorker(
@@ -253,6 +288,7 @@ export function loadGatewayConfig(
     },
     authMode,
     mockState: parseMockState(env.AI_EDITOR_MOCK_STATE),
+    requestBody: parseGatewayRequestBodyConfig(env),
     ...(providerWorker ? { providerWorker } : {})
   }
 }

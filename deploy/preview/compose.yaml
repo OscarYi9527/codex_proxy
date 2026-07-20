@@ -34,6 +34,8 @@ services:
       AI_EDITOR_PROVIDER_WORKER_EXECUTOR: ${AI_EDITOR_PREVIEW_EXECUTOR:-mock}
       HTTPS_PROXY: ${AI_EDITOR_WORKER_HTTPS_PROXY:-}
       HTTP_PROXY: ${AI_EDITOR_WORKER_HTTPS_PROXY:-}
+      CODEX_PROXY_MAX_BODY_MIB: ${CODEX_PROXY_MAX_BODY_MIB:-64}
+      CODEX_PROXY_BODY_TIMEOUT_MS: ${CODEX_PROXY_BODY_TIMEOUT_MS:-60000}
     volumes:
       - ./state/provider-worker:/opt/ai-editor/.ai-editor-dev/preview/provider-worker
 
@@ -55,6 +57,8 @@ services:
       AI_EDITOR_PROVIDER_WORKER_GATEWAY_ID: gateway-preview-local
       AI_EDITOR_PROVIDER_WORKER_ID: worker-preview-local
       AI_EDITOR_PROVIDER_WORKER_REGION: preview-local
+      CODEX_PROXY_MAX_BODY_MIB: ${CODEX_PROXY_MAX_BODY_MIB:-64}
+      CODEX_PROXY_BODY_TIMEOUT_MS: ${CODEX_PROXY_BODY_TIMEOUT_MS:-60000}
     volumes:
       - ./state/gateway:/opt/ai-editor/.ai-editor-dev/preview/gateway
 

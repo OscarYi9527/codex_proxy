@@ -5,7 +5,23 @@ import { assertCircuitAvailable, recordCircuitResult } from './circuit-breaker.j
 import { recordProviderOutcome } from './provider-health.js'
 import { attachHttpErrorGuide } from './error-guide.js'
 
-const MAX_BODY_BYTES = 16 * 1024 * 1024
+const DEFAULT_MAX_BODY_MIB = 64
+const DEFAULT_BODY_TIMEOUT_MS = 60_000
+
+function boundedPositiveNumber(value, fallback, max) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return Math.min(parsed, max)
+}
+
+const MAX_BODY_BYTES = Math.floor(
+  boundedPositiveNumber(process.env.CODEX_PROXY_MAX_BODY_MIB, DEFAULT_MAX_BODY_MIB, 256) *
+  1024 *
+  1024
+)
+const BODY_TIMEOUT_MS = Math.floor(
+  boundedPositiveNumber(process.env.CODEX_PROXY_BODY_TIMEOUT_MS, DEFAULT_BODY_TIMEOUT_MS, 300_000)
+)
 
 export function id(prefix = 'resp') {
   return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
@@ -48,15 +64,89 @@ export function sendJson(res, status, data, headers = {}) {
   res.end(text)
 }
 
-export async function readJson(req) {
-  const chunks = []
-  let size = 0
-  for await (const chunk of req) {
-    size += chunk.length
-    if (size > MAX_BODY_BYTES) throw new Error('Request body exceeds 16 MiB')
-    chunks.push(chunk)
+function requestBodyError(statusCode, type, message) {
+  const error = new Error(message)
+  error.statusCode = statusCode
+  error.type = type
+  error.code = type
+  return error
+}
+
+// Codex sends the complete Responses history on every tool continuation. Long
+// coding turns and image tool results can therefore exceed 16 MiB. Always
+// drain rejected uploads so a client that is still writing can receive the
+// error response instead of deadlocking on TCP backpressure.
+export function readJson(req, {
+  maxBodyBytes = MAX_BODY_BYTES,
+  bodyTimeoutMs = BODY_TIMEOUT_MS
+} = {}) {
+  const limit = Math.max(1, Math.floor(Number(maxBodyBytes) || MAX_BODY_BYTES))
+  const timeout = Math.max(1, Math.floor(Number(bodyTimeoutMs) || BODY_TIMEOUT_MS))
+  const declaredLength = Number(req.headers?.['content-length'])
+
+  if (Number.isFinite(declaredLength) && declaredLength > limit) {
+    req.resume?.()
+    return Promise.reject(requestBodyError(
+      413,
+      'request_too_large',
+      `Request body exceeds ${Math.ceil(limit / 1024 / 1024)} MiB`
+    ))
   }
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+
+  return new Promise((resolve, reject) => {
+    const chunks = []
+    let size = 0
+    let settled = false
+
+    const cleanup = () => {
+      clearTimeout(timer)
+      req.off('data', onData)
+      req.off('end', onEnd)
+      req.off('error', onError)
+      req.off('aborted', onAborted)
+    }
+    const fail = error => {
+      if (settled) return
+      settled = true
+      cleanup()
+      chunks.length = 0
+      req.resume?.()
+      reject(error)
+    }
+    const onData = chunk => {
+      size += chunk.length
+      if (size > limit) {
+        return fail(requestBodyError(
+          413,
+          'request_too_large',
+          `Request body exceeds ${Math.ceil(limit / 1024 / 1024)} MiB`
+        ))
+      }
+      chunks.push(chunk)
+    }
+    const onEnd = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks, size).toString('utf8')))
+      } catch {
+        reject(requestBodyError(400, 'invalid_json', 'Request body is not valid JSON'))
+      }
+    }
+    const onError = error => fail(error)
+    const onAborted = () => fail(requestBodyError(408, 'request_aborted', 'Request body upload was aborted'))
+    const timer = setTimeout(
+      () => fail(requestBodyError(408, 'request_timeout', `Request body upload timed out after ${timeout} ms`)),
+      timeout
+    )
+    timer.unref?.()
+
+    req.on('data', onData)
+    req.once('end', onEnd)
+    req.once('error', onError)
+    req.once('aborted', onAborted)
+  })
 }
 
 export function delay(ms) {

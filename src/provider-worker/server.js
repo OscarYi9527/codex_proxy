@@ -14,26 +14,109 @@ import { MockProviderExecutor } from './mock-executor.js'
 import { ChatgptSubscriptionExecutor } from './chatgpt-sub-executor.js'
 import { loadWorkerCredentialVault } from './credential-vault.js'
 
-const BODY_LIMIT = 16 * 1024 * 1024
+const DEFAULT_MAX_BODY_MIB = 64
+const DEFAULT_BODY_TIMEOUT_MS = 60_000
+
+function boundedPositiveNumber(value, fallback, max) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return Math.min(parsed, max)
+}
+
+const BODY_LIMIT = Math.floor(
+  boundedPositiveNumber(process.env.CODEX_PROXY_MAX_BODY_MIB, DEFAULT_MAX_BODY_MIB, 256) *
+  1024 *
+  1024
+)
+const BODY_TIMEOUT_MS = Math.floor(
+  boundedPositiveNumber(process.env.CODEX_PROXY_BODY_TIMEOUT_MS, DEFAULT_BODY_TIMEOUT_MS, 300_000)
+)
 const MAX_CACHED_RESPONSE_BYTES = 8 * 1024 * 1024
 function safeError(code, message, statusCode = 500, retryable = false) {
   return Object.assign(new Error(message), { code, statusCode, retryable })
 }
 
-async function readBody(req) {
-  const chunks = []
-  let size = 0
-  for await (const chunkValue of req) {
-    const chunk = Buffer.from(chunkValue)
-    size += chunk.length
-    if (size > BODY_LIMIT) {
-      chunk.fill(0)
-      for (const item of chunks) item.fill(0)
-      throw safeError('worker_request_too_large', 'Provider Worker request is too large', 413)
-    }
-    chunks.push(chunk)
+export function readBody(req, {
+  maxBodyBytes = BODY_LIMIT,
+  bodyTimeoutMs = BODY_TIMEOUT_MS
+} = {}) {
+  const limit = Math.max(1, Math.floor(Number(maxBodyBytes) || BODY_LIMIT))
+  const timeout = Math.max(1, Math.floor(Number(bodyTimeoutMs) || BODY_TIMEOUT_MS))
+  const declaredLength = Number(req.headers?.['content-length'])
+  if (Number.isFinite(declaredLength) && declaredLength > limit) {
+    req.resume()
+    return Promise.reject(safeError(
+      'worker_request_too_large',
+      `Provider Worker request exceeds ${Math.ceil(limit / 1024 / 1024)} MiB`,
+      413
+    ))
   }
-  return chunks.length ? Buffer.concat(chunks) : Buffer.alloc(0)
+
+  return new Promise((resolve, reject) => {
+    const chunks = []
+    let size = 0
+    let settled = false
+    const clearChunks = () => {
+      for (const chunk of chunks) chunk.fill(0)
+      chunks.length = 0
+    }
+    const cleanup = () => {
+      clearTimeout(timer)
+      req.off('data', onData)
+      req.off('end', onEnd)
+      req.off('error', onError)
+      req.off('aborted', onAborted)
+    }
+    const fail = error => {
+      if (settled) return
+      settled = true
+      cleanup()
+      clearChunks()
+      req.resume()
+      reject(error)
+    }
+    const onData = chunkValue => {
+      const chunk = Buffer.from(chunkValue)
+      size += chunk.length
+      if (size > limit) {
+        chunk.fill(0)
+        return fail(safeError(
+          'worker_request_too_large',
+          `Provider Worker request exceeds ${Math.ceil(limit / 1024 / 1024)} MiB`,
+          413
+        ))
+      }
+      chunks.push(chunk)
+    }
+    const onEnd = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (!chunks.length) return resolve(Buffer.alloc(0))
+      const body = Buffer.concat(chunks, size)
+      clearChunks()
+      resolve(body)
+    }
+    const onError = error => fail(error)
+    const onAborted = () => fail(safeError(
+      'worker_request_aborted',
+      'Provider Worker request upload was aborted',
+      408
+    ))
+    const timer = setTimeout(
+      () => fail(safeError(
+        'worker_request_timeout',
+        `Provider Worker request upload timed out after ${timeout} ms`,
+        408
+      )),
+      timeout
+    )
+    timer.unref?.()
+    req.on('data', onData)
+    req.once('end', onEnd)
+    req.once('error', onError)
+    req.once('aborted', onAborted)
+  })
 }
 
 function parseJson(body) {
@@ -68,6 +151,12 @@ function sendSafeError(res, error, requestId) {
   const statusCode = Number(error.statusCode || error.status) || 500
   const retryAfterMs = Number(error.retryAfterMs)
   const isCircuitRecovery = error.code === 'CIRCUIT_OPEN'
+  const headers = {
+    ...(Number.isFinite(retryAfterMs) && retryAfterMs > 0
+      ? { 'retry-after': String(Math.max(1, Math.ceil(retryAfterMs / 1000))) }
+      : {}),
+    ...(statusCode === 413 ? { connection: 'close' } : {})
+  }
   sendJson(res, statusCode, {
     error: {
       code: isCircuitRecovery ? 'upstream_recovering' : (error.code || 'worker_internal_error'),
@@ -80,9 +169,7 @@ function sendSafeError(res, error, requestId) {
         ? { retryAfterMs }
         : {})
     }
-  }, requestId, Number.isFinite(retryAfterMs) && retryAfterMs > 0
-    ? { 'retry-after': String(Math.max(1, Math.ceil(retryAfterMs / 1000))) }
-    : {})
+  }, requestId, headers)
 }
 
 function isLoopback(remoteAddress = '') {

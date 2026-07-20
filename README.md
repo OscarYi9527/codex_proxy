@@ -508,6 +508,8 @@ Gateway、macOS Keychain 以及信封加密门禁。
 | `CODEX_OPENAI_API_CHAT_COMPLETIONS_URL` | `${CODEX_OPENAI_API_BASE_URL}/chat/completions` | GPT API Chat Completions 上游 |
 | `CODEX_PROXY_HOST` | `127.0.0.1` | 本地监听地址 |
 | `CODEX_PROXY_PORT` | `47892` | 本地监听端口 |
+| `CODEX_PROXY_MAX_BODY_MIB` | `64` | 请求体上限（MiB），最高限制为 256 |
+| `CODEX_PROXY_BODY_TIMEOUT_MS` | `60000` | 不完整上传超时，最高限制为 300000 毫秒 |
 | `CODEX_PROXY_DEFAULT_MODEL` | `gpt-5.6-sol` | 请求未指定模型时的默认值（GPT-5.6 Sol 订阅版） |
 | `CODEX_SAFE_AUTO_FAILOVER` | `0` | 设为 `1` 启用自动 GPT 回退 |
 | `CODEX_ROUTE` | `deepseek` | `codex-safe.ps1` 默认启动路由 |

@@ -12,6 +12,32 @@ describe('Gateway fixed development configuration', () => {
     expect(config.dataRoot).toBe(path.join(repositoryRoot, '.ai-editor-dev', 'gateway'))
     expect(config.database.sqliteFile).toBe(path.join(config.dataRoot, 'gateway.sqlite'))
     expect(config.authMode).toBe('real')
+    expect(config.requestBody).toEqual({
+      maxBytes: 64 * 1024 * 1024,
+      timeoutMs: 60_000
+    })
+  })
+
+  it('bounds configurable request body limits and upload timeouts', () => {
+    const configured = loadGatewayConfig({
+      NODE_ENV: 'test',
+      CODEX_PROXY_MAX_BODY_MIB: '128',
+      CODEX_PROXY_BODY_TIMEOUT_MS: '90000'
+    }, { repositoryRoot })
+    expect(configured.requestBody).toEqual({
+      maxBytes: 128 * 1024 * 1024,
+      timeoutMs: 90_000
+    })
+
+    const bounded = loadGatewayConfig({
+      NODE_ENV: 'test',
+      CODEX_PROXY_MAX_BODY_MIB: '999',
+      CODEX_PROXY_BODY_TIMEOUT_MS: '999999'
+    }, { repositoryRoot })
+    expect(bounded.requestBody).toEqual({
+      maxBytes: 256 * 1024 * 1024,
+      timeoutMs: 300_000
+    })
   })
 
   it('rejects shared port, public development host, and repository data root', () => {

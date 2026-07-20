@@ -17,7 +17,11 @@ const config: GatewayConfig = {
     sqliteFile: ':memory:'
   },
   authMode: 'mock',
-  mockState: 'ready'
+  mockState: 'ready',
+  requestBody: {
+    maxBytes: 1024,
+    timeoutMs: 60_000
+  }
 }
 
 describe('Gateway safe Mock API contract', () => {
@@ -61,6 +65,26 @@ describe('Gateway safe Mock API contract', () => {
       expect(response.json().error).toHaveProperty(field)
     }
     expect(response.headers['cache-control']).toBe('no-store')
+  })
+
+  it('returns a stable 413 when the configured Gateway body limit is exceeded', async () => {
+    const response = await gateway.app.inject({
+      method: 'POST',
+      url: '/api/v1/account/webview-ticket',
+      headers: { authorization: 'Bearer mock-access-token' },
+      payload: {
+        audience: `https://${'x'.repeat(2 * 1024)}.example`,
+        purpose: 'account-management'
+      }
+    })
+    expect(response.statusCode).toBe(413)
+    expect(response.headers.connection).toBe('close')
+    expect(response.json()).toMatchObject({
+      error: {
+        code: 'request_too_large',
+        retryable: false
+      }
+    })
   })
 
   it('returns safe status and account-filtered mock models', async () => {

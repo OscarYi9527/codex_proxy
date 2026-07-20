@@ -43,11 +43,23 @@ function proxyErrorStatus(error) {
 function sendProxyError(res, error) {
   const status = proxyErrorStatus(error)
   const retryAfterMs = Number(error?.retryAfterMs)
+  const requestErrorType = typeof error?.type === 'string' &&
+    /^[a-z0-9_]{1,64}$/.test(error.type)
+    ? error.type
+    : null
   const type = error?.code === 'CIRCUIT_OPEN'
     ? 'upstream_recovering'
     : (error?.code === 'NO_VIRTUAL_ROUTE'
         ? 'route_unavailable'
-        : (error?.code === 'BUDGET_EXCEEDED' ? 'budget_exceeded' : 'proxy_error'))
+        : (error?.code === 'BUDGET_EXCEEDED'
+            ? 'budget_exceeded'
+            : (requestErrorType || 'proxy_error')))
+  const headers = {
+    ...(Number.isFinite(retryAfterMs) && retryAfterMs > 0
+      ? { 'retry-after': String(Math.max(1, Math.ceil(retryAfterMs / 1000))) }
+      : {}),
+    ...(status === 413 ? { connection: 'close' } : {})
+  }
   return sendJson(res, status, {
     error: {
       type,
@@ -55,9 +67,7 @@ function sendProxyError(res, error) {
       ...(error?.code === 'CIRCUIT_OPEN' ? { retryable: true } : {}),
       ...(error?.decision ? { details: error.decision } : {})
     }
-  }, Number.isFinite(retryAfterMs) && retryAfterMs > 0
-    ? { 'retry-after': String(Math.max(1, Math.ceil(retryAfterMs / 1000))) }
-    : {})
+  }, headers)
 }
 
 function processIsAlive(pid) {

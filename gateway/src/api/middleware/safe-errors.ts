@@ -17,6 +17,9 @@ export function registerSafeErrors(app: FastifyInstance, logger: SafeLogger): vo
         String(Math.max(1, Math.ceil(safe.retryAfterMs / 1000)))
       )
     }
+    if (safe.statusCode === 413) {
+      void reply.header('connection', 'close')
+    }
     void reply
       .status(safe.statusCode)
       .send(safeErrorBody(safe, request.safeRequestId || request.id))

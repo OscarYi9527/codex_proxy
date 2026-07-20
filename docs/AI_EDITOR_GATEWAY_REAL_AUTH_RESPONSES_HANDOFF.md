@@ -1,6 +1,7 @@
 # AI Editor 真实认证与 Responses 联调交接给 Oscar
 
-日期：2026-07-18
+初版日期：2026-07-18<br>
+最近复核：2026-07-21
 
 ## 同步坐标
 
@@ -13,6 +14,7 @@ My_Code:
 codex_proxy:
   branch: feature/ai-editor-account-gateway
   stacked on: feature/custom-api-urls@e3ed1d6
+  verified feature baseline: c75dcd924d58bd6a64629b26e4f8b5e4d63efa7a
 ```
 
 未修改接口合同。后续 endpoint、JSON 字段、状态码或安全语义变化，仍须先修改上述
@@ -130,3 +132,36 @@ Gateway 运行文件仅位于专用数据根。管理外壳复核确认 `/admin=
 
 Mock `gpt-mock`、随机 Webview ticket 或仅有 `response.completed` 的 fake adapter 测试，
 均不能替代真实 AI 链路或后续积分结算证据。
+
+## 2026-07-21 补充复核
+
+standalone 账号池在上述 Gateway 合同之外新增了：
+
+- 稳定保险池、日抛优先池、额度归零后 7 天未恢复自动弃号；
+- 导入/官方登录时写入账号分类；
+- 用量和重置次数同步；
+- 非消耗式全账号状态检查，区分明确封禁、鉴权、权限、额度、限流和临时网络故障；
+- 官方登录弹窗关闭/重开时清理遗留登录会话。
+
+这些 standalone 管理接口没有修改 My_Code 的 Edge/Gateway 合同。若后续把账号分级和
+健康治理迁移为 Gateway 中央能力，必须先新增并评审合同，不能让 Code 直接依赖
+standalone `/admin/api/*`。
+
+2026-07-21 发布门禁结果：
+
+```text
+standalone/edge: 131 tests passed
+gateway:         16 suites / 59 tests passed
+admin-web:       2 suites / 8 tests passed
+Gateway coverage:
+  statements 88.80%
+  branches   70.23%
+  functions  94.88%
+  lines      91.51%
+npm audit --omit=dev --audit-level=moderate: 0 vulnerabilities
+```
+
+分支覆盖率尚未达到 80%，低覆盖模块和下一阶段 N001–N024 需求见
+[`NEXT_DEVELOPMENT_ROADMAP.md`](NEXT_DEVELOPMENT_ROADMAP.md)。审计时开发 shell 检测到
+继承的 `NODE_TLS_REJECT_UNAUTHORIZED=0`；standalone 安装启动器会覆盖为 1，但
+Gateway/Edge 开发启动仍需完成 N006 的显式 TLS fail-closed 门禁。

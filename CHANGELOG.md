@@ -25,6 +25,8 @@
 - 新增 Level-1 Provider、凭据、模型路由和安全诊断 API，以及 Provider/诊断 React 页面。
 - 新增 Gateway 隔离 `CODEX_HOME` 的 OpenAI 官方登录端点；认证临时目录在导入后删除。
 - 新增数据库 Relay 配置驱动真实模型目录和 SSE Responses 的非 Mock 集成测试。
+- 新增下一阶段开发需求深挖文档，基于代码证据拆分 standalone 大号池任务化、Gateway
+  凭据加密、组织/RBAC、Turn 风险、幂等结算、中央账号池和真实联合验收 N001–N024。
 - 新增 ChatGPT 账号文件快捷导入，兼容 auth.json、sub2/CPA JSON 和完整凭据 TXT；
   批量导入默认跳过重复账号并保持“仅保存”状态。
 - 新增缺少 ChatGPT Refresh Token 时的批量官方登录队列：本地解析 CPA/sub2/TXT、

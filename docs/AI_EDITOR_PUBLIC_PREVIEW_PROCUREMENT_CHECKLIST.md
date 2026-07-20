@@ -80,3 +80,20 @@ purchase:
 - multi-region disaster recovery.
 
 These become mandatory before user 31 according to the long-term roadmap.
+
+## Machine-readable production decision gate
+
+The vendor-neutral preflight is available before any purchase:
+
+```powershell
+npm run production:preflight -- `
+  --config deploy\production\readiness.example.json `
+  --report .ai-editor-dev\production-readiness-report.json `
+  --report-only
+```
+
+Copy the example to a Git-ignored operator location after vendors are chosen.
+Do not add passwords, database URLs, API keys, Tokens, private keys, signing
+secrets or Provider credentials. The strict command must report `ready` before
+T137 deployment begins, but it does not replace the real cloud KMS adapter,
+restore drill or human production approval.

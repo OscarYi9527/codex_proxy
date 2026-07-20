@@ -51,6 +51,11 @@ T136b remains blocked on the explicit choice of:
 - the authorized-region Worker cloud/KMS or Secret Manager;
 - production PostgreSQL and encrypted object-storage backup services.
 
+The vendor-neutral decision preflight added on 2026-07-21 is documented in
+`docs/AI_EDITOR_PRODUCTION_PREFLIGHT_HANDOFF.md`. It records and validates the
+future choices without storing secrets, but intentionally cannot satisfy
+T136b until the selected cloud adapters and real recovery drills exist.
+
 ## Operator commands
 
 Run from the repository root against the isolated development Gateway:

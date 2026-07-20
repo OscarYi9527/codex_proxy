@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "deploymentStage": "public-mvp-1-30",
+  "accountCapacity": 30,
+  "gateway": {
+    "hostingProvider": "pending",
+    "region": "pending",
+    "publicOrigin": "https://gateway.cocoduck.live",
+    "compute": {
+      "vcpu": 4,
+      "memoryGiB": 8,
+      "storageGiB": 100,
+      "bandwidthMbps": 5,
+      "fixedPublicIp": false
+    },
+    "icpFiling": {
+      "required": true,
+      "completed": false
+    },
+    "waf": {
+      "product": "SafeLine Community Edition",
+      "configured": false
+    },
+    "kms": {
+      "provider": "pending",
+      "adapter": "pending",
+      "adapterImplemented": false,
+      "rotationTested": false
+    }
+  },
+  "providerWorker": {
+    "hostingProvider": "pending",
+    "region": "pending",
+    "providerRegionAuthorized": false,
+    "origin": "https://worker.cocoduck.live",
+    "compute": {
+      "vcpu": 2,
+      "memoryGiB": 4,
+      "storageGiB": 40,
+      "fixedPublicIp": false
+    },
+    "mtls": {
+      "enabled": false,
+      "rotationDays": 90,
+      "rotationTested": false
+    },
+    "kms": {
+      "provider": "pending",
+      "adapter": "pending",
+      "adapterImplemented": false,
+      "rotationTested": false
+    }
+  },
+  "database": {
+    "engine": "postgresql",
+    "service": "pending",
+    "majorVersion": 16,
+    "tlsMode": "verify-full",
+    "leastPrivilegeVerified": false,
+    "migrationDryRunPassed": false,
+    "rollbackDryRunPassed": false
+  },
+  "backup": {
+    "objectStorageProvider": "pending",
+    "offHost": true,
+    "versioningEnabled": false,
+    "encrypted": true,
+    "retentionDays": 30,
+    "restoreDrillPassed": false
+  },
+  "monitoring": {
+    "host": false,
+    "disk": false,
+    "certificate": false,
+    "gateway": false,
+    "worker": false,
+    "backup": false
+  },
+  "source": {
+    "gatewayCommit": "pending",
+    "workerCommit": "pending",
+    "codeCommit": "pending",
+    "releaseCheckPassed": false,
+    "secretScanPassed": false,
+    "finalEdgeProductPassed": false
+  },
+  "approvals": {
+    "infrastructureApproved": false,
+    "securityApproved": false,
+    "productionDeploymentApproved": false
+  }
+}

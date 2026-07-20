@@ -28,6 +28,7 @@
     "test:gateway-stack": "npm run gateway:test && npm run admin:test",
     "test:dev-scripts": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test-dev-scripts.ps1",
     "test:provider-worker": "node --test tests/test-provider-worker.js",
+    "production:preflight": "node scripts/check-production-readiness.mjs",
     "provider-worker:release-check": "node scripts/provider-worker-release-check.mjs",
     "provider-worker:build-release": "node scripts/build-provider-worker-release.mjs",
     "release:check": "node scripts/release-check.mjs"

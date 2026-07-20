@@ -89,8 +89,10 @@ function Write-ReleaseManifest {
     $package = Get-Content -LiteralPath (Join-Path $SourceDir 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     $commit = $null
     try {
-        $commit = (& git -C $SourceDir rev-parse HEAD 2>$null | Select-Object -First 1).Trim()
-        if ($LASTEXITCODE -ne 0) { $commit = $null }
+        $output = & git -C $SourceDir rev-parse HEAD 2>$null
+        $exitCode = $LASTEXITCODE
+        $commit = ([string]($output | Select-Object -First 1)).Trim()
+        if ($exitCode -ne 0) { $commit = $null }
     } catch {}
     $hashes = [ordered]@{}
     foreach ($relativePath in $RuntimeList.files) {

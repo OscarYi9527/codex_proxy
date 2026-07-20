@@ -47,8 +47,10 @@ function Get-Hash([string]$Path) {
 
 function Get-GitCommit([string]$Root) {
     try {
-        $commit = (& git -C $Root rev-parse HEAD 2>$null | Select-Object -First 1).Trim()
-        if ($LASTEXITCODE -eq 0 -and $commit) { return $commit }
+        $output = & git -C $Root rev-parse HEAD 2>$null
+        $exitCode = $LASTEXITCODE
+        $commit = ([string]($output | Select-Object -First 1)).Trim()
+        if ($exitCode -eq 0 -and $commit) { return $commit }
     } catch {}
     return $null
 }
@@ -225,7 +227,7 @@ try {
         commit = $commit
         source_root = $SourceDir
         backup_root = $backupRoot
-        changed_files = @($changed.path)
+        changed_files = @($changed | ForEach-Object { $_.path })
     })
     Write-Step "success; changed=$($changed.Count); backup=$backupRoot"
 } catch {

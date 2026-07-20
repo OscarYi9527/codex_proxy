@@ -3,9 +3,11 @@ $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $start = Join-Path $repo 'tools\start-ai-editor-dev.ps1'
 $stop = Join-Path $repo 'tools\stop-ai-editor-dev.ps1'
 $reset = Join-Path $repo 'tools\reset-ai-editor-dev.ps1'
+$update = Join-Path $repo 'update-codex-proxy.ps1'
 $testRoot = Join-Path $repo '.ai-editor-dev\script-contract-test'
 $pidGuardRoot = Join-Path $repo '.ai-editor-dev\script-pid-guard-test'
 $lifecycleRoot = Join-Path $repo '.ai-editor-dev\script-lifecycle-test'
+$deploymentRoot = Join-Path $repo '.ai-editor-dev\deployment-contract-test'
 
 function Assert-Throws {
     param(
@@ -67,6 +69,26 @@ try {
     & $reset -DataRoot $testRoot -ConfirmDataRoot $testRoot -Force
     if (Test-Path -LiteralPath $testRoot) {
         throw 'Confirmed reset did not remove the isolated target'
+    }
+
+    if (Test-Path -LiteralPath $deploymentRoot) {
+        Remove-Item -LiteralPath $deploymentRoot -Recurse -Force
+    }
+    & $update -InstallDir $deploymentRoot -NoRestart
+    $expectedCommit = (& git -C $repo rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $expectedCommit) {
+        throw 'Could not resolve the repository commit for deployment contract testing'
+    }
+    $manifest = Get-Content -LiteralPath (Join-Path $deploymentRoot '.release-manifest.json') -Raw |
+        ConvertFrom-Json
+    if ($manifest.commit -ne $expectedCommit) {
+        throw "Deployment manifest commit mismatch: expected $expectedCommit, got $($manifest.commit)"
+    }
+    & $update -InstallDir $deploymentRoot -NoRestart
+    $deployment = Get-Content -LiteralPath (Join-Path $deploymentRoot '.last-deployment.json') -Raw |
+        ConvertFrom-Json
+    if (@($deployment.changed_files).Count -ne 0) {
+        throw 'No-change deployment must write an empty changed_files array'
     }
 
     New-Item -ItemType Directory -Force -Path $pidGuardRoot | Out-Null
@@ -154,5 +176,8 @@ try {
     }
     if (Test-Path -LiteralPath $testRoot) {
         Remove-Item -LiteralPath $testRoot -Recurse -Force
+    }
+    if (Test-Path -LiteralPath $deploymentRoot) {
+        Remove-Item -LiteralPath $deploymentRoot -Recurse -Force
     }
 }

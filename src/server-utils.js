@@ -68,6 +68,7 @@ function requestBodyError(statusCode, type, message) {
   const error = new Error(message)
   error.statusCode = statusCode
   error.type = type
+  error.code = type
   return error
 }
 

@@ -71,6 +71,40 @@ The script:
 The generated origin is stored in
 `state/preview-origin.txt`. It changes when the quick tunnel is recreated.
 
+### Windows AI Editor acceptance
+
+The management shell is served at `/admin`, but it intentionally cannot create
+an authenticated session when opened as a standalone browser page. Start a
+loopback Edge on the Windows test client and let AI Editor Code perform the
+PKCE login, one-time handoff and Webview-ticket exchange:
+
+```powershell
+$origin = 'https://replace-with-current.trycloudflare.com'
+$dataRoot = 'D:\AI_prejoct\codex_proxy-provider-worker\.ai-editor-dev\public-preview-client'
+
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  D:\AI_prejoct\codex_proxy-provider-worker\tools\start-ai-editor-dev.ps1 `
+  -Mode edge `
+  -AuthenticationMode real `
+  -GatewayOrigin $origin `
+  -DataRoot $dataRoot
+```
+
+Launch the development Code process from the same PowerShell after setting
+`VSCODE_AI_EDITOR_ACCOUNT_EDGE_ORIGIN` to `http://127.0.0.1:47921`,
+`VSCODE_AI_EDITOR_ACCOUNT_GATEWAY_ORIGIN` to the current public origin, and
+`VSCODE_AI_EDITOR_ACCOUNT_EDGE_NONCE_FILE` to
+`$dataRoot\edge-local-nonce.secret`. The Code account menu opens the system
+browser for login and opens `/admin` only after exchanging a one-time Webview
+ticket. Stop only this isolated Edge with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  D:\AI_prejoct\codex_proxy-provider-worker\tools\stop-ai-editor-dev.ps1 `
+  -Mode edge `
+  -DataRoot $dataRoot
+```
+
 VMware NAT can receive Clash `198.18.0.0/15` fake-IP answers without receiving
 the corresponding TUN route. Preview therefore uses Cloudflare HTTP/2 and
 pins `region1.v2.argotunnel.com` / `region2.v2.argotunnel.com` to current

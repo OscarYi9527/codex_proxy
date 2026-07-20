@@ -4,6 +4,7 @@ param(
     [string]$Mode = 'all',
     [string]$DataRoot,
     [int]$GatewayPort = 47920,
+    [string]$GatewayOrigin,
     [int]$EdgePort = 47921,
     [int]$ProviderWorkerPort = 47930,
     [ValidateSet('ready', 'login_required', 'account_unavailable', 'service_unavailable', 'password_change_required')]
@@ -39,6 +40,34 @@ if (@(@($GatewayPort, $EdgePort, $ProviderWorkerPort) | Select-Object -Unique).C
     throw 'Gateway, Edge, and Provider Worker ports must be different'
 }
 
+$edgeGatewayOrigin = "http://127.0.0.1:$GatewayPort"
+if (-not [string]::IsNullOrWhiteSpace($GatewayOrigin)) {
+    if ($Mode -ne 'edge') {
+        throw 'GatewayOrigin can only be overridden when Mode is edge'
+    }
+    try {
+        $gatewayUri = [Uri]::new($GatewayOrigin, [UriKind]::Absolute)
+    } catch {
+        throw 'GatewayOrigin must be an absolute HTTP or HTTPS origin'
+    }
+    if (
+        $gatewayUri.Scheme -ne 'https' -or
+        [string]::IsNullOrWhiteSpace($gatewayUri.Host) -or
+        -not [string]::IsNullOrEmpty($gatewayUri.UserInfo) -or
+        -not [string]::IsNullOrEmpty($gatewayUri.Query) -or
+        -not [string]::IsNullOrEmpty($gatewayUri.Fragment) -or
+        $gatewayUri.AbsolutePath -ne '/'
+    ) {
+        throw 'GatewayOrigin override must be an HTTPS origin without credentials, path, query, or fragment'
+    }
+    $edgeGatewayOrigin = $gatewayUri.GetLeftPart([UriPartial]::Authority)
+}
+$edgeNodeEnvironment = if ([string]::IsNullOrWhiteSpace($GatewayOrigin)) {
+    'development'
+} else {
+    'production'
+}
+
 $node = (Get-Command node -ErrorAction Stop).Source
 $npm = (Get-Command npm.cmd -ErrorAction Stop).Source
 $tsxPackage = Join-Path $repo 'node_modules\tsx\package.json'
@@ -52,6 +81,8 @@ if ($ValidateOnly) {
         mode = $Mode
         dataRoot = $DataRoot
         gateway = "http://127.0.0.1:$GatewayPort"
+        edgeGatewayOrigin = $edgeGatewayOrigin
+        edgeNodeEnvironment = $edgeNodeEnvironment
         edge = "http://127.0.0.1:$EdgePort"
         providerWorker = "http://127.0.0.1:$ProviderWorkerPort"
         providerWorkerExecutor = $ProviderWorkerExecutor
@@ -181,12 +212,12 @@ try {
             -NodePath $node `
             -Arguments @((Join-Path $repo 'src\launcher.js'), '--mode', 'edge') `
             -Environment @{
-                NODE_ENV = 'development'
+                NODE_ENV = $edgeNodeEnvironment
                 CODEX_PROXY_MODE = 'edge'
                 AI_EDITOR_EDGE_HOST = '127.0.0.1'
                 AI_EDITOR_EDGE_PORT = $EdgePort
                 AI_EDITOR_EDGE_DATA_ROOT = $edgeRoot
-                AI_EDITOR_GATEWAY_ORIGIN = "http://127.0.0.1:$GatewayPort"
+                AI_EDITOR_GATEWAY_ORIGIN = $edgeGatewayOrigin
                 AI_EDITOR_EDGE_LOCAL_NONCE = $localNonce
                 AI_EDITOR_EDGE_AUTH_MODE = $AuthenticationMode
                 AI_EDITOR_MOCK_STATE = $MockState
@@ -199,7 +230,7 @@ try {
             -Port $EdgePort `
             -ProcessId $processId `
             -DataRoot $DataRoot
-        Write-Host "Edge healthy: PID $processId, http://127.0.0.1:$EdgePort"
+        Write-Host "Edge healthy: PID $processId, http://127.0.0.1:$EdgePort -> $edgeGatewayOrigin"
     }
 } catch {
     for ($index = $startedModes.Count - 1; $index -ge 0; $index--) {

@@ -53,6 +53,14 @@ try {
     if ($mockValid.providerWorkerExecutor -ne 'mock') {
         throw 'Mock account mode must keep the mock Provider Worker executor'
     }
+    $publicEdgeValid = & $start -Mode edge -DataRoot $testRoot `
+        -GatewayOrigin 'https://preview.example.com/' -AuthenticationMode real -ValidateOnly
+    if ($publicEdgeValid.edgeGatewayOrigin -ne 'https://preview.example.com') {
+        throw 'Edge-only development mode must normalize an explicit public Gateway origin'
+    }
+    if ($publicEdgeValid.edgeNodeEnvironment -ne 'production') {
+        throw 'An Edge connected to a public Gateway must use production safety checks'
+    }
 
     Assert-Throws -Message 'Shared port 47892 must be rejected' -Action {
         & $start -Mode gateway -DataRoot $testRoot -GatewayPort 47892 -ValidateOnly
@@ -66,6 +74,22 @@ try {
     }
     Assert-Throws -Message 'Provider Worker must use isolated port 47930' -Action {
         & $start -Mode provider-worker -DataRoot $testRoot -ProviderWorkerPort 47892 -ValidateOnly
+    }
+    Assert-Throws -Message 'Gateway origin override must be edge-only' -Action {
+        & $start -Mode all -DataRoot $testRoot `
+            -GatewayOrigin 'https://preview.example.com' -ValidateOnly
+    }
+    Assert-Throws -Message 'Gateway origin must reject a path' -Action {
+        & $start -Mode edge -DataRoot $testRoot `
+            -GatewayOrigin 'https://preview.example.com/api' -ValidateOnly
+    }
+    Assert-Throws -Message 'Gateway origin must reject credentials' -Action {
+        & $start -Mode edge -DataRoot $testRoot `
+            -GatewayOrigin 'https://user:pass@preview.example.com' -ValidateOnly
+    }
+    Assert-Throws -Message 'Gateway origin override must require HTTPS' -Action {
+        & $start -Mode edge -DataRoot $testRoot `
+            -GatewayOrigin 'http://preview.example.com' -ValidateOnly
     }
 
     New-Item -ItemType Directory -Force -Path $testRoot | Out-Null

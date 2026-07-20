@@ -13,6 +13,14 @@ function parseEnvironment(value) {
   return environment
 }
 
+function parseExecutorMode(value) {
+  const mode = value || 'mock'
+  if (!['mock', 'chatgpt-sub'].includes(mode)) {
+    throw new Error(`Unsupported Provider Worker executor: ${mode}`)
+  }
+  return mode
+}
+
 function parsePort(value, environment) {
   const port = value ? Number(value) : PROVIDER_WORKER_DEVELOPMENT_PORT
   if (!Number.isInteger(port) || port < 1024 || port > 65535 || port === 47892) {
@@ -123,6 +131,9 @@ export function loadProviderWorkerConfig(
   )
   return {
     environment,
+    executorMode: parseExecutorMode(
+      env.AI_EDITOR_PROVIDER_WORKER_EXECUTOR
+    ),
     host: parseHost(env.AI_EDITOR_PROVIDER_WORKER_HOST, environment),
     port: parsePort(env.AI_EDITOR_PROVIDER_WORKER_PORT, environment),
     dataRoot,

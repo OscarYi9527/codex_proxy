@@ -41,6 +41,9 @@ fs.writeFileSync(path.join(target, 'package.json'), `${JSON.stringify({
   private: true,
   type: 'module',
   engines: { node: '>=22.19.0' },
+  dependencies: {
+    undici: '^8.7.0'
+  },
   scripts: {
     start: 'node src/launcher.js --mode provider-worker'
   }

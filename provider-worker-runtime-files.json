@@ -9,10 +9,26 @@
     "src/launcher.js",
     "src/mode.js",
     "src/provider-worker/config.js",
+    "src/provider-worker/chatgpt-sub-executor.js",
     "src/provider-worker/mock-executor.js",
     "src/provider-worker/nonce-store.js",
     "src/provider-worker/protocol.js",
     "src/provider-worker/server.js",
-    "src/provider-worker/turn-store.js"
+    "src/provider-worker/turn-store.js",
+    "src/chatgpt-accounts.js",
+    "src/china-fetch.js",
+    "src/circuit-breaker.js",
+    "src/config.js",
+    "src/convert/tool-ids.js",
+    "src/credential-store.js",
+    "src/error-guide.js",
+    "src/logger.js",
+    "src/migrations.js",
+    "src/pricing.js",
+    "src/provider-health.js",
+    "src/route-decisions.js",
+    "src/routes/chatgpt-sub.js",
+    "src/server-utils.js",
+    "src/stats.js"
   ]
 }

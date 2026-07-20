@@ -4,8 +4,10 @@ import https from 'node:https'
 import { type FastifyReply, type FastifyRequest } from 'fastify'
 import { SafeError } from '../common/errors.js'
 import type {
+  GatewayProviderRuntimeConfiguration,
   ProviderForwardResult,
   ProviderRouteAdapter,
+  SafeAccountPoolSnapshot,
   SafeModelList
 } from '../routing/standalone-route-adapter.js'
 import type { ProviderWorkerGatewayConfig } from '../config.js'
@@ -133,39 +135,84 @@ export class ProviderWorkerClient implements ProviderRouteAdapter {
   }
 
   async listModels(): Promise<SafeModelList> {
-    const body = Buffer.alloc(0)
-    try {
-      const response = await this.request(
-        'GET',
-        '/internal/v1/models',
-        body,
-        '',
-        `req_worker_models_${this.now()}`
+    const value = await this.requestJson<SafeModelList>(
+      'GET',
+      '/internal/v1/models',
+      undefined,
+      'models'
+    )
+    if (
+      value.object !== 'list' ||
+      !Array.isArray(value.data) ||
+      value.data.some(model =>
+        typeof model?.id !== 'string' ||
+        model.object !== 'model' ||
+        typeof model.owned_by !== 'string'
       )
-      const payload = await readLimited(response, MAX_JSON_BYTES)
-      try {
-        if (response.statusCode !== 200) {
-          throw parseSafeWorkerError(response.statusCode || 502, payload)
-        }
-        const value = JSON.parse(payload.toString('utf8')) as SafeModelList
-        if (
-          value.object !== 'list' ||
-          !Array.isArray(value.data) ||
-          value.data.some(model =>
-            typeof model?.id !== 'string' ||
-            model.object !== 'model' ||
-            typeof model.owned_by !== 'string'
-          )
-        ) {
-          throw workerError('provider_worker_model_catalog_invalid', 502, true)
-        }
-        return value
-      } finally {
-        payload.fill(0)
-      }
-    } finally {
-      body.fill(0)
+    ) {
+      throw workerError('provider_worker_model_catalog_invalid', 502, true)
     }
+    return value
+  }
+
+  async configureProviders(
+    configuration: GatewayProviderRuntimeConfiguration
+  ): Promise<void> {
+    const routedModels = configuration.fallbackChain
+      .filter(route => route.provider === 'chatgpt-sub')
+      .map(route => route.model)
+    const modelIds = [...new Set([
+      ...routedModels,
+      ...configuration.modelIds.filter(model => /^gpt-/i.test(model))
+    ])]
+    const accounts = configuration.chatgptAccounts.map(account => ({ ...account }))
+    await this.requestJson(
+      'PUT',
+      '/internal/v1/runtime/chatgpt-sub',
+      {
+        schemaVersion: 1,
+        provider: 'chatgpt-sub',
+        enabled: accounts.some(account =>
+          account['routing_enabled'] !== false &&
+          Boolean(account['access_token'] || account['refresh_token'])
+        ),
+        experimental: true,
+        responsesUrl: configuration.chatgptResponsesUrl,
+        accountStrategy: configuration.chatgptAccountStrategy,
+        accounts,
+        modelIds
+      },
+      'configure_chatgpt'
+    )
+  }
+
+  async safeAccountPool(): Promise<SafeAccountPoolSnapshot> {
+    return this.requestJson<SafeAccountPoolSnapshot>(
+      'GET',
+      '/internal/v1/runtime/chatgpt-sub/accounts',
+      undefined,
+      'account_pool'
+    )
+  }
+
+  async safeDiagnostics(): Promise<Record<string, unknown>> {
+    return this.requestJson<Record<string, unknown>>(
+      'GET',
+      '/internal/v1/diagnostics',
+      undefined,
+      'diagnostics'
+    )
+  }
+
+  async refreshChatgptAccountUsage(accountId: string): Promise<void> {
+    await this.requestJson(
+      'POST',
+      `/internal/v1/runtime/chatgpt-sub/accounts/${
+        encodeURIComponent(accountId)
+      }/refresh-usage`,
+      {},
+      'refresh_usage'
+    )
   }
 
   async forwardResponses(
@@ -313,5 +360,46 @@ export class ProviderWorkerClient implements ProviderRouteAdapter {
       })
       outgoing.end(body.length ? body : undefined)
     })
+  }
+
+  private async requestJson<T>(
+    method: string,
+    requestTarget: string,
+    value: Record<string, unknown> | undefined,
+    operation: string
+  ): Promise<T> {
+    const body = value === undefined
+      ? Buffer.alloc(0)
+      : Buffer.from(JSON.stringify(value), 'utf8')
+    try {
+      const response = await this.request(
+        method,
+        requestTarget,
+        body,
+        '',
+        `req_worker_${operation}_${this.now()}`
+      )
+      const payload = await readLimited(response, MAX_JSON_BYTES)
+      try {
+        if (
+          response.statusCode === undefined ||
+          response.statusCode < 200 ||
+          response.statusCode >= 300
+        ) {
+          throw parseSafeWorkerError(response.statusCode || 502, payload)
+        }
+        return JSON.parse(payload.toString('utf8')) as T
+      } catch (error) {
+        if (error instanceof SafeError) throw error
+        throw workerError('provider_worker_invalid_json', 502, true, error)
+      } finally {
+        payload.fill(0)
+      }
+    } catch (error) {
+      if (error instanceof SafeError) throw error
+      throw workerError('provider_worker_unavailable', 503, true, error)
+    } finally {
+      body.fill(0)
+    }
   }
 }

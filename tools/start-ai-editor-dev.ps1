@@ -10,6 +10,8 @@ param(
     [string]$MockState = 'ready',
     [ValidateSet('real', 'mock')]
     [string]$AuthenticationMode,
+    [ValidateSet('mock', 'chatgpt-sub')]
+    [string]$ProviderWorkerExecutor,
     [switch]$ValidateOnly
 )
 
@@ -24,6 +26,11 @@ $AuthenticationMode = if ([string]::IsNullOrWhiteSpace($AuthenticationMode)) {
     if ($PSBoundParameters.ContainsKey('MockState')) { 'mock' } else { 'real' }
 } else {
     $AuthenticationMode
+}
+$ProviderWorkerExecutor = if ([string]::IsNullOrWhiteSpace($ProviderWorkerExecutor)) {
+    if ($AuthenticationMode -eq 'real') { 'chatgpt-sub' } else { 'mock' }
+} else {
+    $ProviderWorkerExecutor
 }
 Assert-AiEditorPort -Port $GatewayPort -Name 'Gateway'
 Assert-AiEditorPort -Port $EdgePort -Name 'Edge'
@@ -47,6 +54,7 @@ if ($ValidateOnly) {
         gateway = "http://127.0.0.1:$GatewayPort"
         edge = "http://127.0.0.1:$EdgePort"
         providerWorker = "http://127.0.0.1:$ProviderWorkerPort"
+        providerWorkerExecutor = $ProviderWorkerExecutor
         authenticationMode = $AuthenticationMode
     }
     return
@@ -106,6 +114,7 @@ try {
                 AI_EDITOR_PROVIDER_WORKER_DATA_ROOT = $providerWorkerRoot
                 AI_EDITOR_PROVIDER_WORKER_GATEWAY_IDS = 'gateway-local'
                 AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET = $providerWorkerSigningSecret
+                AI_EDITOR_PROVIDER_WORKER_EXECUTOR = $ProviderWorkerExecutor
             } `
             -DataRoot $DataRoot
         $startedModes.Add('provider-worker')
@@ -114,7 +123,7 @@ try {
             -Port $ProviderWorkerPort `
             -ProcessId $processId `
             -DataRoot $DataRoot
-        Write-Host "Provider Worker healthy: PID $processId, http://127.0.0.1:$ProviderWorkerPort"
+        Write-Host "Provider Worker healthy: PID $processId, http://127.0.0.1:$ProviderWorkerPort, executor=$ProviderWorkerExecutor"
     }
 
     if ($Mode -in @('all', 'gateway')) {

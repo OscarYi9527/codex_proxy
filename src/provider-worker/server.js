@@ -10,18 +10,10 @@ import {
 import { NonceStore } from './nonce-store.js'
 import { TurnStore } from './turn-store.js'
 import { MockProviderExecutor } from './mock-executor.js'
+import { ChatgptSubscriptionExecutor } from './chatgpt-sub-executor.js'
 
 const BODY_LIMIT = 16 * 1024 * 1024
 const MAX_CACHED_RESPONSE_BYTES = 8 * 1024 * 1024
-const MODEL_LIST = Object.freeze({
-  object: 'list',
-  data: [{
-    id: 'gpt-worker-mock',
-    object: 'model',
-    owned_by: 'ai-editor-provider-worker'
-  }]
-})
-
 function safeError(code, message, statusCode = 500, retryable = false) {
   return Object.assign(new Error(message), { code, statusCode, retryable })
 }
@@ -135,7 +127,15 @@ export function createProviderWorkerServer(options = {}) {
     now,
     ttlMs: config.turnTtlMs
   })
-  const executor = options.executor || new MockProviderExecutor()
+  const executor = options.executor || (
+    config.executorMode === 'chatgpt-sub'
+      ? new ChatgptSubscriptionExecutor({
+          dataRoot: config.dataRoot,
+          environment: config.environment,
+          fetchImpl: options.fetchImpl
+        })
+      : new MockProviderExecutor()
+  )
 
   const handler = async (req, res) => {
     let body = Buffer.alloc(0)
@@ -165,6 +165,21 @@ export function createProviderWorkerServer(options = {}) {
       }
 
       body = await readBody(req)
+      const configurationEndpoint =
+        url.pathname === '/internal/v1/runtime/chatgpt-sub'
+      const accountPoolEndpoint =
+        url.pathname === '/internal/v1/runtime/chatgpt-sub/accounts'
+      const diagnosticsEndpoint =
+        url.pathname === '/internal/v1/diagnostics'
+      const usageRefreshMatch =
+        /^\/internal\/v1\/runtime\/chatgpt-sub\/accounts\/([^/]+)\/refresh-usage$/
+          .exec(url.pathname)
+      const allowsEmptyTurnId =
+        url.pathname === '/internal/v1/models' ||
+        configurationEndpoint ||
+        accountPoolEndpoint ||
+        diagnosticsEndpoint ||
+        Boolean(usageRefreshMatch)
       const verified = verifyProviderWorkerRequest({
         method: req.method,
         requestTarget,
@@ -174,7 +189,7 @@ export function createProviderWorkerServer(options = {}) {
         allowedGatewayIds: config.allowedGatewayIds,
         now,
         maxClockSkewMs: config.maxClockSkewMs,
-        allowEmptyTurnId: url.pathname === '/internal/v1/models'
+        allowEmptyTurnId: allowsEmptyTurnId
       })
       requestId = verified.requestId
       if (!nonceStore.consume(verified.gatewayId, verified.nonce)) {
@@ -193,7 +208,119 @@ export function createProviderWorkerServer(options = {}) {
             400
           )
         }
-        return sendJson(res, 200, MODEL_LIST, requestId)
+        const models = typeof executor.listModels === 'function'
+          ? await executor.listModels()
+          : {
+              object: 'list',
+              data: [{
+                id: 'gpt-worker-mock',
+                object: 'model',
+                owned_by: 'ai-editor-provider-worker'
+              }]
+            }
+        return sendJson(res, 200, models, requestId)
+      }
+
+      if (configurationEndpoint && req.method === 'PUT') {
+        if (verified.turnId) {
+          throw safeError(
+            'worker_turn_mismatch',
+            'Runtime configuration requests must not include a Turn ID',
+            400
+          )
+        }
+        if (typeof executor.configure !== 'function') {
+          throw safeError(
+            'worker_runtime_not_supported',
+            'Provider Worker runtime configuration is not supported',
+            409
+          )
+        }
+        const status = await executor.configure(parseJson(body))
+        return sendJson(res, 200, status, requestId)
+      }
+
+      if (configurationEndpoint && req.method === 'GET') {
+        if (verified.turnId) {
+          throw safeError(
+            'worker_turn_mismatch',
+            'Runtime status requests must not include a Turn ID',
+            400
+          )
+        }
+        if (typeof executor.configurationStatus !== 'function') {
+          throw safeError(
+            'worker_runtime_not_supported',
+            'Provider Worker runtime status is not supported',
+            409
+          )
+        }
+        return sendJson(res, 200, executor.configurationStatus(), requestId)
+      }
+
+      if (accountPoolEndpoint && req.method === 'GET') {
+        if (verified.turnId) {
+          throw safeError(
+            'worker_turn_mismatch',
+            'Account pool requests must not include a Turn ID',
+            400
+          )
+        }
+        if (typeof executor.safeAccountPool !== 'function') {
+          throw safeError(
+            'worker_runtime_not_supported',
+            'Provider Worker account pool is not supported',
+            409
+          )
+        }
+        return sendJson(res, 200, await executor.safeAccountPool(), requestId)
+      }
+
+      if (diagnosticsEndpoint && req.method === 'GET') {
+        if (verified.turnId) {
+          throw safeError(
+            'worker_turn_mismatch',
+            'Diagnostic requests must not include a Turn ID',
+            400
+          )
+        }
+        if (typeof executor.safeDiagnostics !== 'function') {
+          throw safeError(
+            'worker_runtime_not_supported',
+            'Provider Worker diagnostics are not supported',
+            409
+          )
+        }
+        return sendJson(res, 200, await executor.safeDiagnostics(), requestId)
+      }
+
+      if (usageRefreshMatch && req.method === 'POST') {
+        if (verified.turnId) {
+          throw safeError(
+            'worker_turn_mismatch',
+            'Usage refresh requests must not include a Turn ID',
+            400
+          )
+        }
+        if (typeof executor.refreshAccountUsage !== 'function') {
+          throw safeError(
+            'worker_runtime_not_supported',
+            'Provider Worker usage refresh is not supported',
+            409
+          )
+        }
+        let accountId
+        try {
+          accountId = decodeURIComponent(usageRefreshMatch[1])
+        } catch {
+          throw safeError(
+            'worker_provider_account_not_found',
+            'ChatGPT subscription account was not found',
+            404
+          )
+        }
+        await executor.refreshAccountUsage(accountId)
+        return sendJson(res, 200, { status: 'refreshed' }, requestId)
       }
 
       const statusMatch = /^\/internal\/v1\/turns\/([^/]+)$/.exec(url.pathname)
@@ -227,7 +354,10 @@ export function createProviderWorkerServer(options = {}) {
       if (typeof value.model !== 'string' || !value.model) {
         throw safeError('worker_model_required', 'Provider Worker model is required', 400)
       }
-      if (value.model !== 'gpt-worker-mock') {
+      const supported = typeof executor.supportsModel === 'function'
+        ? await executor.supportsModel(value.model)
+        : value.model === 'gpt-worker-mock'
+      if (!supported) {
         throw safeError(
           'worker_model_unavailable',
           'Provider Worker model is not available',

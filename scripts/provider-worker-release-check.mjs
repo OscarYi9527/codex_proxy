@@ -10,12 +10,19 @@ const forbidden = [
   'gateway/',
   'src/edge/',
   'src/admin',
-  'src/routes/',
   'src/server.js',
-  'src/config.js',
   'codex-proxy-config.json',
   'codex-proxy-stats.json'
 ]
+const allowedSharedRoutes = new Set([
+  'src/routes/chatgpt-sub.js'
+])
+const targetConditionalImports = new Map([
+  ['src/launcher.js', new Set([
+    'src/server.js',
+    'src/edge/edge-server.js'
+  ])]
+])
 
 function fail(message) {
   console.error(`[provider-worker-release] ${message}`)
@@ -38,16 +45,39 @@ for (const file of files) {
     fail(`forbidden Provider Worker runtime path: ${file}`)
     continue
   }
+  if (file.startsWith('src/routes/') && !allowedSharedRoutes.has(file)) {
+    fail(`unapproved shared Provider route: ${file}`)
+  }
   if (!fs.existsSync(path.join(root, file))) fail(`runtime file is missing: ${file}`)
 }
 
-for (const file of files.filter(file => /\.(?:js|cjs|mjs)$/.test(file))) {
+const scriptFiles = files.filter(file => /\.(?:js|cjs|mjs)$/.test(file))
+const runtimeFiles = new Set(files)
+for (const file of scriptFiles) {
   const result = spawnSync(process.execPath, ['--check', file], {
     cwd: root,
     encoding: 'utf8',
     stdio: 'inherit'
   })
   if (result.status !== 0) fail(`syntax check failed: ${file}`)
+
+  const source = fs.readFileSync(path.join(root, file), 'utf8')
+  const specifiers = [
+    ...source.matchAll(/\bfrom\s+['"]([^'"]+)['"]/g),
+    ...source.matchAll(/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g),
+    ...source.matchAll(/^\s*import\s+['"]([^'"]+)['"]/gm)
+  ].map(match => match[1])
+  for (const specifier of specifiers.filter(value => value.startsWith('.'))) {
+    const resolved = path
+      .relative(root, path.resolve(root, path.dirname(file), specifier))
+      .replaceAll('\\', '/')
+    if (
+      !runtimeFiles.has(resolved) &&
+      !targetConditionalImports.get(file)?.has(resolved)
+    ) {
+      fail(`runtime import is missing from manifest: ${file} -> ${resolved}`)
+    }
+  }
 }
 
 if (process.exitCode) process.exit(process.exitCode)

@@ -12,7 +12,7 @@ import type {
 } from '../../app/types'
 
 const providerKindLabels: Record<ProviderSummary['kind'], string> = {
-  chatgpt: 'ChatGPT 订阅',
+  chatgpt: 'ChatGPT 订阅（试验通道）',
   openai: 'OpenAI API',
   deepseek: 'DeepSeek',
   relay: 'Relay'
@@ -571,6 +571,9 @@ export function ProvidersPage({
           <p className="eyebrow">LEVEL 1 · CENTRAL GATEWAY</p>
           <h2 id="providers-title">Provider 与模型</h2>
           <p>集中管理上游账号、额度、健康状态和模型路由。所有调度行为沿用现有 Proxy。</p>
+          <p className="muted">
+            ChatGPT 订阅账号池属于试验通道，可由一级管理员随时停用，不承诺可用性。
+          </p>
           <button
             type="button"
             className="provider-primary-action"
@@ -596,7 +599,7 @@ export function ProvidersPage({
         <form className="provider-form" onSubmit={create}>
           <label>类型
             <select name="kind" defaultValue="relay">
-              <option value="chatgpt">ChatGPT 订阅</option>
+              <option value="chatgpt">ChatGPT 订阅（试验通道）</option>
               <option value="openai">OpenAI API</option>
               <option value="deepseek">DeepSeek</option>
               <option value="relay">Relay</option>
@@ -701,7 +704,8 @@ export function ProvidersPage({
               <div>
                 <strong>账号池调度</strong>
                 <span>
-                  队列 {providers.accountPool.queueDepth} · 自动跳过冷却、登录失效和额度保护账号
+                  试验通道 · 队列 {providers.accountPool.queueDepth} ·
+                  自动跳过冷却、登录失效和额度保护账号
                 </span>
               </div>
               <label>路由策略

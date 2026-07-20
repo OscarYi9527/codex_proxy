@@ -8,6 +8,8 @@ const PROXY_DIR = path.dirname(fileURLToPath(import.meta.url))
 const STORAGE_ROOT = path.resolve(
   process.env.CODEX_PROXY_STORAGE_ROOT || path.join(PROXY_DIR, '..')
 )
+const RUNTIME_CONFIG_MEMORY_ONLY =
+  process.env.CODEX_PROXY_RUNTIME_CONFIG_MEMORY_ONLY === '1'
 const CONFIG_FILE = path.join(STORAGE_ROOT, 'codex-proxy-config.json')
 const CONFIG_BACKUP_DIR = path.join(STORAGE_ROOT, '.config-backups')
 const ACCOUNT_BACKUP_DIR = path.join(STORAGE_ROOT, '.account-backups')
@@ -82,19 +84,21 @@ function writeCredentialJson(filePath, value) {
 
 function loadProxyConfig() {
   let fileCfg = {}
-  try {
-    const raw = fs.readFileSync(CONFIG_FILE, 'utf8')
-    const parsed = decryptConfigSecrets(JSON.parse(raw))
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const migration = migrateConfigDocument(parsed)
-      fileCfg = migration.document
-      if (migration.changed) {
-        backupBeforeMigration(CONFIG_FILE, raw, migration)
-        writeCredentialJson(CONFIG_FILE, fileCfg)
+  if (!RUNTIME_CONFIG_MEMORY_ONLY) {
+    try {
+      const raw = fs.readFileSync(CONFIG_FILE, 'utf8')
+      const parsed = decryptConfigSecrets(JSON.parse(raw))
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const migration = migrateConfigDocument(parsed)
+        fileCfg = migration.document
+        if (migration.changed) {
+          backupBeforeMigration(CONFIG_FILE, raw, migration)
+          writeCredentialJson(CONFIG_FILE, fileCfg)
+        }
       }
+    } catch (error) {
+      if (error.code !== 'ENOENT') console.error('[codex-proxy] failed to load config:', error.message)
     }
-  } catch (error) {
-    if (error.code !== 'ENOENT') console.error('[codex-proxy] failed to load config:', error.message)
   }
 
   const base = (process.env.CODEX_OPENAI_API_BASE_URL || process.env.OPENAI_BASE_URL || fileCfg.openai_api_base_url || CONFIG_DEFAULTS.openaiApiBaseUrl).replace(/\/+$/, '')
@@ -459,6 +463,14 @@ export function deleteRelay(relayId) {
 
 // ChatGPT account pool helpers
 export function upsertChatgptAccount(account) {
+  if (RUNTIME_CONFIG_MEMORY_ONLY) {
+    const accounts = [...(proxyConfig.chatgptAccounts || [])]
+    const idx = accounts.findIndex(a => a.id === account.id)
+    if (idx >= 0) accounts[idx] = account
+    else accounts.push(account)
+    proxyConfig.chatgptAccounts = accounts
+    return proxyConfig
+  }
   const accounts = [...(proxyConfig.chatgptAccounts || [])]
   const idx = accounts.findIndex(a => a.id === account.id)
   if (idx >= 0) accounts[idx] = account
@@ -472,6 +484,14 @@ export function upsertChatgptAccount(account) {
 }
 
 export function deleteChatgptAccount(accountId) {
+  if (RUNTIME_CONFIG_MEMORY_ONLY) {
+    proxyConfig.chatgptAccounts = (proxyConfig.chatgptAccounts || [])
+      .filter(account => account.id !== accountId)
+    if (proxyConfig.activeChatgptAccountId === accountId) {
+      proxyConfig.activeChatgptAccountId = null
+    }
+    return proxyConfig
+  }
   createAccountBackup('before-account-delete')
   const accounts = (proxyConfig.chatgptAccounts || []).filter(a => a.id !== accountId)
   const fields = { chatgptAccounts: accounts }

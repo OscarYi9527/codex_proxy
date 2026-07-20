@@ -4,7 +4,13 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 
-const REQUEST_LOG = path.join(os.homedir(), '.claude', 'proxy', 'codex-proxy-requests.log')
+const REQUEST_LOG = process.env.CODEX_PROXY_STORAGE_ROOT
+  ? path.join(
+      path.resolve(process.env.CODEX_PROXY_STORAGE_ROOT),
+      'logs',
+      'codex-proxy-requests.log'
+    )
+  : path.join(os.homedir(), '.claude', 'proxy', 'codex-proxy-requests.log')
 const MAX_LOG_BYTES = 10 * 1024 * 1024
 let writesSinceSizeCheck = 100
 

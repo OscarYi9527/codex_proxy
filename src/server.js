@@ -221,14 +221,22 @@ export function createServer({ fetchImpl = fetch } = {}) {
           })
         }
       } catch (error) {
+        const status = Number(error.statusCode) || 502
         markCodeTurnRequest(codeTurn, {
           state: 'failed',
           requestId: req.requestId,
-          status: res.statusCode || 502
+          status: res.statusCode || status
         })
         if (req.clientAbortSignal.aborted || res.destroyed) return
         console.error('[codex-proxy] request failed:', error.message)
-        if (!res.headersSent) return sendJson(res, 502, { error: { type: 'proxy_error', message: error.message } })
+        if (!res.headersSent) {
+          return sendJson(res, status, {
+            error: {
+              type: error.type || 'proxy_error',
+              message: error.message
+            }
+          }, status === 413 ? { connection: 'close' } : {})
+        }
         if (!res.writableEnded) res.end()
       }
       return

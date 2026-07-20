@@ -5,12 +5,14 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { createServer as createNetServer } from 'node:net'
+import { createServer as createHttpServer } from 'node:http'
+import { PassThrough } from 'node:stream'
 import { resolveCodexModel, isChatGptSubModel, isOpenAIApiModel, isRelayModel, parseRelayModel, buildModelsResponse, getThreadId } from '../src/models.js'
 import { recordUsage, recordAccountOutcome, getStats, resetStats, saveStats, statsDayKey } from '../src/stats.js'
 import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurrencyLimit, accountRemainingPercent, accountUsageIsFresh, calculateUsageForecast, consumeAccountResetCredit, cooldownMsFromResponseText, ensureFreshToken, extractResetCredits, extractUsageFromBody, extractUsageFromHeaders, mergeAccountUsageWindows, normalizeAccountRoutingStrategy, noteAccountAdaptiveOutcome, noteAccountSuccess, pickActiveAccount, refreshAccountResetCredits, refreshAccountUsage, releaseAccountRequest, renewAccountRequestLease, reserveAccountRequest, resetAccountRequestCounts, resetAccountStickiness } from '../src/chatgpt-accounts.js'
 import { proxyConfig, atomicWriteJson, configForSettingsSnapshot, mergeAccountBackup, mergeSettingsSnapshot, orderChatgptAccounts, renameChatgptAccountInList } from '../src/config.js'
 import { assertCircuitAvailable, getCircuitStates, recordCircuitResult, resetCircuits } from '../src/circuit-breaker.js'
-import { fetchWithRetry, proxyMetaHeaders, retryAfterMs } from '../src/server-utils.js'
+import { fetchWithRetry, proxyMetaHeaders, readJson, retryAfterMs } from '../src/server-utils.js'
 import { redactSecrets, summarizeError, summarizeUpstreamErrorBody } from '../src/logger.js'
 import { createServer } from '../src/server.js'
 import { findDuplicateAccount, findPrivateBrowser, parseDeviceAuthOutput, privateBrowserArgs, publicProxyConfig } from '../src/admin.js'
@@ -23,6 +25,61 @@ import { chatCompletionToResponse } from '../src/convert/chat-completions.js'
 import { createChatStreamState, createStreamState, onAnthropicEvent, onChatCompletionChunk } from '../src/convert/stream.js'
 import { normalizeResponsesFunctionCallIds, responsesFunctionCallItemId } from '../src/convert/tool-ids.js'
 import { summarizeDeepSeekRequestShape } from '../src/routes/deepseek.js'
+
+describe('请求体读取稳定性', () => {
+  it('允许超过旧 16 MiB 上限的 Codex 长线程请求', async () => {
+    const body = JSON.stringify({ input: 'x'.repeat(17 * 1024 * 1024) })
+    const req = new PassThrough()
+    req.headers = { 'content-length': String(Buffer.byteLength(body)) }
+    const parsedPromise = readJson(req)
+    req.end(body)
+    const parsed = await parsedPromise
+    assert.strictEqual(parsed.input.length, 17 * 1024 * 1024)
+  })
+
+  it('超限时排空上传并立即返回 413，而不是形成上传死锁', async () => {
+    const server = createHttpServer(async (req, res) => {
+      try {
+        await readJson(req, { maxBodyBytes: 1024, bodyTimeoutMs: 5000 })
+        res.writeHead(200).end()
+      } catch (error) {
+        res.writeHead(error.statusCode || 500, {
+          'content-type': 'application/json',
+          connection: 'close'
+        })
+        res.end(JSON.stringify({ type: error.type, message: error.message }))
+      }
+    })
+    await new Promise((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    try {
+      const startedAt = Date.now()
+      const response = await fetch(`http://127.0.0.1:${server.address().port}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ input: 'x'.repeat(2 * 1024 * 1024) })
+      })
+      assert.strictEqual(response.status, 413)
+      assert.ok(Date.now() - startedAt < 2000)
+      assert.strictEqual((await response.json()).type, 'request_too_large')
+    } finally {
+      await new Promise(resolve => server.close(resolve))
+    }
+  })
+
+  it('不完整的请求体会在截止时间内返回明确的 408', async () => {
+    const req = new PassThrough()
+    req.headers = {}
+    const parsedPromise = readJson(req, { maxBodyBytes: 1024, bodyTimeoutMs: 20 })
+    await assert.rejects(parsedPromise, error =>
+      error.statusCode === 408 &&
+      error.type === 'request_timeout'
+    )
+    req.destroy()
+  })
+})
 
 describe('跨 Provider 工具调用 ID', () => {
   it('为 Responses function_call 生成稳定且有界的 fc_ ID', () => {

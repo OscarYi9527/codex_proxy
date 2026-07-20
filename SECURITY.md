@@ -45,6 +45,17 @@
 NODE_TLS_REJECT_UNAUTHORIZED=0
 ```
 
+运行 Gateway/Edge 开发脚本前也应确认父 PowerShell 没有继承该变量：
+
+```powershell
+Remove-Item Env:NODE_TLS_REJECT_UNAUTHORIZED -ErrorAction SilentlyContinue
+```
+
+standalone 的 VBS 启动器会显式开启证书校验；Gateway/Edge 启动链路仍需按
+[`docs/NEXT_DEVELOPMENT_ROADMAP.md`](docs/NEXT_DEVELOPMENT_ROADMAP.md) 的 N006
+补充 fail-closed 环境门禁。在 N006 完成前，不要用继承了禁用 TLS 校验环境的进程进行
+真实登录、Provider 凭据提交或生产联调。
+
 ## 诊断报告
 
 `GET /admin/api/diagnostics` 及管理后台下载的诊断报告不包含 Token、API Key、账号

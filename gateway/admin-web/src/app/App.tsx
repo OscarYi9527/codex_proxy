@@ -86,6 +86,30 @@ export function App({
             client.devices(),
             client.usage(session.account.id)
           ])
+          if (account.account.mustChangePassword) {
+            const passwordChangeSession = {
+              ...session,
+              navigation: session.navigation.filter(
+                item => item.id === 'account' || item.id === 'security'
+              )
+            }
+            setRoute('security')
+            setData({
+              session: passwordChangeSession,
+              account,
+              devices,
+              usage,
+              organizations: [],
+              organizationAccounts: [],
+              invitations: [],
+              creditViews: [],
+              providers: null,
+              models: null,
+              diagnostics: null
+            })
+            setError(null)
+            return
+          }
           const [organizations, organizationAccounts, invitations] =
             session.account.role === 'user'
               ? [[], [], []]

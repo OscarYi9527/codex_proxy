@@ -373,6 +373,36 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
       .toBe(seesProviders)
   })
 
+  it('opens only the password page before loading privileged Level 1 data', async () => {
+    const client = {
+      ...clientFor('level1'),
+      account: jest.fn(async () => ({
+        ...account,
+        account: {
+          ...account.account,
+          role: 'level1' as const,
+          mustChangePassword: true
+        }
+      }))
+    }
+    render(<App client={client} />)
+    bootstrap('security')
+
+    expect(await screen.findByRole('heading', { name: '修改密码' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '设备与安全' })).toHaveAttribute(
+      'aria-current',
+      'page'
+    )
+    expect(screen.queryByRole('button', { name: 'Provider 与模型' }))
+      .not.toBeInTheDocument()
+    expect(client.organizations).not.toHaveBeenCalled()
+    expect(client.organizationAccounts).not.toHaveBeenCalled()
+    expect(client.invitations).not.toHaveBeenCalled()
+    expect(client.providers).not.toHaveBeenCalled()
+    expect(client.models).not.toHaveBeenCalled()
+    expect(client.diagnostics).not.toHaveBeenCalled()
+  })
+
   it('shows devices and usage without exposing credentials or Provider internals', async () => {
     const client = clientFor('user')
     render(<App client={client} />)

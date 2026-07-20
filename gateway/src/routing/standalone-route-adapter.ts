@@ -2,6 +2,8 @@ import { Readable, Writable } from 'node:stream'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { FastifyReply, FastifyRequest } from 'fastify'
+import type { UsageRecord } from '../db/repositories/credit-repository.js'
+import type { ProviderUsageReceipt } from '../provider-worker/protocol.js'
 import { redactValue } from '../common/redaction.js'
 import { extractAssistantTextFromEvents } from '../audit/conversation-sanitizer.js'
 
@@ -75,6 +77,17 @@ export interface ProviderForwardResult {
     readonly inputTokens: number
     readonly outputTokens: number
   }
+  /**
+   * Present only after a Provider Worker receipt has passed HMAC validation.
+   * The Gateway must settle from this receipt rather than trusting SSE fields.
+   */
+  readonly usageReceipt?: ProviderUsageReceipt
+  /**
+   * Prevents estimated settlement when a Worker response completed but its
+   * signed usage receipt could not yet be fetched. The outbox reconciler will
+   * retry without re-running the upstream Turn.
+   */
+  readonly deferSettlement?: boolean
 }
 
 export interface ProviderRouteAdapter {
@@ -93,6 +106,10 @@ export interface ProviderRouteAdapter {
 	safeDiagnostics?(): Promise<Record<string, unknown>>
 	safeAccountPool?(): Promise<SafeAccountPoolSnapshot>
 	refreshChatgptAccountUsage?(accountId: string): Promise<void>
+	acknowledgeSettlement?(
+		result: ProviderForwardResult,
+		usage: UsageRecord
+	): Promise<void>
 }
 
 export type AccountRoutingStrategy =

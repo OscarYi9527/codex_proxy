@@ -154,6 +154,7 @@ describe('Gateway authenticated model and Responses contract (T039/T043-T046)', 
 describe('Gateway Responses stream compatibility', () => {
   it('reserves risk and settles upstream usage for an organization account', async () => {
     const now = '2026-07-17T00:00:00.000Z'
+    let acknowledgedSettlementId: string | undefined
     const fixture = await createRealGatewayFixture({
       providerAdapter: {
         async listModels() {
@@ -170,8 +171,24 @@ describe('Gateway Responses stream compatibility', () => {
           return {
             providerId: 'provider_billable',
             assistantText: 'final answer password=AssistantSecret123',
-            usage: { inputTokens: 10, outputTokens: 20 }
+            usage: { inputTokens: 10, outputTokens: 20 },
+            usageReceipt: {
+              schemaVersion: 1,
+              outboxId: 'outbox_billable',
+              executionId: 'exec_billable',
+              turnId: 'turn_billable_1234',
+              workerId: 'worker-local',
+              region: 'local-development',
+              providerId: 'provider_billable',
+              inputTokens: 10,
+              outputTokens: 20,
+              completedAt: now,
+              signature: `v1=${'a'.repeat(64)}`
+            }
           }
+        },
+        async acknowledgeSettlement(_result, usage) {
+          acknowledgedSettlementId = usage.id
         }
       }
     })
@@ -307,6 +324,7 @@ describe('Gateway Responses stream compatibility', () => {
         usage_source: 'upstream',
         total_credits: '0.050000'
       })
+      expect(acknowledgedSettlementId).toBe(usage.id)
       const allocation = await fixture.database.db
         .selectFrom('user_credit_allocations')
         .select(['settled_credits', 'allocated_credits'])

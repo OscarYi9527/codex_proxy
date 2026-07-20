@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 
 export const PROVIDER_WORKER_SIGNATURE_VERSION = 'aieditor-v1'
+export const PROVIDER_USAGE_RECEIPT_VERSION = 'aieditor-usage-v1'
 
 export const PROVIDER_WORKER_HEADERS = Object.freeze({
   gatewayId: 'x-ai-editor-gateway-id',
@@ -46,6 +47,36 @@ export function signProviderWorkerRequest(input, signingSecret) {
     .createHmac('sha256', signingSecret)
     .update(canonical)
     .digest('hex')}`
+}
+
+export function canonicalProviderUsageReceipt(input) {
+  return [
+    PROVIDER_USAGE_RECEIPT_VERSION,
+    input.outboxId,
+    input.executionId,
+    input.turnId,
+    input.workerId,
+    input.region,
+    input.providerId,
+    String(input.inputTokens),
+    String(input.outputTokens),
+    input.completedAt
+  ].join('\n')
+}
+
+export function signProviderUsageReceipt(input, signingSecret) {
+  return `v1=${crypto
+    .createHmac('sha256', signingSecret)
+    .update(canonicalProviderUsageReceipt(input))
+    .digest('hex')}`
+}
+
+export function createProviderUsageReceipt(input, signingSecret) {
+  return {
+    schemaVersion: 1,
+    ...input,
+    signature: signProviderUsageReceipt(input, signingSecret)
+  }
 }
 
 export function createProviderWorkerSignedHeaders(options) {

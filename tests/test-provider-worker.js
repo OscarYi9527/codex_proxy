@@ -13,10 +13,12 @@ import {
 import {
   createProviderWorkerSignedHeaders,
   sha256Hex,
+  signProviderUsageReceipt,
   verifyProviderWorkerRequest
 } from '../src/provider-worker/protocol.js'
 import { NonceStore } from '../src/provider-worker/nonce-store.js'
 import { TurnStore } from '../src/provider-worker/turn-store.js'
+import { ExecutionStore } from '../src/provider-worker/execution-store.js'
 import { createProviderWorkerServer } from '../src/provider-worker/server.js'
 import {
   ChatgptSubscriptionExecutor
@@ -114,6 +116,8 @@ function testConfig(overrides = {}) {
     host: '127.0.0.1',
     port: PROVIDER_WORKER_DEVELOPMENT_PORT,
     dataRoot: path.resolve('.ai-editor-dev', 'provider-worker-test'),
+    workerId: 'worker-local',
+    region: 'local-development',
     signingSecret: SIGNING_SECRET,
     allowedGatewayIds: new Set(['gateway-test']),
     maxClockSkewMs: 60_000,
@@ -125,9 +129,12 @@ function testConfig(overrides = {}) {
 }
 
 async function startWorker(options = {}) {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-worker-state-'))
+  temporaryDirectories.add(dataRoot)
+  const { config: configOverrides = {}, ...serverOptions } = options
   const worker = createProviderWorkerServer({
-    config: testConfig(),
-    ...options
+    config: testConfig({ dataRoot, ...configOverrides }),
+    ...serverOptions
   })
   await new Promise((resolve, reject) => {
     worker.server.once('error', reject)
@@ -434,6 +441,157 @@ describe('Provider Worker local lifecycle', () => {
     assert.equal(value.state, 'completed')
     assert.equal(value.providerId, 'provider-worker-mock')
     assert.ok(value.usage.inputTokens > 0)
+  })
+
+  it('persists signed usage outbox records and acknowledges settlement across restarts', async () => {
+    const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-worker-restart-'))
+    temporaryDirectories.add(dataRoot)
+    const turnId = 'turn_persistent_outbox'
+    const requestBody = {
+      model: 'gpt-worker-mock',
+      input: 'sensitive-prompt-must-not-be-persisted',
+      mockText: 'sensitive-response-must-not-be-persisted'
+    }
+    const first = await startWorker({ config: { dataRoot } })
+    const execute = signedRequest(first.origin, '/internal/v1/responses', {
+      method: 'POST',
+      turnId,
+      body: requestBody
+    })
+    const response = await execute.fetch()
+    execute.body.fill(0)
+    assert.equal(response.status, 200)
+    const outboxId = response.headers.get('x-ai-editor-outbox-id')
+    const executionId = response.headers.get('x-ai-editor-execution-id')
+    assert.match(outboxId, /^outbox_[a-f0-9]{32}$/)
+    assert.match(executionId, /^exec_[a-f0-9]{32}$/)
+    await response.text()
+
+    const statusRequest = signedRequest(
+      first.origin,
+      `/internal/v1/turns/${turnId}`,
+      { turnId }
+    )
+    const statusResponse = await statusRequest.fetch()
+    statusRequest.body.fill(0)
+    const status = await statusResponse.json()
+    assert.equal(status.state, 'completed')
+    assert.equal(status.usageReceipt.outboxId, outboxId)
+    const { schemaVersion, signature, ...unsignedReceipt } = status.usageReceipt
+    assert.equal(schemaVersion, 1)
+    assert.equal(
+      signature,
+      signProviderUsageReceipt(unsignedReceipt, SIGNING_SECRET)
+    )
+
+    const stateFile = path.join(dataRoot, 'provider-worker-executions-v1.json')
+    const storedBeforeRestart = fs.readFileSync(stateFile, 'utf8')
+    assert.equal(storedBeforeRestart.includes(requestBody.input), false)
+    assert.equal(storedBeforeRestart.includes(requestBody.mockText), false)
+    assert.equal(storedBeforeRestart.includes('access_token'), false)
+    assert.equal(storedBeforeRestart.includes('refresh_token'), false)
+
+    await first.worker.close()
+    openWorkers.delete(first.worker)
+    const second = await startWorker({ config: { dataRoot } })
+    const outboxRequest = signedRequest(
+      second.origin,
+      '/internal/v1/usage/outbox?limit=10'
+    )
+    const outboxResponse = await outboxRequest.fetch()
+    outboxRequest.body.fill(0)
+    assert.equal(outboxResponse.status, 200)
+    const outbox = await outboxResponse.json()
+    assert.equal(outbox.items.length, 1)
+    assert.equal(outbox.items[0].outboxId, outboxId)
+    assert.equal(outbox.items[0].signature, signature)
+
+    const duplicate = signedRequest(second.origin, '/internal/v1/responses', {
+      method: 'POST',
+      turnId,
+      body: requestBody
+    })
+    const duplicateResponse = await duplicate.fetch()
+    duplicate.body.fill(0)
+    assert.equal(duplicateResponse.status, 409)
+    assert.equal(
+      (await duplicateResponse.json()).error.code,
+      'worker_turn_completed_pending_settlement'
+    )
+
+    const acknowledgement = {
+      schemaVersion: 1,
+      acknowledgements: [{
+        outboxId,
+        turnId,
+        settlementId: 'usage_gateway_persisted',
+        settledAt: new Date().toISOString()
+      }]
+    }
+    const rejectedBatch = signedRequest(
+      second.origin,
+      '/internal/v1/usage/outbox/ack',
+      {
+        method: 'POST',
+        body: {
+          schemaVersion: 1,
+          acknowledgements: [
+            ...acknowledgement.acknowledgements,
+            {
+              outboxId: 'outbox_missing',
+              turnId: 'turn_missing',
+              settlementId: 'usage_missing',
+              settledAt: new Date().toISOString()
+            }
+          ]
+        }
+      }
+    )
+    const rejectedBatchResponse = await rejectedBatch.fetch()
+    rejectedBatch.body.fill(0)
+    assert.equal(rejectedBatchResponse.status, 404)
+    const stillPendingRequest = signedRequest(
+      second.origin,
+      '/internal/v1/usage/outbox?limit=10'
+    )
+    const stillPendingResponse = await stillPendingRequest.fetch()
+    stillPendingRequest.body.fill(0)
+    assert.equal((await stillPendingResponse.json()).items.length, 1)
+
+    const ackRequest = signedRequest(
+      second.origin,
+      '/internal/v1/usage/outbox/ack',
+      { method: 'POST', body: acknowledgement }
+    )
+    const ackResponse = await ackRequest.fetch()
+    ackRequest.body.fill(0)
+    assert.equal(ackResponse.status, 200)
+    assert.deepEqual((await ackResponse.json()).acknowledged, [outboxId])
+
+    const retryAck = signedRequest(
+      second.origin,
+      '/internal/v1/usage/outbox/ack',
+      { method: 'POST', body: acknowledgement }
+    )
+    const retryAckResponse = await retryAck.fetch()
+    retryAck.body.fill(0)
+    assert.equal(retryAckResponse.status, 200)
+    assert.deepEqual(
+      (await retryAckResponse.json()).alreadyAcknowledged,
+      [outboxId]
+    )
+
+    await second.worker.close()
+    openWorkers.delete(second.worker)
+    const third = await startWorker({ config: { dataRoot } })
+    const emptyRequest = signedRequest(
+      third.origin,
+      '/internal/v1/usage/outbox?limit=10'
+    )
+    const emptyResponse = await emptyRequest.fetch()
+    emptyRequest.body.fill(0)
+    assert.equal(emptyResponse.status, 200)
+    assert.deepEqual((await emptyResponse.json()).items, [])
   })
 
   it('rejects reuse of a Turn ID with a different body', async () => {
@@ -784,6 +942,34 @@ describe('Provider Worker ChatGPT subscription runtime', () => {
 })
 
 describe('Provider Worker Turn store', () => {
+  it('marks an interrupted persisted execution for manual recovery instead of rerunning it', () => {
+    const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-worker-interrupted-'))
+    temporaryDirectories.add(dataRoot)
+    const first = new ExecutionStore({
+      dataRoot,
+      signingSecret: SIGNING_SECRET,
+      workerId: 'worker-local',
+      region: 'local-development',
+      now: () => 1_000
+    })
+    assert.equal(
+      first.begin('turn-interrupted', sha256Hex(Buffer.from('request'))).state,
+      'started'
+    )
+    const recovered = new ExecutionStore({
+      dataRoot,
+      signingSecret: SIGNING_SECRET,
+      workerId: 'worker-local',
+      region: 'local-development',
+      now: () => 2_000
+    })
+    assert.equal(recovered.get('turn-interrupted').state, 'recovery_required')
+    assert.equal(
+      recovered.get('turn-interrupted').errorCode,
+      'worker_restarted_before_completion'
+    )
+  })
+
   it('does not overwrite a cancelled Turn when an executor ignores AbortSignal', () => {
     const store = new TurnStore({ now: () => 1_000, ttlMs: 100 })
     store.begin('turn-cancelled', 'fingerprint')

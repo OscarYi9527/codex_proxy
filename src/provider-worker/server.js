@@ -9,6 +9,7 @@ import {
 } from './protocol.js'
 import { NonceStore } from './nonce-store.js'
 import { TurnStore } from './turn-store.js'
+import { ExecutionStore } from './execution-store.js'
 import { MockProviderExecutor } from './mock-executor.js'
 import { ChatgptSubscriptionExecutor } from './chatgpt-sub-executor.js'
 
@@ -112,15 +113,21 @@ function validateTransport(req, config) {
   }
 }
 
-function publicTurn(turn) {
+function publicTurn(turn, executionStore) {
+  const execution = executionStore.get(turn.turnId)
+  const source = execution || turn
+  const usageReceipt = executionStore.receipt(execution)
   return {
-    turnId: turn.turnId,
-    state: turn.state,
-    createdAt: new Date(turn.createdAt).toISOString(),
-    updatedAt: new Date(turn.updatedAt).toISOString(),
-    ...(turn.providerId ? { providerId: turn.providerId } : {}),
-    ...(turn.usage ? { usage: turn.usage } : {}),
-    ...(turn.errorCode ? { errorCode: turn.errorCode } : {})
+    turnId: source.turnId,
+    state: source.state,
+    createdAt: new Date(source.createdAt).toISOString(),
+    updatedAt: new Date(source.updatedAt).toISOString(),
+    ...(source.executionId ? { executionId: source.executionId } : {}),
+    ...(source.outboxId ? { outboxId: source.outboxId } : {}),
+    ...(source.providerId ? { providerId: source.providerId } : {}),
+    ...(source.usage ? { usage: source.usage } : {}),
+    ...(source.errorCode ? { errorCode: source.errorCode } : {}),
+    ...(usageReceipt ? { usageReceipt } : {})
   }
 }
 
@@ -134,6 +141,13 @@ export function createProviderWorkerServer(options = {}) {
   const turnStore = options.turnStore || new TurnStore({
     now,
     ttlMs: config.turnTtlMs
+  })
+  const executionStore = options.executionStore || new ExecutionStore({
+    now,
+    dataRoot: config.dataRoot,
+    signingSecret: config.signingSecret,
+    workerId: config.workerId || 'worker-local',
+    region: config.region || 'local-development'
   })
   const executor = options.executor || (
     config.executorMode === 'chatgpt-sub'
@@ -179,6 +193,10 @@ export function createProviderWorkerServer(options = {}) {
         url.pathname === '/internal/v1/runtime/chatgpt-sub/accounts'
       const diagnosticsEndpoint =
         url.pathname === '/internal/v1/diagnostics'
+      const usageOutboxEndpoint =
+        url.pathname === '/internal/v1/usage/outbox'
+      const usageAcknowledgementEndpoint =
+        url.pathname === '/internal/v1/usage/outbox/ack'
       const usageRefreshMatch =
         /^\/internal\/v1\/runtime\/chatgpt-sub\/accounts\/([^/]+)\/refresh-usage$/
           .exec(url.pathname)
@@ -187,6 +205,8 @@ export function createProviderWorkerServer(options = {}) {
         configurationEndpoint ||
         accountPoolEndpoint ||
         diagnosticsEndpoint ||
+        usageOutboxEndpoint ||
+        usageAcknowledgementEndpoint ||
         Boolean(usageRefreshMatch)
       const verified = verifyProviderWorkerRequest({
         method: req.method,
@@ -331,23 +351,77 @@ export function createProviderWorkerServer(options = {}) {
         return sendJson(res, 200, { status: 'refreshed' }, requestId)
       }
 
+      if (usageOutboxEndpoint && req.method === 'GET') {
+        if (verified.turnId) {
+          throw safeError(
+            'worker_turn_mismatch',
+            'Usage outbox requests must not include a Turn ID',
+            400
+          )
+        }
+        const rawLimit = url.searchParams.get('limit')
+        const limit = rawLimit === null ? 100 : Number(rawLimit)
+        if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+          throw safeError(
+            'worker_outbox_limit_invalid',
+            'Usage outbox limit must be between 1 and 100',
+            400
+          )
+        }
+        return sendJson(res, 200, {
+          schemaVersion: 1,
+          workerId: config.workerId || 'worker-local',
+          region: config.region || 'local-development',
+          items: executionStore.pending(limit)
+        }, requestId)
+      }
+
+      if (usageAcknowledgementEndpoint && req.method === 'POST') {
+        if (verified.turnId) {
+          throw safeError(
+            'worker_turn_mismatch',
+            'Settlement acknowledgements must not include a Turn ID',
+            400
+          )
+        }
+        const value = parseJson(body)
+        if (value.schemaVersion !== 1) {
+          throw safeError(
+            'worker_settlement_ack_invalid',
+            'Settlement acknowledgement schema is invalid',
+            400
+          )
+        }
+        const result = executionStore.acknowledge(
+          verified.gatewayId,
+          value.acknowledgements
+        )
+        return sendJson(res, 200, {
+          schemaVersion: 1,
+          ...result
+        }, requestId)
+      }
+
       const statusMatch = /^\/internal\/v1\/turns\/([^/]+)$/.exec(url.pathname)
       const cancelMatch = /^\/internal\/v1\/turns\/([^/]+)\/cancel$/.exec(url.pathname)
       if (req.method === 'GET' && statusMatch) {
         if (verified.turnId !== statusMatch[1]) {
           throw safeError('worker_turn_mismatch', 'Signed Turn ID does not match path', 400)
         }
-        const turn = turnStore.get(verified.turnId)
+        const turn = turnStore.get(verified.turnId) ||
+          executionStore.get(verified.turnId)
         if (!turn) throw safeError('worker_turn_not_found', 'Turn was not found', 404)
-        return sendJson(res, 200, publicTurn(turn), requestId)
+        return sendJson(res, 200, publicTurn(turn, executionStore), requestId)
       }
       if (req.method === 'POST' && cancelMatch) {
         if (verified.turnId !== cancelMatch[1]) {
           throw safeError('worker_turn_mismatch', 'Signed Turn ID does not match path', 400)
         }
         const turn = turnStore.cancel(verified.turnId)
-        if (!turn) throw safeError('worker_turn_not_found', 'Turn was not found', 404)
-        return sendJson(res, 202, publicTurn(turn), requestId)
+        const execution = executionStore.cancel(verified.turnId)
+        const current = turn || execution
+        if (!current) throw safeError('worker_turn_not_found', 'Turn was not found', 404)
+        return sendJson(res, 202, publicTurn(current, executionStore), requestId)
       }
 
       const kind = url.pathname === '/internal/v1/responses'
@@ -378,15 +452,15 @@ export function createProviderWorkerServer(options = {}) {
         Buffer.from([0]),
         body
       ]))
-      const begin = turnStore.begin(verified.turnId, fingerprint)
-      if (begin.state === 'conflict') {
+      const executionBegin = executionStore.begin(verified.turnId, fingerprint)
+      if (executionBegin.state === 'conflict') {
         throw safeError(
           'worker_turn_conflict',
           'Turn ID was reused with a different request',
           409
         )
       }
-      if (begin.state === 'running') {
+      if (executionBegin.state === 'running') {
         throw safeError(
           'worker_turn_in_progress',
           'Turn is already running',
@@ -394,18 +468,37 @@ export function createProviderWorkerServer(options = {}) {
           true
         )
       }
-      if (begin.state === 'replay') {
+      if (executionBegin.state === 'completed') {
+        const cached = turnStore.get(verified.turnId)
+        if (!cached?.response) {
+          throw safeError(
+            'worker_turn_completed_pending_settlement',
+            'Turn completed and is awaiting Gateway reconciliation',
+            409
+          )
+        }
         res.writeHead(200, {
           'content-type': 'text/event-stream; charset=utf-8',
           'cache-control': 'no-store',
           'x-content-type-options': 'nosniff',
           'x-request-id': requestId,
-          'x-ai-editor-provider-id': begin.turn.providerId || 'provider-worker-mock',
+          'x-ai-editor-provider-id':
+            executionBegin.execution.providerId || 'provider-worker-mock',
+          'x-ai-editor-execution-id': executionBegin.execution.executionId,
+          'x-ai-editor-outbox-id': executionBegin.execution.outboxId,
           'x-ai-editor-idempotent-replay': 'true'
         })
-        res.end(begin.turn.response)
+        res.end(cached.response)
         return
       }
+      if (executionBegin.state !== 'started') {
+        throw safeError(
+          'worker_turn_recovery_required',
+          'Turn cannot be re-executed until its persisted state is reconciled',
+          409
+        )
+      }
+      const begin = turnStore.begin(verified.turnId, fingerprint)
 
       try {
         const result = await executor.execute({
@@ -420,7 +513,9 @@ export function createProviderWorkerServer(options = {}) {
           'cache-control': 'no-store',
           'x-content-type-options': 'nosniff',
           'x-request-id': requestId,
-          'x-ai-editor-provider-id': result.providerId
+          'x-ai-editor-provider-id': result.providerId,
+          'x-ai-editor-execution-id': executionBegin.execution.executionId,
+          'x-ai-editor-outbox-id': executionBegin.execution.outboxId
         })
         const responseChunks = []
         let responseSize = 0
@@ -447,6 +542,10 @@ export function createProviderWorkerServer(options = {}) {
         }
         const response = Buffer.concat(responseChunks)
         for (const chunk of responseChunks) chunk.fill(0)
+        executionStore.complete(verified.turnId, {
+          usage: result.usage,
+          providerId: result.providerId
+        })
         const completed = turnStore.complete(verified.turnId, {
           response,
           usage: result.usage,
@@ -464,6 +563,7 @@ export function createProviderWorkerServer(options = {}) {
         res.end()
       } catch (error) {
         turnStore.fail(verified.turnId, error.code || 'worker_provider_failed')
+        executionStore.fail(verified.turnId, error.code || 'worker_provider_failed')
         if (res.headersSent && !res.writableEnded && !res.destroyed) res.end()
         throw error
       }
@@ -492,6 +592,7 @@ export function createProviderWorkerServer(options = {}) {
     config,
     nonceStore,
     turnStore,
+    executionStore,
     executor,
     async close() {
       turnStore.close()

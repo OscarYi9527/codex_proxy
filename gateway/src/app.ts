@@ -68,6 +68,9 @@ import { AuditService } from './audit/audit-service.js'
 import { RetentionService } from './audit/retention-service.js'
 import { registerAuditRoutes } from './api/audit-routes.js'
 import { ProviderWorkerClient } from './provider-worker/provider-worker-client.js'
+import {
+  ProviderWorkerSettlementReconciler
+} from './provider-worker/settlement-reconciler.js'
 
 export interface GatewayApp {
   readonly app: FastifyInstance
@@ -130,6 +133,7 @@ export async function createGatewayApp(options: {
   registerManagementShell(app)
   let chatgptLogin: ChatgptLoginCoordinator | null = null
   let retentionTimer: ReturnType<typeof setInterval> | null = null
+  let providerWorkerReconciler: ProviderWorkerSettlementReconciler | null = null
 
   if (config.authMode === 'mock' && mock) {
     const tokenVerifier = options.tokenVerifier || new FixedMockAccessTokenVerifier()
@@ -268,8 +272,17 @@ export async function createGatewayApp(options: {
       providerAdapter,
       risks,
       settlements,
-      audit
+      audit,
+      logger
     )
+    if (providerAdapter instanceof ProviderWorkerClient) {
+      providerWorkerReconciler = new ProviderWorkerSettlementReconciler(
+        providerAdapter,
+        settlements,
+        logger
+      )
+      providerWorkerReconciler.start()
+    }
     if (!options.bootstrapSink && await repository.countAccounts() === 0) {
       throw new Error(
         'Gateway bootstrap is required; run gateway/src/bootstrap-cli.ts in the foreground first'
@@ -328,6 +341,7 @@ export async function createGatewayApp(options: {
     mock,
     async close() {
       if (retentionTimer) clearInterval(retentionTimer)
+      await providerWorkerReconciler?.stop()
       await chatgptLogin?.close()
       await app.close()
       await database.close()

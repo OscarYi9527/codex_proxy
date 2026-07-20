@@ -71,6 +71,14 @@ function parsePositiveInteger(value, fallback, name, minimum, maximum) {
   return parsed
 }
 
+function parseWorkerIdentity(value, fallback, name) {
+  const result = String(value || fallback)
+  if (!/^[A-Za-z0-9._:-]{1,80}$/.test(result)) {
+    throw new Error(`Provider Worker ${name} is invalid`)
+  }
+  return result
+}
+
 function readTlsConfig(env, environment) {
   const paths = {
     key: env.AI_EDITOR_PROVIDER_WORKER_TLS_KEY,
@@ -129,6 +137,16 @@ export function loadProviderWorkerConfig(
     repositoryRoot,
     environment
   )
+  const workerId = parseWorkerIdentity(
+    env.AI_EDITOR_PROVIDER_WORKER_ID,
+    'worker-local',
+    'ID'
+  )
+  const region = parseWorkerIdentity(
+    env.AI_EDITOR_PROVIDER_WORKER_REGION,
+    'local-development',
+    'region'
+  )
   return {
     environment,
     executorMode: parseExecutorMode(
@@ -137,6 +155,8 @@ export function loadProviderWorkerConfig(
     host: parseHost(env.AI_EDITOR_PROVIDER_WORKER_HOST, environment),
     port: parsePort(env.AI_EDITOR_PROVIDER_WORKER_PORT, environment),
     dataRoot,
+    workerId,
+    region,
     signingSecret,
     allowedGatewayIds: new Set(allowedGatewayIds),
     maxClockSkewMs: parsePositiveInteger(

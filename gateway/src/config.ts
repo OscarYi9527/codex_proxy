@@ -10,6 +10,8 @@ export const PROVIDER_WORKER_DEVELOPMENT_PORT = 47930
 export interface ProviderWorkerGatewayConfig {
   readonly origin: string
   readonly gatewayId: string
+  readonly workerId: string
+  readonly region: string
   readonly signingSecret: string
   readonly tls: {
     readonly keyFile: string
@@ -110,6 +112,16 @@ function parseProviderWorker(
   if (!/^[A-Za-z0-9._:-]{1,80}$/.test(gatewayId)) {
     throw new Error('Provider Worker Gateway ID is invalid')
   }
+  const workerId = String(env.AI_EDITOR_PROVIDER_WORKER_ID || 'worker-local')
+  const region = String(
+    env.AI_EDITOR_PROVIDER_WORKER_REGION || 'local-development'
+  )
+  if (
+    !/^[A-Za-z0-9._:-]{1,80}$/.test(workerId) ||
+    !/^[A-Za-z0-9._:-]{1,80}$/.test(region)
+  ) {
+    throw new Error('Provider Worker identity is invalid')
+  }
   const tlsValues = [
     env.AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_KEY,
     env.AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_CERT,
@@ -139,6 +151,8 @@ function parseProviderWorker(
   return {
     origin: url.origin,
     gatewayId,
+    workerId,
+    region,
     signingSecret,
     tls
   }

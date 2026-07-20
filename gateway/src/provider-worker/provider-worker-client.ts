@@ -10,11 +10,29 @@ import type {
   SafeAccountPoolSnapshot,
   SafeModelList
 } from '../routing/standalone-route-adapter.js'
+import type { UsageRecord } from '../db/repositories/credit-repository.js'
 import type { ProviderWorkerGatewayConfig } from '../config.js'
-import { createProviderWorkerSignedHeaders } from './protocol.js'
+import {
+  createProviderWorkerSignedHeaders,
+  type ProviderUsageReceipt,
+  verifyProviderUsageReceipt
+} from './protocol.js'
 
 const MAX_JSON_BYTES = 1024 * 1024
 const MAX_AUDIT_CAPTURE_BYTES = 4 * 1024 * 1024
+
+interface ProviderWorkerOutbox {
+  readonly schemaVersion: 1
+  readonly workerId: string
+  readonly region: string
+  readonly items: readonly unknown[]
+}
+
+interface ProviderWorkerTurnStatus {
+  readonly turnId?: unknown
+  readonly state?: unknown
+  readonly usageReceipt?: unknown
+}
 
 function safeHeader(
   headers: IncomingMessage['headers'],
@@ -235,6 +253,66 @@ export class ProviderWorkerClient implements ProviderRouteAdapter {
     )
   }
 
+  async listPendingUsage(limit = 100): Promise<ProviderUsageReceipt[]> {
+    const bounded = Math.min(Math.max(Math.trunc(limit), 1), 100)
+    const value = await this.requestJson<ProviderWorkerOutbox>(
+      'GET',
+      `/internal/v1/usage/outbox?limit=${bounded}`,
+      undefined,
+      'usage_outbox'
+    )
+    if (
+      value.schemaVersion !== 1 ||
+      value.workerId !== this.config.workerId ||
+      value.region !== this.config.region ||
+      !Array.isArray(value.items)
+    ) {
+      throw workerError('provider_worker_outbox_invalid', 502, true)
+    }
+    try {
+      return value.items.map(item => verifyProviderUsageReceipt(item, {
+        signingSecret: this.config.signingSecret,
+        workerId: this.config.workerId,
+        region: this.config.region
+      }))
+    } catch (error) {
+      throw workerError('provider_worker_usage_receipt_invalid', 502, true, error)
+    }
+  }
+
+  async acknowledgeUsage(
+    acknowledgements: ReadonlyArray<{
+      readonly outboxId: string
+      readonly turnId: string
+      readonly settlementId: string
+      readonly settledAt: string
+    }>
+  ): Promise<void> {
+    if (!acknowledgements.length) return
+    await this.requestJson(
+      'POST',
+      '/internal/v1/usage/outbox/ack',
+      {
+        schemaVersion: 1,
+        acknowledgements: acknowledgements.map(value => ({ ...value }))
+      },
+      'usage_ack'
+    )
+  }
+
+  async acknowledgeSettlement(
+    result: ProviderForwardResult,
+    usage: UsageRecord
+  ): Promise<void> {
+    if (!result.usageReceipt) return
+    await this.acknowledgeUsage([{
+      outboxId: result.usageReceipt.outboxId,
+      turnId: result.usageReceipt.turnId,
+      settlementId: usage.id,
+      settledAt: usage.completedAt
+    }])
+  }
+
   async forwardResponses(
     request: FastifyRequest,
     reply: FastifyReply,
@@ -289,6 +367,7 @@ export class ProviderWorkerClient implements ProviderRouteAdapter {
         'x-request-id': safeHeader(response.headers, 'x-request-id') || requestId
       }
       const providerId = safeHeader(response.headers, 'x-ai-editor-provider-id')
+      const outboxId = safeHeader(response.headers, 'x-ai-editor-outbox-id')
       if (providerId) outgoingHeaders['x-ai-editor-provider-id'] = providerId
       const replay = safeHeader(response.headers, 'x-ai-editor-idempotent-replay')
       if (replay) outgoingHeaders['x-ai-editor-idempotent-replay'] = replay
@@ -321,11 +400,30 @@ export class ProviderWorkerClient implements ProviderRouteAdapter {
         request.raw.removeListener('aborted', abort)
       }
       reply.raw.end()
-      if (!captureEnabled) return providerId ? { providerId } : {}
-      const payload = Buffer.concat(captured)
+      const payload = captureEnabled ? Buffer.concat(captured) : Buffer.alloc(0)
       for (const item of captured) item.fill(0)
       try {
-        return responseResult(payload, providerId)
+        const result = captureEnabled
+          ? responseResult(payload, providerId)
+          : (providerId ? { providerId } : {})
+        if (!outboxId) return result
+        try {
+          const receipt = await this.turnUsageReceipt(turnId, outboxId)
+          return {
+            ...result,
+            usage: {
+              inputTokens: receipt.inputTokens,
+              outputTokens: receipt.outputTokens
+            },
+            usageReceipt: receipt
+          }
+        } catch {
+          return {
+            ...(result.providerId ? { providerId: result.providerId } : {}),
+            ...(result.assistantText ? { assistantText: result.assistantText } : {}),
+            deferSettlement: true
+          }
+        }
       } finally {
         payload.fill(0)
       }
@@ -390,7 +488,8 @@ export class ProviderWorkerClient implements ProviderRouteAdapter {
     method: string,
     requestTarget: string,
     value: Record<string, unknown> | undefined,
-    operation: string
+    operation: string,
+    turnId = ''
   ): Promise<T> {
     const body = value === undefined
       ? Buffer.alloc(0)
@@ -400,7 +499,7 @@ export class ProviderWorkerClient implements ProviderRouteAdapter {
         method,
         requestTarget,
         body,
-        '',
+        turnId,
         `req_worker_${operation}_${this.now()}`
       )
       const payload = await readLimited(response, MAX_JSON_BYTES)
@@ -429,5 +528,39 @@ export class ProviderWorkerClient implements ProviderRouteAdapter {
     } finally {
       body.fill(0)
     }
+  }
+
+  private async turnUsageReceipt(
+    turnId: string,
+    expectedOutboxId: string
+  ): Promise<ProviderUsageReceipt> {
+    const status = await this.requestJson<ProviderWorkerTurnStatus>(
+      'GET',
+      `/internal/v1/turns/${encodeURIComponent(turnId)}`,
+      undefined,
+      'turn_status',
+      turnId
+    )
+    if (
+      status.turnId !== turnId ||
+      status.state !== 'completed' ||
+      !status.usageReceipt
+    ) {
+      throw workerError('provider_worker_usage_receipt_missing', 502, true)
+    }
+    let receipt: ProviderUsageReceipt
+    try {
+      receipt = verifyProviderUsageReceipt(status.usageReceipt, {
+        signingSecret: this.config.signingSecret,
+        workerId: this.config.workerId,
+        region: this.config.region
+      })
+    } catch (error) {
+      throw workerError('provider_worker_usage_receipt_invalid', 502, true, error)
+    }
+    if (receipt.turnId !== turnId || receipt.outboxId !== expectedOutboxId) {
+      throw workerError('provider_worker_usage_receipt_mismatch', 502, true)
+    }
+    return receipt
   }
 }

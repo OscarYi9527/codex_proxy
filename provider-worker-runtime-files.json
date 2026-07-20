@@ -10,6 +10,7 @@
     "src/mode.js",
     "src/provider-worker/config.js",
     "src/provider-worker/chatgpt-sub-executor.js",
+    "src/provider-worker/execution-store.js",
     "src/provider-worker/mock-executor.js",
     "src/provider-worker/nonce-store.js",
     "src/provider-worker/protocol.js",

@@ -6,6 +6,7 @@ import { TurnRiskService } from '../credits/turn-risk-service.js'
 import { SettlementService } from '../credits/settlement-service.js'
 import type { AuditService } from '../audit/audit-service.js'
 import type { ProviderForwardResult } from './standalone-route-adapter.js'
+import type { SafeLogger } from '../common/logging.js'
 
 function requestBody(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -24,7 +25,8 @@ export class ResponsesGateway {
     private readonly adapter: ProviderRouteAdapter,
     private readonly risks?: TurnRiskService,
     private readonly settlements?: SettlementService,
-    private readonly audit?: AuditService
+    private readonly audit?: AuditService,
+    private readonly logger?: SafeLogger
   ) {}
 
   async handle(
@@ -44,9 +46,21 @@ export class ResponsesGateway {
       : null
     const complete = async (resultValue: void | ProviderForwardResult): Promise<void> => {
       const result = resultValue || {}
-      const usage = reservation
+      const usage = reservation && !result.deferSettlement
         ? await this.settlements?.settle(verified.turnId, result)
         : null
+      if (usage && this.adapter.acknowledgeSettlement) {
+        try {
+          await this.adapter.acknowledgeSettlement(result, usage)
+        } catch (error) {
+          // The persistent Worker outbox remains pending and the background
+          // reconciler retries without repeating the upstream Turn.
+          this.logger?.warn('provider_worker_settlement_ack_deferred', {
+            turnId: verified.turnId,
+            error
+          })
+        }
+      }
       const inputTokens = usage?.inputTokens ?? result.usage?.inputTokens
       const outputTokens = usage?.outputTokens ?? result.usage?.outputTokens
       await this.audit?.recordConversation({

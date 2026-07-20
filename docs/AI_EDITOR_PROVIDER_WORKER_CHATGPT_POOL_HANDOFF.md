@@ -86,17 +86,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
 - 三进程脚本测试结束后 `47920/47921/47930` 均释放
 - 共享 `47892` 验证前后均为 PID `26404`、`/live=ok`
 
-## 尚未完成
+## 后续状态
 
-1. T135：持久化 execution/outbox、用量对账和 Gateway 签名确认。
-2. Worker 重启后的刷新 Token 安全持久化：
+T135 持久化 execution/outbox、用量对账和 Gateway 签名确认已经完成，详细交接见：
+
+`docs/AI_EDITOR_PROVIDER_WORKER_T135_HANDOFF.md`
+
+尚未完成：
+
+1. Worker 重启后的刷新 Token 安全持久化：
    - 当前不允许把明文 Token 写入磁盘；
    - Worker 进程内刷新后的滚动 Refresh Token 会保留在内存；
-   - 在 T135/PW3 的安全凭据存储完成前，不做公网发布。
-3. 专用真实 ChatGPT 测试账号联合验收：
+   - 在 T136/PW3 的 KMS/信封加密完成前，不做公网发布。
+2. 专用真实 ChatGPT 测试账号联合验收：
    - 必须由一级管理员通过隔离 Gateway 管理页导入；
    - 不得把 Token、密码、订阅 URL 或 `auth.json` 发到聊天或提交到 Git。
-4. KMS/信封加密、境外 Worker、生产 mTLS 证书和公网部署属于 PW3/PW4。
+3. KMS/信封加密、境外 Worker、生产 mTLS 证书和公网部署属于 PW3/PW4。
 
 ## 下一阶段人工门禁
 

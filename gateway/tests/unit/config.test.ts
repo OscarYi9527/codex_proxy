@@ -55,6 +55,8 @@ describe('Gateway fixed development configuration', () => {
     expect(config.providerWorker).toEqual({
       origin: 'http://127.0.0.1:47930',
       gatewayId: 'gateway-test',
+      workerId: 'worker-local',
+      region: 'local-development',
       signingSecret: 'provider-worker-config-test-secret-32bytes-minimum',
       tls: null
     })

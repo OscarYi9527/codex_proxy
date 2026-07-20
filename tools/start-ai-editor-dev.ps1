@@ -113,6 +113,8 @@ try {
                 AI_EDITOR_PROVIDER_WORKER_PORT = $ProviderWorkerPort
                 AI_EDITOR_PROVIDER_WORKER_DATA_ROOT = $providerWorkerRoot
                 AI_EDITOR_PROVIDER_WORKER_GATEWAY_IDS = 'gateway-local'
+                AI_EDITOR_PROVIDER_WORKER_ID = 'worker-local'
+                AI_EDITOR_PROVIDER_WORKER_REGION = 'local-development'
                 AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET = $providerWorkerSigningSecret
                 AI_EDITOR_PROVIDER_WORKER_EXECUTOR = $ProviderWorkerExecutor
             } `
@@ -141,6 +143,8 @@ try {
             $gatewayEnvironment.AI_EDITOR_PROVIDER_WORKER_ORIGIN =
                 "http://127.0.0.1:$ProviderWorkerPort"
             $gatewayEnvironment.AI_EDITOR_PROVIDER_WORKER_GATEWAY_ID = 'gateway-local'
+            $gatewayEnvironment.AI_EDITOR_PROVIDER_WORKER_ID = 'worker-local'
+            $gatewayEnvironment.AI_EDITOR_PROVIDER_WORKER_REGION = 'local-development'
             $gatewayEnvironment.AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET =
                 $providerWorkerSigningSecret
         }

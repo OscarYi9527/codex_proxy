@@ -2,6 +2,10 @@ import crypto from 'node:crypto'
 import http from 'node:http'
 import Fastify from 'fastify'
 import { ProviderWorkerClient } from '../../src/provider-worker/provider-worker-client.js'
+import {
+  signProviderUsageReceipt,
+  type ProviderUsageReceipt
+} from '../../src/provider-worker/protocol.js'
 
 const SIGNING_SECRET = 'provider-worker-gateway-test-secret-32bytes-minimum'
 
@@ -42,6 +46,8 @@ describe('ProviderWorkerClient', () => {
       const client = new ProviderWorkerClient({
         origin,
         gatewayId: 'gateway-test',
+        workerId: 'worker-local',
+        region: 'local-development',
         signingSecret: SIGNING_SECRET,
         tls: null
       }, () => 1_800_000_000_000)
@@ -66,12 +72,39 @@ describe('ProviderWorkerClient', () => {
   it('relays SSE and returns completed usage for Gateway settlement', async () => {
     let capturedBody = ''
     let capturedTurnId = ''
+    const unsignedReceipt = {
+      outboxId: 'outbox_gateway_worker',
+      executionId: 'exec_gateway_worker',
+      turnId: 'turn_gateway_worker',
+      workerId: 'worker-local',
+      region: 'local-development',
+      providerId: 'provider-worker-mock',
+      inputTokens: 7,
+      outputTokens: 3,
+      completedAt: '2026-07-20T00:00:00.000Z'
+    }
+    const receipt: ProviderUsageReceipt = {
+      schemaVersion: 1,
+      ...unsignedReceipt,
+      signature: signProviderUsageReceipt(unsignedReceipt, SIGNING_SECRET)
+    }
     const worker = http.createServer(async (request, response) => {
+      if (request.url === '/internal/v1/turns/turn_gateway_worker') {
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({
+          turnId: 'turn_gateway_worker',
+          state: 'completed',
+          usageReceipt: receipt
+        }))
+        return
+      }
       capturedTurnId = String(request.headers['x-ai-editor-turn-id'] || '')
       for await (const chunk of request) capturedBody += chunk.toString('utf8')
       response.writeHead(200, {
         'content-type': 'text/event-stream; charset=utf-8',
-        'x-ai-editor-provider-id': 'provider-worker-mock'
+        'x-ai-editor-provider-id': 'provider-worker-mock',
+        'x-ai-editor-execution-id': unsignedReceipt.executionId,
+        'x-ai-editor-outbox-id': unsignedReceipt.outboxId
       })
       response.write('event: response.output_text.delta\n')
       response.write('data: {"type":"response.output_text.delta","delta":"HELLO"}\n\n')
@@ -84,6 +117,8 @@ describe('ProviderWorkerClient', () => {
     const client = new ProviderWorkerClient({
       origin: workerOrigin,
       gatewayId: 'gateway-test',
+      workerId: 'worker-local',
+      region: 'local-development',
       signingSecret: SIGNING_SECRET,
       tls: null
     })
@@ -116,10 +151,14 @@ describe('ProviderWorkerClient', () => {
         model: 'gpt-worker-mock',
         input: 'hello'
       })
+      for (let attempt = 0; result === undefined && attempt < 50; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
       expect(result).toEqual({
         providerId: 'provider-worker-mock',
         assistantText: 'HELLO',
-        usage: { inputTokens: 7, outputTokens: 3 }
+        usage: { inputTokens: 7, outputTokens: 3 },
+        usageReceipt: receipt
       })
     } finally {
       await gateway.close()
@@ -164,6 +203,8 @@ describe('ProviderWorkerClient', () => {
       const client = new ProviderWorkerClient({
         origin,
         gatewayId: 'gateway-test',
+        workerId: 'worker-local',
+        region: 'local-development',
         signingSecret: SIGNING_SECRET,
         tls: null
       })
@@ -248,6 +289,8 @@ describe('ProviderWorkerClient', () => {
       const client = new ProviderWorkerClient({
         origin,
         gatewayId: 'gateway-test',
+        workerId: 'worker-local',
+        region: 'local-development',
         signingSecret: SIGNING_SECRET,
         tls: null
       })
@@ -282,6 +325,8 @@ describe('ProviderWorkerClient', () => {
       const client = new ProviderWorkerClient({
         origin,
         gatewayId: 'gateway-test',
+        workerId: 'worker-local',
+        region: 'local-development',
         signingSecret: SIGNING_SECRET,
         tls: null
       })

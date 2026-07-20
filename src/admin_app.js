@@ -7,8 +7,9 @@ let priceCatalogData = { prices: {} }, costReportData = { providers: {} }
 let accountImportFileName = ''
 let accountImportFiles = []
 let batchLoginQueue = [], batchLoginIndex = 0, batchLoginPreflightData = null
+let activeLoginUi = null
 let accountViewMode = localStorage.getItem('codex-account-view') === 'compact' ? 'compact' : 'cards'
-let accountCategory = ['all','refreshable','temporary','expiring','expired','incompatible'].includes(localStorage.getItem('codex-account-category')) ? localStorage.getItem('codex-account-category') : 'all'
+let accountCategory = ['all','issues','stable_pool','disposable_pool','discarded','refreshable','temporary','expiring','expired','incompatible'].includes(localStorage.getItem('codex-account-category')) ? localStorage.getItem('codex-account-category') : 'all'
 let healthRange = ['1h','24h','7d'].includes(localStorage.getItem('codex-health-range')) ? localStorage.getItem('codex-health-range') : '24h'
 let usageCalendarMonth = statsDateKey().slice(0,7)
 let animateNextRender = true
@@ -217,7 +218,7 @@ function setAccountViewMode(mode){
   render()
 }
 function setAccountCategory(category){
-  if(!['all','refreshable','temporary','expiring','expired','incompatible'].includes(category))return
+  if(!['all','issues','stable_pool','disposable_pool','discarded','refreshable','temporary','expiring','expired','incompatible'].includes(category))return
   accountCategory=category
   localStorage.setItem('codex-account-category',category)
   render()
@@ -293,7 +294,7 @@ function diagnosisCenter(){
   const issues=diagnosis.issues||[]
   const tone=diagnosis.summary?.level==='critical'?'off':diagnosis.summary?.level==='warning'?'warn':''
   const body=issues.length?issues.slice(0,8).map(issue=>{
-    const actions=(issue.actions||[]).map(item=>`<button class="btn btn-sm" onclick="runDiagnosisAction('${esc(item.id)}','${esc(item.target||'')}')">${esc(item.label)}</button>`).join('')
+    const actions=(issue.actions||[]).map(item=>`<button class="btn btn-sm" onclick="runDiagnosisAction('${esc(item.id)}','${esc(item.target||'')}',event)">${esc(item.label)}</button>`).join('')
     return `<div class="provider-row" style="grid-template-columns:minmax(0,1fr) auto"><div><span class="status ${issue.level==='critical'?'off':'warn'}"><i></i><b>${esc(issue.title)}</b></span><div class="cell-sub" style="margin-top:5px">${esc(issue.conclusion)}</div></div><div class="card-actions">${actions}</div></div>`
   }).join(''):`<div class="help-note"><span class="status ${tone}"><i></i>${esc(diagnosis.summary?.conclusion||'未发现明显异常')}</span></div>`
   const pool=diagnosis.account_pool||{},ops=diagnosis.trends?.operational||{}
@@ -429,10 +430,14 @@ async function refreshDiagnosis(){
     toast(data.summary?.conclusion||'诊断已更新')
   }catch(error){toast(error.message,'error')}
 }
-async function runDiagnosisAction(id,target){
+async function runDiagnosisAction(id,target,event){
   if(id==='refresh_quota'){
     await refreshAllUsage()
     return refreshDiagnosis()
+  }
+  if(id==='check_accounts'){
+    switchPage('accounts')
+    return checkAllAccountStatus()
   }
   if(id==='ping_providers'){
     switchPage('providers')
@@ -441,7 +446,7 @@ async function runDiagnosisAction(id,target){
   }
   if(id==='official_login'){
     switchPage('accounts')
-    return openOfficialLogin()
+    return openOfficialLogin(event)
   }
   if(target?.startsWith('#'))switchPage(target.slice(1))
 }
@@ -449,20 +454,20 @@ function showModal(title,body,saveText,saveFn){
   closeModal(); const el=document.createElement('div'); el.className='modal-overlay'; el.onclick=e=>{if(e.target===el)closeModal()}
   el.innerHTML=`<div class="modal"><div class="modal-head"><strong>${title}</strong><button class="icon-btn" onclick="closeModal()">${svg('x')}</button></div><div class="modal-body">${body}</div><div class="modal-foot">${button('取消','','closeModal()')}${button(saveText,'check',saveFn,'btn-primary')}</div></div>`; document.body.appendChild(el); modal=el
 }
-function clearBatchLoginSecrets(cancelWaiting=false){
-  const current=batchLoginQueue[batchLoginIndex]
-  if(cancelWaiting&&current?.status==='waiting'){
-    fetch(API+'/chatgpt-login/cancel',{method:'POST'}).catch(()=>{})
-  }
+function clearBatchLoginSecrets(){
   for(const item of batchLoginQueue)item.password=''
   batchLoginQueue=[];batchLoginIndex=0;batchLoginPreflightData=null
 }
 function closeModal(){
+  const batchWaiting=batchLoginQueue[batchLoginIndex]?.status==='waiting'
+  const shouldCancelLogin=Boolean(activeLoginUi)||batchWaiting
+  activeLoginUi=null
   if(loginPoll)clearInterval(loginPoll)
   loginPoll=null
   for(const file of accountImportFiles)file.content=''
   accountImportFiles=[];accountImportFileName=''
-  clearBatchLoginSecrets(true)
+  clearBatchLoginSecrets()
+  if(shouldCancelLogin)fetch(API+'/chatgpt-login/cancel',{method:'POST'}).catch(()=>{})
   if(modal)modal.remove()
   modal=null
 }
@@ -525,9 +530,9 @@ async function saveRelay(){
 }
 async function removeRelay(id){ if(!confirm('确定删除这个中转节点吗？'))return; try{const r=await fetch(API+'/relays/'+encodeURIComponent(id),{method:'DELETE'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'删除失败');cfg=d.config;render();toast('节点已删除')}catch(e){toast(e.message,'error')} }
 function openAccount(){
-  showModal('快捷导入 ChatGPT 账号',`<div class="quick-import"><button class="quick-option" onclick="importCurrentAccount()">${svg('refresh')}<strong>一键导入当前账号</strong><small>完整 OAuth 凭据<br>可自动续约</small></button><button class="quick-option" id="auth_drop" onclick="document.getElementById('auth_file').click()" ondragover="authDrag(event,true)" ondragleave="authDrag(event,false)" ondrop="authDrop(event)">${svg('download')}<strong>批量选择账号文件</strong><small>CPA/sub2 自动验权<br>兼容 Token 才能临时直用</small></button><button class="quick-option" onclick="openBatchOfficialLogin()">${svg('users')}<strong>批量官方登录</strong><small>把临时或不兼容账号转为<br>可自动续约账号</small></button></div><input id="auth_file" type="file" multiple accept=".json,.txt,application/json,text/plain" class="hidden" onchange="loadAuthFiles(this.files)">
-  <div class="help-note" style="margin-top:12px"><b>系统会自动分类并校验 OAuth 客户端</b><p><b>临时直导：</b>存在 access_token + account_id、没有 ChatGPT refresh_token，并且 Token 由 Codex 官方 OAuth 客户端签发；可以立即加入号池并显示倒计时。<br><b>可续约导入：</b>同时存在有效 refresh_token；可长期自动刷新。<br><b>权限不兼容：</b>某些 CPA/sub2 Token 虽能查询额度，但不能调用 Codex Responses，将强制仅保存并提示官方登录。<br><b>不能直导：</b>只有邮箱、密码或邮箱 OAuth 的 TXT。</p></div><div id="auth_file_preview" style="display:grid;gap:7px;margin:10px 0"></div>
-  <div class="divider">或者手动粘贴单个账号</div><div class="form-grid"><div class="field full"><label>单账号备注 <span class="hint">批量文件会使用文件内名称</span></label><input class="input" id="account_label" maxlength="80" placeholder="例如：备用账号"></div><div class="field full"><label style="display:flex;align-items:center;gap:8px"><input id="account_routing_enabled" type="checkbox"> 导入后立即参与自动路由</label><span class="hint">周抛临时号可以勾选后立即使用；仍建议先确认到期时间和额度。</span></div><div class="field full"><label>账号文件内容</label><textarea id="account_json" style="min-height:150px" placeholder='粘贴 auth.json、sub2/CPA JSON 或完整凭据 TXT' oninput="if(this.value.trim()){accountImportFiles=[];accountImportFileName='';const p=document.getElementById('auth_file_preview');if(p)p.innerHTML=''}"></textarea><span class="hint" id="auth_file_hint">凭据只发送到本机管理接口，不会访问文件来源网站。</span></div></div>`,'安全导入','saveAccount()')
+  showModal('快捷导入 ChatGPT 账号',`<div class="quick-import"><button class="quick-option" onclick="importCurrentAccount()">${svg('refresh')}<strong>一键导入当前账号</strong><small>完整 OAuth 凭据<br>可自动续约</small></button><button class="quick-option" id="auth_drop" onclick="document.getElementById('auth_file').click()" ondragover="authDrag(event,true)" ondragleave="authDrag(event,false)" ondrop="authDrop(event)">${svg('download')}<strong>批量选择账号文件</strong><small>CPA/sub2 自动验权<br>兼容 Token 才能临时直用</small></button><button class="quick-option" onclick="openBatchOfficialLogin(event)">${svg('users')}<strong>批量官方登录</strong><small>把临时或不兼容账号转为<br>可自动续约账号</small></button></div><input id="auth_file" type="file" multiple accept=".json,.txt,application/json,text/plain" class="hidden" onchange="loadAuthFiles(this.files)">
+  <div class="help-note" style="margin-top:12px"><b>系统会自动分类并校验 OAuth 客户端</b><p><b>稳定保险池：</b>默认用于完整可续约账号；仅在日抛池不可用时参与，并保留安全余量。<br><b>日抛优先池：</b>默认用于仅 Access Token 的临时账号；优先消耗到 0，周额度 7 天仍未恢复就自动停用弃号。<br><b>权限不兼容：</b>某些 CPA/sub2 Token 虽能查询额度，但不能调用 Codex Responses，将强制仅保存并提示官方登录。</p></div><div id="auth_file_preview" style="display:grid;gap:7px;margin:10px 0"></div>
+  <div class="divider">或者手动粘贴单个账号</div><div class="form-grid"><div class="field full"><label>单账号备注 <span class="hint">批量文件会使用文件内名称</span></label><input class="input" id="account_label" maxlength="80" placeholder="例如：备用账号"></div><div class="field full"><label>账号池分级</label><select class="input" id="account_pool_tier"><option value="">自动：可续约进稳定池，临时号进日抛池</option><option value="stable">稳定保险池</option><option value="disposable">日抛优先池</option></select><span class="hint">可以在账号“额度策略”中随时调整，已弃号需先改为稳定池才能恢复。</span></div><div class="field full"><label style="display:flex;align-items:center;gap:8px"><input id="account_routing_enabled" type="checkbox"> 导入后立即参与自动路由</label><span class="hint">日抛号会优先使用到 0；不兼容 Token 即使勾选也会强制仅保存。</span></div><div class="field full"><label>账号文件内容</label><textarea id="account_json" style="min-height:150px" placeholder='粘贴 auth.json、sub2/CPA JSON 或完整凭据 TXT' oninput="if(this.value.trim()){accountImportFiles=[];accountImportFileName='';const p=document.getElementById('auth_file_preview');if(p)p.innerHTML=''}"></textarea><span class="hint" id="auth_file_hint">凭据只发送到本机管理接口，不会访问文件来源网站。</span></div></div>`,'安全导入','saveAccount()')
   accountImportFiles=[];accountImportFileName=''
 }
 function openRenameAccount(id){
@@ -585,7 +590,8 @@ async function loadAuthFiles(files){
 async function loadAuthFile(file){return loadAuthFiles(file?[file]:[])}
 async function importCurrentAccount(){
   try{
-    const r=await fetch(API+'/chatgpt-accounts/import-current',{method:'POST'}),d=await r.json()
+    const poolTier=String(document.getElementById('account_pool_tier')?.value||'stable')
+    const r=await fetch(API+'/chatgpt-accounts/import-current?poolTier='+encodeURIComponent(poolTier),{method:'POST'}),d=await r.json()
     if(!r.ok)throw new Error(d.error?.message||'快捷导入失败')
     cfg=d.config;closeModal();render();toast(d.message||'当前账号已导入')
   }catch(e){toast(e.message,'error')}
@@ -599,19 +605,39 @@ function loginPreflightHtml(data){
   const repairs=data.ok?'':`<div class="help-note" style="margin-top:10px"><b>修复命令</b><p><code>${(data.repair_commands||[]).map(esc).join('<br>')}</code></p></div>`
   return `<div style="display:grid;gap:8px"><div class="status ${data.ok?'':'off'}"><i></i>${esc(data.message||'预检完成')}</div>${candidates||'<span class="cell-sub">没有发现 Codex CLI</span>'}${browser}${repairs}<button class="btn btn-sm" type="button" onclick="copyLoginDiagnostics()">${svg('download')}复制登录诊断</button></div>`
 }
-async function openOfficialLogin(){
+function ignoreAccidentalModalTrigger(event){
+  if(event&&event.button!=null&&event.button!==0)return true
+  const selection=String(window.getSelection?.()?.toString()||'').trim()
+  if(selection){
+    event?.preventDefault?.()
+    event?.stopPropagation?.()
+    return true
+  }
+  return false
+}
+async function cancelStaleOfficialLogin(){
+  try{
+    const response=await fetch(API+'/chatgpt-login/status',{cache:'no-store'}),data=await response.json()
+    if(data.status!=='waiting')return false
+    await fetch(API+'/chatgpt-login/cancel',{method:'POST'})
+    return true
+  }catch{return false}
+}
+async function openOfficialLogin(event){
+  if(ignoreAccidentalModalTrigger(event))return
   loginPreflightData=null
-  showModal('OpenAI 官方安全登录',`<div class="form-grid"><div class="field full"><div style="padding:13px;border-radius:10px;background:var(--primary-soft);color:var(--primary);font-size:11px;line-height:1.7">登录通过隔离的 Codex app-server 浏览器 OAuth 完成，不会修改本机现有 Codex 的 auth.json。新账号默认仅保存，不参与代理路由。</div></div><div class="field full"><label>登录环境预检</label><div id="login_preflight" class="help-note">${loginPreflightHtml(null)}</div></div><div class="field full"><label>邮箱或账号备注 <span class="hint">仅用于账号池中识别，可选</span></label><input class="input" id="login_label" type="email" autocomplete="email" placeholder="例如 name@example.com"></div><div class="field full"><label style="display:flex;align-items:center;gap:8px"><input id="login_routing_enabled" type="checkbox"> 登录后立即参与自动路由</label><span class="hint">不勾选时只放入账号池，不影响当前 Codex，也不会被代理选中。</span></div><div class="field full"><label>登录流程</label><div id="login_status" class="input" style="height:auto;min-height:48px;display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span class="status off"><i></i>等待预检</span></div></div><div class="field full"><span class="hint">完成官方页面的登录和授权后，本地回调会自动通知后台并导入账号。重复账号会被拒绝，不会覆盖已有账号。</span></div></div>`,'开始官方登录','startOfficialLogin()')
+  showModal('OpenAI 官方安全登录',`<div class="form-grid"><div class="field full"><div style="padding:13px;border-radius:10px;background:var(--primary-soft);color:var(--primary);font-size:11px;line-height:1.7">登录通过隔离的 Codex app-server 浏览器 OAuth 完成，不会修改本机现有 Codex 的 auth.json。分类会随登录结果一起写入账号记录，新账号默认仅保存。</div></div><div class="field full"><label>登录环境预检</label><div id="login_preflight" class="help-note">${loginPreflightHtml(null)}</div></div><div class="field full"><label>邮箱或账号备注 <span class="hint">仅用于账号池中识别，可选</span></label><input class="input" id="login_label" type="email" autocomplete="email" placeholder="例如 name@example.com"></div><div class="field full"><label>账号分类</label><select class="input" id="login_pool_tier"><option value="stable">稳定保险池</option><option value="disposable">日抛优先池</option></select><span class="hint">正式长期订阅选稳定池；短期购买或准备耗尽额度的账号选日抛池。</span></div><div class="field full"><label style="display:flex;align-items:center;gap:8px"><input id="login_routing_enabled" type="checkbox"> 登录后立即参与自动路由</label><span class="hint">不勾选时只放入账号池，不影响当前 Codex，也不会被代理选中。</span></div><div class="field full"><label>登录流程</label><div id="login_status" class="input" style="height:auto;min-height:48px;display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span class="status off"><i></i>等待预检</span></div></div><div class="field full"><span class="hint">完成官方页面的登录和授权后，本地回调会自动通知后台，并同时保存账号分类。重复账号会被拒绝，不会覆盖已有账号。</span></div></div>`,'开始官方登录','startOfficialLogin()')
   const submit=modal?.querySelector('.modal-foot .btn-primary')
   if(submit)submit.disabled=true
   try{
+    const staleCancelled=await cancelStaleOfficialLogin()
     const response=await fetch(API+'/chatgpt-login/preflight',{cache:'no-store'}),data=await response.json()
     loginPreflightData=data
     const target=document.getElementById('login_preflight')
     if(target)target.innerHTML=loginPreflightHtml(data)
     if(submit)submit.disabled=!data.ok
     const status=document.getElementById('login_status')
-    if(status)status.innerHTML=`<span class="status ${data.ok?'':'off'}"><i></i>${data.ok?'预检通过，可以开始官方登录':esc(data.message||'预检失败')}</span>`
+    if(status)status.innerHTML=`<span class="status ${data.ok?'':'off'}"><i></i>${data.ok?(staleCancelled?'已清理上次未完成的登录，可以重新开始':'预检通过，可以开始官方登录'):esc(data.message||'预检失败')}</span>`
   }catch(error){
     const target=document.getElementById('login_preflight')
     if(target)target.innerHTML=loginPreflightHtml({ok:false,message:error.message,candidates:[],repair_commands:[]})
@@ -706,11 +732,13 @@ async function loadBatchLoginFiles(files){
     renderBatchLoginQueue()
   }catch(error){toast(error.message,'error')}
 }
-async function openBatchOfficialLogin(){
+async function openBatchOfficialLogin(event){
+  if(ignoreAccidentalModalTrigger(event))return
   showModal('批量官方登录队列',`<div class="form-grid">
     <div class="field full"><div class="help-note"><b>适用于缺少 ChatGPT refresh_token 的 CPA/sub2 文件</b><p>系统只从本地文件生成邮箱队列，然后逐个打开 OpenAI 官方登录。不会自动处理验证码、MFA 或验证码挑战，也不会把密码发送到后台。</p></div></div>
     <div class="field full"><label>登录环境预检</label><div id="batch_login_preflight" class="help-note">${loginPreflightHtml(null)}</div></div>
     <div class="field full"><label>选择账号文件 <span class="hint">可以一次选择多个 CPA、sub2 和 TXT 文件，自动按邮箱/账号 ID 去重</span></label><input id="batch_login_files" type="file" multiple accept=".json,.txt,application/json,text/plain" class="input" onchange="loadBatchLoginFiles(this.files)"><span class="hint" id="batch_login_file_hint">文件只在浏览器本地解析；最多识别 100 个账号。</span></div>
+    <div class="field full"><label>这批账号的分类</label><select class="input" id="batch_login_pool_tier"><option value="disposable">日抛优先池</option><option value="stable">稳定保险池</option></select><span class="hint">批量登录通常用于短期 CPA/sub2，默认日抛；如果是自有长期订阅号，请改为稳定池。</span></div>
     <div class="field full"><label style="display:flex;align-items:center;gap:8px"><input id="batch_login_routing_enabled" type="checkbox"> 登录成功后立即参与自动路由</label><span class="hint">建议保持关闭，全部登录后刷新额度并逐个启用。</span></div>
     <div class="field full"><label>当前账号</label><div id="batch_login_current" class="help-note"><span class="cell-sub">尚未生成登录队列。</span></div></div>
     <div class="field full"><label>登录状态</label><div id="batch_login_status" class="input" style="height:auto;min-height:48px;display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span class="status off"><i></i>等待选择文件</span></div></div>
@@ -719,6 +747,7 @@ async function openBatchOfficialLogin(){
   batchLoginQueue=[];batchLoginIndex=0;batchLoginPreflightData=null
   batchLoginPrimary({label:'开始登录队列',disabled:true})
   try{
+    await cancelStaleOfficialLogin()
     const response=await fetch(API+'/chatgpt-login/preflight',{cache:'no-store'}),data=await response.json()
     batchLoginPreflightData=data
     const target=document.getElementById('batch_login_preflight')
@@ -738,18 +767,25 @@ async function copyBatchLoginCredential(kind){
 async function startBatchOfficialLogin(){
   const current=batchLoginQueue[batchLoginIndex]
   if(!batchLoginPreflightData?.ok||!current||current.status==='waiting')return
+  activeLoginUi='batch'
   current.status='waiting';current.message=''
   renderBatchLoginQueue()
   const status=document.getElementById('batch_login_status')
   if(status)status.innerHTML='<span class="status warn"><i></i>正在启动 OpenAI 官方登录页…</span>'
   try{
     const routingEnabled=document.getElementById('batch_login_routing_enabled')?.checked===true
-    const r=await fetch(API+'/chatgpt-login/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({label:current.label||current.email,email:current.email,routingEnabled})}),d=await r.json()
+    const poolTier=document.getElementById('batch_login_pool_tier')?.value||'disposable'
+    const r=await fetch(API+'/chatgpt-login/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({label:current.label||current.email,email:current.email,routingEnabled,poolTier})}),d=await r.json()
+    if(activeLoginUi!=='batch'){
+      if(r.ok)fetch(API+'/chatgpt-login/cancel',{method:'POST'}).catch(()=>{})
+      return
+    }
     if(!r.ok)throw new Error(d.error?.message||'无法启动登录')
     if(status)status.innerHTML=loginStatusContent(d)
     if(loginPoll)clearInterval(loginPoll)
     loginPoll=setInterval(checkBatchOfficialLogin,1200)
   }catch(error){
+    if(activeLoginUi==='batch')activeLoginUi=null
     current.status='error';current.message=error.message
     if(status)status.innerHTML=`<span class="status off"><i></i>${esc(error.message)}</span>`
     renderBatchLoginQueue()
@@ -762,6 +798,7 @@ async function checkBatchOfficialLogin(){
     if(!current||!status)return
     const decision=AdminUIBehaviors.loginPollDecision(d.status)
     if(!decision.terminal){status.innerHTML=loginStatusContent(d);return}
+    activeLoginUi=null
     clearInterval(loginPoll);loginPoll=null
     current.status=decision.outcome==='success'?'success':decision.outcome
     current.message=d.message||''
@@ -770,6 +807,7 @@ async function checkBatchOfficialLogin(){
       : `<span class="status off"><i></i>${esc(d.message||'登录未完成')}</span>`
     renderBatchLoginQueue()
   }catch(error){
+    activeLoginUi=null
     if(loginPoll)clearInterval(loginPoll)
     loginPoll=null
     const current=batchLoginQueue[batchLoginIndex]
@@ -779,6 +817,7 @@ async function checkBatchOfficialLogin(){
   }
 }
 async function cancelBatchOfficialLogin(){
+  activeLoginUi=null
   await fetch(API+'/chatgpt-login/cancel',{method:'POST'}).catch(()=>{})
   if(loginPoll)clearInterval(loginPoll)
   loginPoll=null
@@ -803,8 +842,9 @@ function advanceBatchOfficialLogin(){
   startBatchOfficialLogin()
 }
 async function finishBatchOfficialLogin(){
+  activeLoginUi=null
   const completed=batchLoginQueue.filter(item=>item.status==='success').length
-  clearBatchLoginSecrets(false)
+  clearBatchLoginSecrets()
   closeModal()
   await load()
   toast(`批量登录完成，成功导入 ${completed} 个账号`)
@@ -824,14 +864,20 @@ async function startOfficialLogin(){
   if(!loginPreflightData?.ok)return toast('请先等待登录环境预检通过','error')
   const label=document.getElementById('login_label')?.value.trim()||''
   const routingEnabled=document.getElementById('login_routing_enabled')?.checked===true
+  const poolTier=document.getElementById('login_pool_tier')?.value||'stable'
   const status=document.getElementById('login_status')
   status.innerHTML=`<span class="status warn"><i></i>正在启动 OpenAI 官方登录页面…</span>`
+  activeLoginUi='single'
   try{
-    const r=await fetch(API+'/chatgpt-login/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({label,email:label,routingEnabled})}),d=await r.json()
+    const r=await fetch(API+'/chatgpt-login/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({label,email:label,routingEnabled,poolTier})}),d=await r.json()
+    if(activeLoginUi!=='single'){
+      if(r.ok)fetch(API+'/chatgpt-login/cancel',{method:'POST'}).catch(()=>{})
+      return
+    }
     if(!r.ok)throw new Error(d.error?.message||'无法启动登录')
     status.innerHTML=loginStatusContent(d)
     loginPoll=setInterval(checkOfficialLogin,1200)
-  }catch(e){status.innerHTML=`<span class="status off"><i></i>${esc(e.message)}</span>`;toast(e.message,'error')}
+  }catch(e){if(activeLoginUi==='single')activeLoginUi=null;status.innerHTML=`<span class="status off"><i></i>${esc(e.message)}</span>`;toast(e.message,'error')}
 }
 async function checkOfficialLogin(){
   try{
@@ -839,41 +885,45 @@ async function checkOfficialLogin(){
     if(!status)return
     const decision=AdminUIBehaviors.loginPollDecision(d.status)
     if(!decision.terminal){status.innerHTML=loginStatusContent(d);return}
+    activeLoginUi=null
     clearInterval(loginPoll);loginPoll=null
     if(decision.outcome==='success'){status.innerHTML=`<span class="status"><i></i>${esc(d.message)}</span>`;toast(d.message);setTimeout(async()=>{closeModal();await load()},700)}
     else{status.innerHTML=`<span class="status off"><i></i>${esc(d.message||'登录未完成')}</span>`;toast(d.message||'登录未完成','error')}
-  }catch(e){clearInterval(loginPoll);loginPoll=null;toast(e.message,'error')}
+  }catch(e){activeLoginUi=null;clearInterval(loginPoll);loginPoll=null;toast(e.message,'error')}
 }
-async function cancelOfficialLogin(){await fetch(API+'/chatgpt-login/cancel',{method:'POST'});if(loginPoll)clearInterval(loginPoll);loginPoll=null;const status=document.getElementById('login_status');if(status)status.innerHTML='<span class="status off"><i></i>登录已取消</span>'}
+async function cancelOfficialLogin(){activeLoginUi=null;await fetch(API+'/chatgpt-login/cancel',{method:'POST'});if(loginPoll)clearInterval(loginPoll);loginPoll=null;const status=document.getElementById('login_status');if(status)status.innerHTML='<span class="status off"><i></i>登录已取消</span>'}
 async function saveAccount(){
   const content=document.getElementById('account_json').value.trim(),label=document.getElementById('account_label').value.trim(),routingEnabled=document.getElementById('account_routing_enabled')?.checked===true
+  const poolTier=String(document.getElementById('account_pool_tier')?.value||'')
   const payloads=accountImportFiles.length?accountImportFiles:(content?[{name:accountImportFileName,content}]:[])
   if(!payloads.length)return toast('请粘贴或选择账号文件','error')
   try{
-    let imported=0,skipped=0,rejected=0,temporary=0,refreshable=0,incompatible=0
+    let imported=0,skipped=0,rejected=0,temporary=0,refreshable=0,incompatible=0,stable=0,disposable=0
     const errors=[]
     for(const payload of payloads){
-      const r=await fetch(API+'/chatgpt-accounts/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({content:payload.content,label:payloads.length===1?label:'',routingEnabled,sourceName:payload.name})}),d=await r.json()
+      const r=await fetch(API+'/chatgpt-accounts/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({content:payload.content,label:payloads.length===1?label:'',routingEnabled,sourceName:payload.name,...(poolTier?{poolTier}:{})})}),d=await r.json()
       if(!r.ok){errors.push(`${payload.name||'手动内容'}：${d.error?.message||'导入失败'}`);continue}
       cfg=d.config
       imported+=Number(d.result?.imported||0);skipped+=Number(d.result?.skipped||0);rejected+=Number(d.result?.rejected||0)
       temporary+=Number(d.result?.temporary||0);refreshable+=Number(d.result?.refreshable||0)
       incompatible+=Number(d.result?.incompatible||0)
+      stable+=Number(d.result?.stable||0);disposable+=Number(d.result?.disposable||0)
     }
     if(!imported&&!skipped&&!rejected)throw new Error(errors.join('；')||'没有可导入账号')
     for(const payload of payloads)payload.content=''
     accountImportFiles=[]
     closeModal();render()
-    toast(`导入完成：新增 ${imported}（临时 ${temporary} / 可续约 ${refreshable}${incompatible?` / 不兼容 ${incompatible}`:''}），重复 ${skipped}${rejected?`，无效 ${rejected}`:''}${errors.length?`，${errors.length} 个文件无法解析`:''}`,errors.length||rejected||incompatible?'error':'')
+    toast(`导入完成：新增 ${imported}（稳定 ${stable} / 日抛 ${disposable}；临时 ${temporary} / 可续约 ${refreshable}${incompatible?` / 不兼容 ${incompatible}`:''}），重复 ${skipped}${rejected?`，无效 ${rejected}`:''}${errors.length?`，${errors.length} 个文件无法解析`:''}`,errors.length||rejected||incompatible?'error':'')
   }catch(e){toast(e.message,'error')}
 }
 async function removeAccount(id){const account=(cfg.chatgptAccounts||[]).find(item=>item.id===id);const name=account?.label||account?.email||'未命名账号',shortId=String(account?.account_id||id).slice(0,12);if(!confirm(`确定移除账号「${name}」吗？\n账号 ID：${shortId}…\n\n删除前会自动创建独立账号备份。`))return;try{const r=await fetch(API+'/chatgpt-accounts/'+encodeURIComponent(id),{method:'DELETE'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'移除失败');cfg=d.config;render();toast('账号已移除，删除前数据已备份')}catch(e){toast(e.message,'error')}}
 async function refreshAllUsage(){
-  toast('正在刷新全部账号用量…')
-  try{const r=await fetch(API+'/chatgpt-accounts/refresh-usage-all',{method:'POST'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'刷新失败');cfg=d.config;render();toast(d.message||'用量已刷新')}catch(e){toast(e.message,'error')}
+  toast('正在同步全部账号的用量和重置次数…')
+  try{const r=await fetch(API+'/chatgpt-accounts/refresh-usage-all',{method:'POST'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'同步失败');cfg=d.config;render();toast(d.message||'用量和重置次数已同步',d.result?.errors?.length?'error':'success')}catch(e){toast(e.message,'error')}
 }
 async function refreshAccountUsageOne(id){
-  try{const r=await fetch(API+'/chatgpt-accounts/'+encodeURIComponent(id)+'/refresh-usage',{method:'POST'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'刷新失败');cfg=d.config;render();toast(d.message||'用量已刷新')}catch(e){toast(e.message,'error')}
+  toast('正在同步账号用量和重置次数…')
+  try{const r=await fetch(API+'/chatgpt-accounts/'+encodeURIComponent(id)+'/refresh-usage',{method:'POST'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'同步失败');cfg=d.config;render();toast(d.message||'账号用量和重置次数已同步',d.result?.warnings?.length?'error':'success')}catch(e){toast(e.message,'error')}
 }
 async function refreshAccountResetCreditsOne(id){
   toast('正在查询 Codex 重置次数…')
@@ -966,10 +1016,12 @@ function openAccountPolicy(id){
   const account=(cfg.chatgptAccounts||[]).find(item=>item.id===id)
   if(!account)return toast('账号不存在','error')
   const globalReserve=Number(cfg.chatgptLowQuotaThreshold??10)
+  const poolTier=['stable','disposable'].includes(account.pool_tier)?account.pool_tier:(account.credential_mode==='temporary_access'?'disposable':'stable')
   const emergencyUntil=Date.parse(account.emergency_continue_until||'')
   const emergencyActive=Number.isFinite(emergencyUntil)&&emergencyUntil>Date.now()
   showModal('账号额度与预留策略',`<div class="form-grid">
-    <div class="field"><label>安全余量 <span class="hint">账号独立阈值</span></label><input class="input" id="policy_reserve" type="number" min="0" max="100" value="${Number(account.low_quota_threshold??globalReserve)}"></div>
+    <div class="field full"><label>账号池分级</label><select class="input" id="policy_pool_tier" data-original="${poolTier}" onchange="updateAccountPoolTierPolicyForm()"><option value="stable" ${poolTier==='stable'?'selected':''}>稳定保险池</option><option value="disposable" ${poolTier==='disposable'?'selected':''}>日抛优先池</option></select><span class="hint" id="policy_pool_tier_hint"></span></div>
+    <div class="field"><label>安全余量 <span class="hint">稳定池账号独立阈值</span></label><input class="input" id="policy_reserve" type="number" min="0" max="100" value="${Number(account.low_quota_threshold??globalReserve)}"></div>
     <div class="field"><label>每日请求上限 <span class="hint">0 为不限</span></label><input class="input" id="policy_requests" type="number" min="0" value="${Number(account.daily_request_limit||0)}"></div>
     <div class="field full"><label>每日 Token 上限 <span class="hint">输入 + 输出，0 为不限</span></label><input class="input" id="policy_tokens" type="number" min="0" value="${Number(account.daily_token_limit||0)}"></div>
     <div class="field full"><label>预留模型 <span class="hint">逗号分隔；设置后普通模型不能使用该账号</span></label><input class="input" id="policy_models" value="${esc((account.reserved_models||[]).join(', '))}" placeholder="gpt-important"></div>
@@ -978,6 +1030,51 @@ function openAccountPolicy(id){
     <div class="field"><label>临时持续分钟 <span class="hint">留空保持，0 立即关闭</span></label><input class="input" id="policy_emergency_minutes" type="number" min="0" max="1440" placeholder="例如 60"></div>
     <div class="field"><label style="display:flex;align-items:center;gap:8px"><input id="policy_emergency_confirm" type="checkbox"> 我确认可能耗尽额度</label></div>
   </div>`,'保存策略',`saveAccountPolicy('${esc(id)}')`)
+  updateAccountPoolTierPolicyForm()
+}
+function accountCheckTone(state){
+  if(state==='healthy')return ''
+  if(['quota_low','quota_exhausted','rate_limited','temporary_unavailable'].includes(state))return 'warn'
+  return 'off'
+}
+function accountCheckResultsHtml(result){
+  const accounts=result?.accounts||[]
+  const summary=result?.summary||{}
+  const summaryText=Object.entries(summary).map(([state,count])=>{
+    const sample=accounts.find(item=>item.state===state)
+    return `${sample?.label||state} ${count}`
+  }).join(' · ')
+  const rows=accounts.map(item=>{
+    const remaining=item.remaining_percent==null?'额度未知':`剩余 ${Number(item.remaining_percent).toFixed(0)}%`
+    const reset=item.reset_credits_synced?'重置次数已同步':'重置次数未同步'
+    const status=item.http_status?` · HTTP ${item.http_status}`:''
+    return `<div class="provider-row" style="grid-template-columns:minmax(180px,.8fr) minmax(0,1.5fr);align-items:start">
+      <div><div class="cell-main">${esc(item.account_label||item.id)}</div><div class="cell-sub">${esc(remaining)} · ${esc(reset)}${esc(status)}</div></div>
+      <div><span class="status ${accountCheckTone(item.state)}"><i></i><b>${esc(item.label||item.state)}</b></span><div class="cell-sub" style="margin-top:5px">${esc(item.reason||'没有返回具体原因')}</div></div>
+    </div>`
+  }).join('')
+  return `<div class="help-note"><b>非消耗式状态检查</b><p>只验证凭据、账号用量和重置次数端点，不发送模型请求，因此“基础检查正常”不代表所有模型权限都一定可用。</p><p>${esc(summaryText||'没有账号')}</p></div><div style="display:grid;gap:7px;margin-top:12px;max-height:58vh;overflow:auto">${rows||'<span class="cell-sub">账号池为空</span>'}</div>`
+}
+async function checkAllAccountStatus(){
+  toast('正在逐个检查全部账号状态，请勿重复点击…')
+  try{
+    const r=await fetch(API+'/chatgpt-accounts/check-all',{method:'POST'}),d=await r.json()
+    if(!r.ok)throw new Error(d.error?.message||'账号状态检查失败')
+    cfg=d.config
+    try{const diagnostics=await fetch(API+'/diagnostics',{cache:'no-store'});if(diagnostics.ok)diagnosticsData=await diagnostics.json()}catch{}
+    render()
+    showModal('全部账号状态检查',accountCheckResultsHtml(d.result),'完成','closeModal()')
+    toast(d.message||'账号状态检查完成',d.result?.issues?'error':'success')
+  }catch(e){toast(e.message,'error')}
+}
+function updateAccountPoolTierPolicyForm(){
+  const tier=document.getElementById('policy_pool_tier')?.value
+  const reserve=document.getElementById('policy_reserve')
+  const hint=document.getElementById('policy_pool_tier_hint')
+  if(reserve)reserve.disabled=tier==='disposable'
+  if(hint)hint.textContent=tier==='disposable'
+    ? '优先于稳定池使用，安全余量固定为 0；周额度归零后 7 天仍未恢复会自动停用。'
+    : '仅在没有可用日抛账号时参与路由，并按安全余量保留保险额度。'
 }
 async function saveAccountPolicy(id){
   const emergencyRaw=String(document.getElementById('policy_emergency_minutes')?.value||'').trim()
@@ -986,8 +1083,12 @@ async function saveAccountPolicy(id){
   if(emergencyMinutes>0&&!confirmedEmergencyRisk)return toast('启用紧急继续前必须勾选风险确认','error')
   if(emergencyMinutes>0&&!confirm(`确定临时绕过额度保护 ${emergencyMinutes} 分钟吗？到期后会自动恢复。`))return
   const split=id=>String(document.getElementById(id)?.value||'').split(',').map(value=>value.trim()).filter(Boolean)
+  const tierSelect=document.getElementById('policy_pool_tier')
+  const selectedTier=String(tierSelect?.value||'')
+  const originalTier=String(tierSelect?.dataset.original||'')
   const body={
-    lowQuotaThreshold:Number(document.getElementById('policy_reserve')?.value),
+    ...(selectedTier&&selectedTier!==originalTier?{poolTier:selectedTier}:{}),
+    ...(selectedTier==='disposable'?{}:{lowQuotaThreshold:Number(document.getElementById('policy_reserve')?.value)}),
     dailyRequestLimit:Number(document.getElementById('policy_requests')?.value),
     dailyTokenLimit:Number(document.getElementById('policy_tokens')?.value),
     reservedModels:split('policy_models'),

@@ -7,7 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { resolveCodexModel, isChatGptSubModel, isOpenAIApiModel, isRelayModel, parseRelayModel, buildModelsResponse, getThreadId } from '../src/models.js'
 import { recordUsage, recordAccountOutcome, recordOperationalEvent, getStats, resetStats, saveStats, statsDayKey } from '../src/stats.js'
-import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurrencyLimit, accountPolicyState, accountRemainingPercent, accountUsageIsFresh, calculateUsageForecast, consumeAccountResetCredit, cooldownMsFromResponseText, ensureFreshToken, extractResetCredits, extractUsageFromBody, extractUsageFromHeaders, mergeAccountUsageWindows, normalizeAccountRoutingStrategy, noteAccountAdaptiveOutcome, noteAccountSuccess, pickActiveAccount, refreshAccountResetCredits, refreshAccountUsage, releaseAccountRequest, renewAccountRequestLease, reserveAccountRequest, resetAccountRequestCounts, resetAccountStickiness } from '../src/chatgpt-accounts.js'
+import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurrencyLimit, accountPolicyState, accountPoolTierState, accountRemainingPercent, accountUsageIsFresh, calculateUsageForecast, checkChatgptAccountStatus, classifyAccountCheckFailure, consumeAccountResetCredit, cooldownMsFromResponseText, enforceDisposableAccountLifecycle, ensureFreshToken, extractResetCredits, extractUsageFromBody, extractUsageFromHeaders, mergeAccountUsageWindows, normalizeAccountPoolTier, normalizeAccountRoutingStrategy, noteAccountAdaptiveOutcome, noteAccountSuccess, pickActiveAccount, refreshAccountQuotaSnapshot, refreshAccountResetCredits, refreshAccountUsage, releaseAccountRequest, renewAccountRequestLease, reserveAccountRequest, resetAccountRequestCounts, resetAccountStickiness } from '../src/chatgpt-accounts.js'
 import { proxyConfig, atomicWriteJson, configForSettingsSnapshot, mergeAccountBackup, mergeSettingsSnapshot, orderChatgptAccounts, renameChatgptAccountInList } from '../src/config.js'
 import { assertCircuitAvailable, getCircuitStates, recordCircuitResult, resetCircuits } from '../src/circuit-breaker.js'
 import { fetchWithRetry, proxyMetaHeaders, retryAfterMs } from '../src/server-utils.js'
@@ -298,9 +298,246 @@ describe('Codex 额度重置', () => {
     assert.strictEqual(account.reset_credits.credits, undefined)
     assert.ok(!JSON.stringify(config).includes('one-time-secret'))
   })
+
+  it('手动同步用量时会同时更新重置次数，避免两个时间戳不同步', async () => {
+    const originalAccounts = proxyConfig.chatgptAccounts
+    const originalUrl = proxyConfig.chatgptResponsesUrl
+    const account = {
+      id: 'quota-snapshot',
+      account_id: 'upstream-quota-snapshot',
+      access_token: 'access',
+      refresh_token: 'refresh',
+      expires_at: Date.now() + 60_000,
+      status: 'active',
+      routing_enabled: true
+    }
+    proxyConfig.chatgptAccounts = [account]
+    proxyConfig.chatgptResponsesUrl = 'https://chatgpt.com/backend-api/codex/responses'
+    const calls = []
+    const mockFetch = async url => {
+      calls.push(String(url))
+      if (String(url).endsWith('/backend-api/wham/usage')) {
+        return new Response(JSON.stringify({
+          plan_type: 'plus',
+          rate_limit: {
+            primary_window: { used_percent: 20, limit_window_seconds: 18_000 },
+            secondary_window: { used_percent: 30, limit_window_seconds: 604_800 }
+          }
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (String(url).endsWith('/backend-api/wham/rate-limit-reset-credits')) {
+        return new Response(JSON.stringify({
+          reset_credits: {
+            available_count: 2,
+            total_earned_count: 3,
+            credits: []
+          }
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      assert.fail(`unexpected URL: ${url}`)
+    }
+
+    try {
+      const result = await refreshAccountQuotaSnapshot(account, mockFetch)
+      const saved = proxyConfig.chatgptAccounts[0]
+      assert.strictEqual(result.usage_synced, true)
+      assert.strictEqual(result.reset_credits_synced, true)
+      assert.strictEqual(saved.usage.primary.remaining_percent, 80)
+      assert.strictEqual(saved.reset_credits.available_count, 2)
+      assert.ok(saved.usage_updated_at)
+      assert.ok(saved.reset_credits.updated_at)
+      assert.strictEqual(calls.length, 2)
+    } finally {
+      proxyConfig.chatgptAccounts = originalAccounts
+      proxyConfig.chatgptResponsesUrl = originalUrl
+    }
+  })
+})
+
+describe('ChatGPT 账号状态检查', () => {
+  it('只在上游明确停用账号时判断疑似封禁，并区分额度与临时网络故障', () => {
+    const account = {
+      credential_mode: 'refreshable',
+      credential_compatibility: 'codex_subscription'
+    }
+    const banned = classifyAccountCheckFailure({
+      status: 403,
+      upstreamCode: 'account_deactivated',
+      upstreamMessage: 'account has been deactivated'
+    }, account)
+    assert.strictEqual(banned.state, 'banned')
+    assert.strictEqual(banned.remaining_percent, null)
+    assert.strictEqual(classifyAccountCheckFailure({
+      status: 429,
+      upstreamCode: 'insufficient_quota',
+      upstreamMessage: 'usage limit reached'
+    }, account).state, 'quota_exhausted')
+    assert.strictEqual(classifyAccountCheckFailure(
+      new TypeError('fetch failed: socket timeout'),
+      account
+    ).state, 'temporary_unavailable')
+    assert.strictEqual(classifyAccountCheckFailure({
+      status: 403,
+      upstreamCode: 'permission_denied'
+    }, account).state, 'permission_denied')
+  })
+
+  it('全账号检查同步用量和次数，并把零额度归类为额度不足', async () => {
+    const originalAccounts = proxyConfig.chatgptAccounts
+    const originalUrl = proxyConfig.chatgptResponsesUrl
+    const account = {
+      id: 'status-check-quota',
+      account_id: 'upstream-status-check',
+      access_token: 'access',
+      refresh_token: 'refresh',
+      expires_at: Date.now() + 60_000,
+      credential_mode: 'refreshable',
+      credential_compatibility: 'codex_subscription',
+      status: 'active',
+      routing_enabled: true,
+      pool_tier: 'stable'
+    }
+    proxyConfig.chatgptAccounts = [account]
+    proxyConfig.chatgptResponsesUrl = 'https://chatgpt.com/backend-api/codex/responses'
+    const mockFetch = async url => {
+      if (String(url).endsWith('/backend-api/wham/usage')) {
+        return new Response(JSON.stringify({
+          rate_limit: {
+            secondary_window: { used_percent: 100, limit_window_seconds: 604_800 }
+          }
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({
+        reset_credits: { available_count: 1, credits: [] }
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+
+    try {
+      const check = await checkChatgptAccountStatus(account, mockFetch)
+      const saved = proxyConfig.chatgptAccounts[0]
+      assert.strictEqual(check.state, 'quota_exhausted')
+      assert.strictEqual(check.usage_synced, true)
+      assert.strictEqual(check.reset_credits_synced, true)
+      assert.strictEqual(saved.health_check.state, 'quota_exhausted')
+      assert.strictEqual(saved.reset_credits.available_count, 1)
+    } finally {
+      proxyConfig.chatgptAccounts = originalAccounts
+      proxyConfig.chatgptResponsesUrl = originalUrl
+    }
+  })
+
+  it('403 停用响应会保存明确原因并停止该账号参与选择', async () => {
+    const originalAccounts = proxyConfig.chatgptAccounts
+    const originalUrl = proxyConfig.chatgptResponsesUrl
+    const account = {
+      id: 'status-check-banned',
+      account_id: 'upstream-status-check-banned',
+      access_token: 'access',
+      refresh_token: 'refresh',
+      expires_at: Date.now() + 60_000,
+      credential_mode: 'refreshable',
+      credential_compatibility: 'codex_subscription',
+      status: 'active',
+      routing_enabled: true
+    }
+    proxyConfig.chatgptAccounts = [account]
+    proxyConfig.chatgptResponsesUrl = 'https://chatgpt.com/backend-api/codex/responses'
+    const mockFetch = async () => new Response(JSON.stringify({
+      error: { code: 'account_deactivated', message: 'account has been deactivated' }
+    }), { status: 403, headers: { 'content-type': 'application/json' } })
+
+    try {
+      const check = await checkChatgptAccountStatus(account, mockFetch)
+      const saved = proxyConfig.chatgptAccounts[0]
+      assert.strictEqual(check.state, 'banned')
+      assert.strictEqual(saved.status, 'auth_error')
+      assert.strictEqual(saved.auth_error.type, 'health_check_banned')
+      assert.strictEqual(pickActiveAccount(), null)
+    } finally {
+      proxyConfig.chatgptAccounts = originalAccounts
+      proxyConfig.chatgptResponsesUrl = originalUrl
+    }
+  })
 })
 
 describe('额度感知和会话粘性账号选择', () => {
+  it('新增账号按凭据来源自动分级，也接受登录时明确分类', () => {
+    assert.strictEqual(normalizeAccountPoolTier(null, 'refreshable'), 'stable')
+    assert.strictEqual(normalizeAccountPoolTier(null, 'temporary_access'), 'disposable')
+    assert.strictEqual(normalizeAccountPoolTier('disposable', 'refreshable'), 'disposable')
+    assert.strictEqual(normalizeAccountPoolTier('stable', 'temporary_access'), 'stable')
+  })
+
+  it('优先消耗日抛池并把稳定订阅池作为保险回退', () => {
+    const original = proxyConfig.chatgptAccounts
+    proxyConfig.chatgptAccounts = [
+      {
+        id: 'stable-insurance',
+        pool_tier: 'stable',
+        status: 'active',
+        routing_enabled: true,
+        usage: { secondary: { remaining_percent: 80 } }
+      },
+      {
+        id: 'disposable-first',
+        pool_tier: 'disposable',
+        status: 'active',
+        routing_enabled: true,
+        usage: { secondary: { remaining_percent: 5 } }
+      }
+    ]
+    try {
+      assert.strictEqual(accountPolicyState(proxyConfig.chatgptAccounts[0]).reserve, 10)
+      assert.strictEqual(accountPolicyState(proxyConfig.chatgptAccounts[1]).reserve, 0)
+      assert.strictEqual(pickActiveAccount()?.id, 'disposable-first')
+      proxyConfig.chatgptAccounts[1].usage.secondary.remaining_percent = 0
+      assert.strictEqual(pickActiveAccount()?.id, 'stable-insurance')
+    } finally {
+      proxyConfig.chatgptAccounts = original
+    }
+  })
+
+  it('日抛号用到 0 后等待 7 天，未重置则自动弃用', () => {
+    const now = Date.parse('2026-07-20T00:00:00Z')
+    const account = {
+      id: 'disposable-expiry',
+      pool_tier: 'disposable',
+      status: 'active',
+      routing_enabled: true,
+      usage: { secondary: { remaining_percent: 0 } }
+    }
+    assert.strictEqual(enforceDisposableAccountLifecycle(account, now), true)
+    let state = accountPoolTierState(account, now)
+    assert.strictEqual(state.exhausted, true)
+    assert.strictEqual(state.discarded, false)
+    assert.strictEqual(state.discard_deadline_at, '2026-07-27T00:00:00.000Z')
+    assert.strictEqual(enforceDisposableAccountLifecycle(account, now + 6 * 24 * 60 * 60 * 1000), false)
+    assert.strictEqual(enforceDisposableAccountLifecycle(account, now + 7 * 24 * 60 * 60 * 1000 + 1), true)
+    state = accountPoolTierState(account, now + 7 * 24 * 60 * 60 * 1000 + 1)
+    assert.strictEqual(state.discarded, true)
+    assert.strictEqual(account.status, 'discarded')
+    assert.strictEqual(account.routing_enabled, false)
+    assert.strictEqual(account.discard_reason, 'quota_not_reset_within_7_days')
+  })
+
+  it('日抛号在 7 天内恢复额度时取消弃号倒计时', () => {
+    const now = Date.parse('2026-07-20T00:00:00Z')
+    const account = {
+      id: 'disposable-reset',
+      pool_tier: 'disposable',
+      status: 'active',
+      routing_enabled: true,
+      usage: { secondary: { remaining_percent: 0 } }
+    }
+    enforceDisposableAccountLifecycle(account, now)
+    account.usage.secondary.remaining_percent = 100
+    assert.strictEqual(enforceDisposableAccountLifecycle(account, now + 24 * 60 * 60 * 1000), true)
+    const state = accountPoolTierState(account, now + 24 * 60 * 60 * 1000)
+    assert.strictEqual(state.exhausted, false)
+    assert.strictEqual(state.discard_deadline_at, null)
+    assert.strictEqual(account.disposable_last_reset_at, '2026-07-21T00:00:00.000Z')
+  })
+
   it('避让低额度账号并选择剩余额度最多的账号', () => {
     const original = proxyConfig.chatgptAccounts
     proxyConfig.chatgptAccounts = [

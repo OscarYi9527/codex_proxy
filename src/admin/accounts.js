@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { proxyConfig, setActiveChatgptAccount, reorderChatgptAccounts, renameChatgptAccount, setChatgptAccountRouting } from '../config.js'
-import { accountCredentialLifecycle, addChatgptAccount, consumeAccountResetCredit, deleteChatgptAccount, ensureFreshToken, parseAuthJson, refreshAccountResetCredits, refreshAccountUsage } from '../chatgpt-accounts.js'
+import { accountCredentialLifecycle, accountPoolTierState, addChatgptAccount, checkChatgptAccountStatus, consumeAccountResetCredit, deleteChatgptAccount, ensureFreshToken, parseAuthJson, refreshAccountQuotaSnapshot, refreshAccountResetCredits, refreshAccountUsage } from '../chatgpt-accounts.js'
 import { sendJson } from '../server-utils.js'
 import { chinaFetch } from '../china-fetch.js'
 import { getCodexAuthFile, isLocalAdminRequest, killLocalCodexProcesses } from './login.js'
@@ -14,7 +14,8 @@ export async function handleChatgptAccountAdd(req, res, body) {
       return sendJson(res, 400, { error: { type: 'invalid_request_error', message: 'auth.json 内容为必填项' } })
     }
     const newCfg = addChatgptAccount(body.auth_json, body.label, {
-      routingEnabled: body.routingEnabled === true
+      routingEnabled: body.routingEnabled === true,
+      poolTier: body.poolTier
     })
     const incoming = parseAuthJson(body.auth_json)
     const account = newCfg.chatgptAccounts.find(item => item.account_id === incoming.account_id)
@@ -45,6 +46,10 @@ export function handleChatgptAccountsImport(req, res, body) {
     const skipped = []
     const rejected = []
     const routingEnabled = body?.routingEnabled === true
+    const poolTierInput = String(body?.poolTier || '').trim().toLowerCase()
+    const requestedPoolTier = ['stable', 'disposable'].includes(poolTierInput)
+      ? poolTierInput
+      : null
     for (const record of records) {
       const existing = existingById.get(record.accountId)
       const upgradesTemporary = existing &&
@@ -58,12 +63,15 @@ export function handleChatgptAccountsImport(req, res, body) {
         ? String(body.label).trim().slice(0, 80)
         : record.label
       try {
+        const poolTier = requestedPoolTier || existing?.pool_tier ||
+          (record.credentialMode === 'temporary_access' ? 'disposable' : 'stable')
         addChatgptAccount(record.authJson, label, {
           routingEnabled,
           allowAccessOnly: record.credentialMode === 'temporary_access',
           sourceFormat: record.sourceFormat,
           email: record.email,
-          planType: record.planType
+          planType: record.planType,
+          poolTier
         })
       } catch (error) {
         rejected.push({
@@ -83,6 +91,7 @@ export function handleChatgptAccountsImport(req, res, body) {
         sourceFormat: record.sourceFormat,
         credentialMode: record.credentialMode,
         credentialCompatibility: savedAccount?.credential_compatibility || null,
+        poolTier: savedAccount?.pool_tier || null,
         upgraded: Boolean(upgradesTemporary)
       })
     }
@@ -93,6 +102,8 @@ export function handleChatgptAccountsImport(req, res, body) {
       item => item.credentialMode === 'temporary_access' &&
         item.credentialCompatibility !== 'codex_subscription'
     ).length
+    const stable = imported.filter(item => item.poolTier === 'stable').length
+    const disposable = imported.filter(item => item.poolTier === 'disposable').length
     return sendJson(res, 200, {
       config: publicProxyConfig(proxyConfig),
       result: {
@@ -103,12 +114,14 @@ export function handleChatgptAccountsImport(req, res, body) {
         refreshable,
         upgraded,
         incompatible,
+        stable,
+        disposable,
         formats: [...new Set(imported.map(item => item.sourceFormat))],
         credential_modes: [...new Set(imported.map(item => item.credentialMode))],
         rejections: rejected
       },
       message: imported.length
-        ? `已导入 ${imported.length} 个账号（临时 ${temporary}，可续约 ${refreshable}${incompatible ? `，不兼容 ${incompatible}` : ''}${upgraded ? `，其中升级 ${upgraded}` : ''}）${skipped.length ? `，跳过 ${skipped.length} 个重复账号` : ''}${rejected.length ? `，拒绝 ${rejected.length} 个无效账号` : ''}；${incompatible ? '不兼容账号已强制设为仅保存' : `默认${routingEnabled ? '已启用' : '仅保存'}`}`
+        ? `已导入 ${imported.length} 个账号（稳定池 ${stable}，日抛池 ${disposable}；临时 ${temporary}，可续约 ${refreshable}${incompatible ? `，不兼容 ${incompatible}` : ''}${upgraded ? `，其中升级 ${upgraded}` : ''}）${skipped.length ? `，跳过 ${skipped.length} 个重复账号` : ''}${rejected.length ? `，拒绝 ${rejected.length} 个无效账号` : ''}；${incompatible ? '不兼容账号已强制设为仅保存' : `默认${routingEnabled ? '已启用' : '仅保存'}`}`
         : rejected.length
           ? `未导入新账号；拒绝 ${rejected.length} 个无效账号：${rejected[0].reason}${skipped.length ? `，另跳过 ${skipped.length} 个重复账号` : ''}`
           : `未导入新账号，已跳过 ${skipped.length} 个重复账号`
@@ -122,6 +135,7 @@ export function handleChatgptAccountsImport(req, res, body) {
 
 export async function handleChatgptAccountImportCurrent(req, res) {
   try {
+    const requestedPoolTier = new URL(req.url || '/', 'http://localhost').searchParams.get('poolTier')
     const authFile = getCodexAuthFile()
     if (!fs.existsSync(authFile)) {
       return sendJson(res, 404, {
@@ -133,7 +147,9 @@ export async function handleChatgptAccountImportCurrent(req, res) {
     }
     const raw = fs.readFileSync(authFile, 'utf8')
     const incoming = parseAuthJson(raw)
-    const newCfg = addChatgptAccount(raw, '当前 Codex 账号')
+    const newCfg = addChatgptAccount(raw, '当前 Codex 账号', {
+      poolTier: requestedPoolTier
+    })
     const account = newCfg.chatgptAccounts.find(item => item.account_id === incoming.account_id)
     let usageMessage = '，额度已自动同步'
     try {
@@ -198,6 +214,15 @@ export function handleChatgptAccountRouting(req, res, accountId, body) {
       })
     }
     if (body?.enabled === true) {
+      const poolTier = accountPoolTierState(account)
+      if (poolTier.discarded) {
+        return sendJson(res, 400, {
+          error: {
+            type: 'invalid_request_error',
+            message: '该日抛账号已因 7 天未恢复额度而弃用；请先改为稳定池后再启用'
+          }
+        })
+      }
       const credential = accountCredentialLifecycle(account)
       if (!credential.routable) {
         const message = credential.compatible
@@ -211,6 +236,7 @@ export function handleChatgptAccountRouting(req, res, accountId, body) {
     const newCfg = setChatgptAccountRouting(accountId, {
       weight: body?.weight,
       enabled: body?.enabled,
+      poolTier: body?.poolTier,
       lowQuotaThreshold: body?.lowQuotaThreshold,
       dailyRequestLimit: body?.dailyRequestLimit,
       dailyTokenLimit: body?.dailyTokenLimit,
@@ -240,9 +266,22 @@ export async function handleChatgptAccountRefreshUsage(req, res, accountId) {
     if (!account) {
       return sendJson(res, 404, { error: { type: 'not_found_error', message: '账号不存在' } })
     }
-    await refreshAccountUsage(account, chinaFetch(fetch))
+    const snapshot = await refreshAccountQuotaSnapshot(account, chinaFetch(fetch))
     const masked = publicProxyConfig(proxyConfig)
-    return sendJson(res, 200, { config: masked, message: '用量已刷新' })
+    if (!snapshot.usage_synced && !snapshot.reset_credits_synced) {
+      throw snapshot.usage_error || snapshot.reset_credits_error || new Error('账号额度与重置次数同步失败')
+    }
+    return sendJson(res, 200, {
+      config: masked,
+      result: {
+        usage_synced: snapshot.usage_synced,
+        reset_credits_synced: snapshot.reset_credits_synced,
+        warnings: snapshot.warnings
+      },
+      message: snapshot.warnings.length
+        ? `同步完成，但部分数据失败：${snapshot.warnings.join('；')}`
+        : '账号用量和重置次数已同步'
+    })
   } catch (error) {
     return sendJson(res, 502, { error: { type: 'server_error', message: error.message } })
   }
@@ -251,12 +290,19 @@ export async function handleChatgptAccountRefreshUsage(req, res, accountId) {
 export async function handleChatgptAccountsRefreshAll(req, res) {
   const accounts = proxyConfig.chatgptAccounts || []
   const errors = []
+  let usageSynced = 0
+  let resetCreditsSynced = 0
   let cursor = 0
   const worker = async () => {
     while (cursor < accounts.length) {
       const account = accounts[cursor++]
       try {
-        await refreshAccountUsage(account, chinaFetch(fetch))
+        const snapshot = await refreshAccountQuotaSnapshot(account, chinaFetch(fetch))
+        if (snapshot.usage_synced) usageSynced++
+        if (snapshot.reset_credits_synced) resetCreditsSynced++
+        if (snapshot.warnings.length) {
+          errors.push(`${account.label || account.id}: ${snapshot.warnings.join('；')}`)
+        }
       } catch (error) {
         errors.push(`${account.label || account.id}: ${error.message}`)
       }
@@ -266,7 +312,75 @@ export async function handleChatgptAccountsRefreshAll(req, res) {
   const masked = publicProxyConfig(proxyConfig)
   return sendJson(res, 200, {
     config: masked,
-    message: errors.length ? `已刷新，部分账号失败：${errors.join('; ')}` : '全部账号用量已刷新'
+    result: {
+      total: accounts.length,
+      usage_synced: usageSynced,
+      reset_credits_synced: resetCreditsSynced,
+      errors
+    },
+    message: errors.length
+      ? `同步完成：用量 ${usageSynced}/${accounts.length}，重置次数 ${resetCreditsSynced}/${accounts.length}；${errors.slice(0, 3).join('; ')}${errors.length > 3 ? `；另有 ${errors.length - 3} 个账号失败` : ''}`
+      : '全部账号用量和重置次数已同步'
+  })
+}
+
+export async function handleChatgptAccountsCheckAll(req, res) {
+  const accounts = proxyConfig.chatgptAccounts || []
+  const results = []
+  let cursor = 0
+  const worker = async () => {
+    while (cursor < accounts.length) {
+      const account = accounts[cursor++]
+      try {
+        const check = await checkChatgptAccountStatus(account, chinaFetch(fetch))
+        results.push({
+          id: account.id,
+          account_label: account.label || account.email || account.account_id || account.id,
+          routing_enabled: account.routing_enabled !== false,
+          ...check
+        })
+      } catch (error) {
+        results.push({
+          id: account.id,
+          account_label: account.label || account.email || account.account_id || account.id,
+          routing_enabled: account.routing_enabled !== false,
+          state: 'unknown_error',
+          label: '未知异常',
+          severity: 'warning',
+          retryable: true,
+          reason: String(error?.message || error).slice(0, 300),
+          checked_at: new Date().toISOString(),
+          http_status: Number(error?.status) || null,
+          error_code: error?.code || null,
+          usage_synced: false,
+          reset_credits_synced: false,
+          remaining_percent: null
+        })
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(2, accounts.length) }, worker))
+  const order = new Map(accounts.map((account, index) => [account.id, index]))
+  results.sort((left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0))
+  const summary = results.reduce((counts, result) => {
+    counts[result.state] = (counts[result.state] || 0) + 1
+    return counts
+  }, {})
+  const healthy = Number(summary.healthy || 0)
+  const issues = results.filter(result =>
+    result.state !== 'healthy' || result.reset_credits_synced !== true
+  ).length
+  return sendJson(res, 200, {
+    config: publicProxyConfig(proxyConfig),
+    result: {
+      checked: results.length,
+      healthy,
+      issues,
+      summary,
+      accounts: results,
+      probe_scope: 'credential_usage_and_reset_credits_without_model_request'
+    },
+    message: `状态检查完成：基础正常 ${healthy}，需要关注 ${issues}`
   })
 }
 

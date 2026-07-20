@@ -548,6 +548,7 @@ export function renameChatgptAccount(accountId, label) {
 export function setChatgptAccountRouting(accountId, {
   weight,
   enabled,
+  poolTier,
   lowQuotaThreshold,
   dailyRequestLimit,
   dailyTokenLimit,
@@ -565,8 +566,33 @@ export function setChatgptAccountRouting(accountId, {
     const normalizeList = value => Array.isArray(value)
       ? [...new Set(value.map(item => String(item).trim()).filter(Boolean))].slice(0, 50)
       : undefined
+    const currentTier = account.pool_tier ||
+      (account.credential_mode === 'temporary_access' ? 'disposable' : 'stable')
+    const requestedTier = poolTier === undefined ? null : String(poolTier).trim().toLowerCase()
+    if (requestedTier !== null && !['stable', 'disposable'].includes(requestedTier)) {
+      throw new Error('Account pool tier must be stable or disposable')
+    }
+    const tierChanged = requestedTier !== null && requestedTier !== currentTier
+    const tierFields = requestedTier === null
+      ? {}
+      : {
+          pool_tier: requestedTier,
+          ...(tierChanged ? { pool_tier_assigned_at: new Date().toISOString() } : {}),
+          ...(tierChanged || requestedTier === 'stable'
+            ? {
+                disposable_exhausted_at: null,
+                disposable_discarded_at: null,
+                disposable_last_reset_at: null,
+                discard_reason: null
+              }
+            : {}),
+          ...(tierChanged && account.status === 'discarded'
+            ? { status: 'active', auth_error: null }
+            : {})
+        }
     return {
       ...account,
+      ...tierFields,
       ...(weight === undefined
         ? {}
         : { routing_weight: Math.max(1, Math.min(100, Number(weight) || 1)) }),

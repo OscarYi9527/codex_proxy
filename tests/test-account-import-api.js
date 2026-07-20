@@ -42,7 +42,34 @@ describe('账号文件快捷导入 API', () => {
       assert.equal(first.payload.result.imported, 1)
       assert.equal(first.payload.result.skipped, 0)
       assert.equal(first.payload.config.chatgptAccounts[0].routing_enabled, false)
+      assert.equal(first.payload.config.chatgptAccounts[0].pool_tier, 'stable')
+      assert.equal(first.payload.result.stable, 1)
+      assert.equal(first.payload.result.disposable, 0)
       assert.doesNotMatch(JSON.stringify(first.payload), /header\.api|refresh\.api|identity\.api/)
+
+      const firstAccountId = first.payload.config.chatgptAccounts[0].id
+      const tierUpdateResponse = await fetch(
+        `${base}/admin/api/chatgpt-accounts/${encodeURIComponent(firstAccountId)}/routing`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ poolTier: 'disposable' })
+        }
+      )
+      const tierUpdate = await tierUpdateResponse.json()
+      assert.equal(tierUpdateResponse.status, 200)
+      assert.equal(tierUpdate.config.chatgptAccounts[0].pool_tier, 'disposable')
+      const tierRestoreResponse = await fetch(
+        `${base}/admin/api/chatgpt-accounts/${encodeURIComponent(firstAccountId)}/routing`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ poolTier: 'stable' })
+        }
+      )
+      const tierRestore = await tierRestoreResponse.json()
+      assert.equal(tierRestoreResponse.status, 200)
+      assert.equal(tierRestore.config.chatgptAccounts[0].pool_tier, 'stable')
 
       const duplicate = await importOnce()
       assert.equal(duplicate.response.status, 200)
@@ -79,6 +106,7 @@ describe('账号文件快捷导入 API', () => {
       )
       assert.equal(temporaryAccount.credential_mode, 'temporary_access')
       assert.equal(temporaryAccount.credential_compatibility, 'codex_subscription')
+      assert.equal(temporaryAccount.pool_tier, 'disposable')
       assert.equal(temporaryAccount.routing_enabled, true)
       assert.ok(temporaryAccount.expires_at > Date.now())
       assert.doesNotMatch(JSON.stringify(temporary), /header\./)
@@ -105,6 +133,7 @@ describe('账号文件快捷导入 API', () => {
         account => account.account_id === 'account-import-temporary'
       )
       assert.equal(upgradedAccount.credential_mode, 'refreshable')
+      assert.equal(upgradedAccount.pool_tier, 'disposable')
       assert.equal(upgradedAccount.temporary_imported_at, null)
 
       const incompatiblePayload = Buffer.from(JSON.stringify({

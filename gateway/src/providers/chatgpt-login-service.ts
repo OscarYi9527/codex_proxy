@@ -169,8 +169,11 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
       })
       session.timer = setTimeout(() => {
         if (session.status !== 'waiting') return
-        this.cancelChild(session)
-        this.finish(session, 'error', 'OpenAI 官方登录等待超时，请重新发起。')
+        void this.stopAndFinish(
+          session,
+          'error',
+          'OpenAI 官方登录等待超时，请重新发起。'
+        )
       }, 15 * 60 * 1000)
       session.timer.unref()
       return publicSession(session)
@@ -195,8 +198,7 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
     const session = this.#session
     if (!session) return
     if (session.status === 'waiting') {
-      this.cancelChild(session)
-      this.finish(session, 'cancelled', 'Gateway 已停止，登录已取消。')
+      await this.stopAndFinish(session, 'cancelled', 'Gateway 已停止，登录已取消。')
     }
   }
 
@@ -240,8 +242,7 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
     if (this.#session?.id !== session.id || session.status !== 'waiting') return
     if (message['id'] === 1) {
       if (message['error']) {
-        this.cancelChild(session)
-        this.finish(session, 'error', 'Codex app-server 初始化失败。')
+        void this.stopAndFinish(session, 'error', 'Codex app-server 初始化失败。')
         return
       }
       this.write(session, { method: 'initialized', params: {} })
@@ -257,8 +258,7 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
       const result = message['result'] as Record<string, unknown> | undefined
       if (error || !isTrustedOpenAiLoginUrl(result?.['authUrl']) ||
           typeof result['loginId'] !== 'string') {
-        this.cancelChild(session)
-        this.finish(session, 'error', 'Codex app-server 未返回有效的登录地址。')
+        void this.stopAndFinish(session, 'error', 'Codex app-server 未返回有效的登录地址。')
         return
       }
       session.loginId = result['loginId']
@@ -270,8 +270,7 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
     const params = message['params'] as Record<string, unknown> | undefined
     if (session.loginId && params?.['loginId'] !== session.loginId) return
     if (params?.['success'] !== true) {
-      this.cancelChild(session)
-      this.finish(session, 'error', 'OpenAI 官方登录未完成。')
+      void this.stopAndFinish(session, 'error', 'OpenAI 官方登录未完成。')
       return
     }
     void this.importCompletedLogin(session)
@@ -325,7 +324,7 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
     if (child.exitCode !== null) return
     await Promise.race([
       once(child, 'exit'),
-      new Promise(resolve => setTimeout(resolve, 2000))
+      new Promise(resolve => setTimeout(resolve, 500))
     ])
     if (child.exitCode === null && process.platform === 'win32' && child.pid) {
       // A Windows process can survive the regular Node signal briefly while
@@ -337,7 +336,7 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
       })
       await Promise.race([
         once(child, 'exit'),
-        new Promise(resolve => setTimeout(resolve, 2000))
+        new Promise(resolve => setTimeout(resolve, 1000))
       ])
     }
     // Let Windows release the exited process' file handles before finish()
@@ -345,6 +344,18 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
     if (child.exitCode !== null) {
       await new Promise(resolve => setTimeout(resolve, 25))
     }
+  }
+
+  private async stopAndFinish(
+    session: LoginSession,
+    status: LoginSession['status'],
+    message: string
+  ): Promise<void> {
+    if (session.finalizing || this.#session?.id !== session.id) return
+    session.finalizing = true
+    this.cancelChild(session)
+    await this.stopChild(session)
+    this.finish(session, status, message)
   }
 
   private finish(
@@ -356,9 +367,19 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
     if (session.timer) clearTimeout(session.timer)
     session.timer = null
     session.child = null
-    try { fs.rmSync(session.tempHome, { recursive: true, force: true }) } catch {}
-    session.status = status
-    session.message = message
+    try {
+      fs.rmSync(session.tempHome, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 50
+      })
+      session.status = status
+      session.message = message
+    } catch {
+      session.status = 'error'
+      session.message = '隔离登录目录清理失败，请重启 Gateway 后重试。'
+    }
   }
 
   private async resolveLaunch(): Promise<CodexLaunch> {

@@ -112,5 +112,5 @@ describe('isolated Codex app-server login adapter (T086)', () => {
       verificationUrl: null
     })
     await service.close()
-  })
+  }, 15_000)
 })

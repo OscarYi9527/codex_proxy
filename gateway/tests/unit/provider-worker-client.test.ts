@@ -127,6 +127,111 @@ describe('ProviderWorkerClient', () => {
     }
   })
 
+  it('syncs only the ChatGPT subscription runtime and exposes safe pool operations', async () => {
+    const requests: Array<{
+      method: string
+      url: string
+      body: string
+      turnId: string
+    }> = []
+    const worker = http.createServer(async (request, response) => {
+      let body = ''
+      for await (const chunk of request) body += chunk.toString('utf8')
+      requests.push({
+        method: String(request.method),
+        url: String(request.url),
+        body,
+        turnId: String(request.headers['x-ai-editor-turn-id'] || '')
+      })
+      response.writeHead(200, { 'content-type': 'application/json' })
+      if (request.url === '/internal/v1/runtime/chatgpt-sub/accounts') {
+        response.end(JSON.stringify({
+          strategy: 'headroom',
+          accounts: [],
+          queueDepth: 0,
+          recentRouteDecisions: []
+        }))
+        return
+      }
+      if (request.url === '/internal/v1/diagnostics') {
+        response.end(JSON.stringify({ providers: {}, circuits: [] }))
+        return
+      }
+      response.end(JSON.stringify({ status: 'ok' }))
+    })
+    const origin = await listen(worker)
+    try {
+      const client = new ProviderWorkerClient({
+        origin,
+        gatewayId: 'gateway-test',
+        signingSecret: SIGNING_SECRET,
+        tls: null
+      })
+      await client.configureProviders({
+        deepseekApiKey: 'must-not-leave-gateway',
+        deepseekUrl: 'https://api.deepseek.example/messages',
+        openaiApiKey: 'must-not-leave-gateway-either',
+        openaiApiBaseUrl: 'https://api.openai.example/v1',
+        chatgptResponsesUrl: 'https://chatgpt.example/backend-api/codex/responses',
+        chatgptAccounts: [{
+          id: 'credential-one',
+          account_id: 'account-one',
+          access_token: 'subscription-access',
+          refresh_token: 'subscription-refresh',
+          routing_enabled: true
+        }],
+        chatgptAccountStrategy: 'headroom',
+        relays: [{
+          id: 'relay-one',
+          name: 'Relay',
+          base_url: 'https://relay.example',
+          api_key: 'must-not-leave-gateway-relay',
+          models: ['relay-model']
+        }],
+        fallbackChain: [{
+          provider: 'chatgpt-sub',
+          model: 'gpt-5.6-sol'
+        }, {
+          provider: 'openai-api',
+          model: 'openai-api-gpt-5.6-sol'
+        }],
+        modelIds: ['gpt-5.6-sol', 'openai-api-gpt-5.6-sol', 'deepseek-v4-pro']
+      })
+      const configuration = JSON.parse(requests[0].body)
+      expect(requests[0]).toMatchObject({
+        method: 'PUT',
+        url: '/internal/v1/runtime/chatgpt-sub',
+        turnId: ''
+      })
+      expect(configuration).toMatchObject({
+        schemaVersion: 1,
+        provider: 'chatgpt-sub',
+        enabled: true,
+        experimental: true,
+        modelIds: ['gpt-5.6-sol']
+      })
+      expect(JSON.stringify(configuration)).not.toContain('must-not-leave-gateway')
+      expect(JSON.stringify(configuration)).toContain('subscription-access')
+
+      await expect(client.safeAccountPool()).resolves.toMatchObject({
+        strategy: 'headroom',
+        accounts: []
+      })
+      await expect(client.safeDiagnostics()).resolves.toEqual({
+        providers: {},
+        circuits: []
+      })
+      await client.refreshChatgptAccountUsage('credential-one')
+      expect(requests.at(-1)).toMatchObject({
+        method: 'POST',
+        url: '/internal/v1/runtime/chatgpt-sub/accounts/credential-one/refresh-usage',
+        turnId: ''
+      })
+    } finally {
+      await close(worker)
+    }
+  })
+
   it('maps Worker errors without exposing its response message', async () => {
     const worker = http.createServer((_request, response) => {
       response.writeHead(409, { 'content-type': 'application/json' })

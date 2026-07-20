@@ -18,6 +18,9 @@ import {
 import { NonceStore } from '../src/provider-worker/nonce-store.js'
 import { TurnStore } from '../src/provider-worker/turn-store.js'
 import { createProviderWorkerServer } from '../src/provider-worker/server.js'
+import {
+  ChatgptSubscriptionExecutor
+} from '../src/provider-worker/chatgpt-sub-executor.js'
 
 const SIGNING_SECRET = 'provider-worker-test-secret-with-at-least-32-bytes'
 const openWorkers = new Set()
@@ -212,6 +215,7 @@ describe('Provider Worker configuration and signed protocol', () => {
     }, { repositoryRoot })
     assert.equal(config.host, '127.0.0.1')
     assert.equal(config.port, 47930)
+    assert.equal(config.executorMode, 'mock')
     assert.equal(
       config.dataRoot,
       path.join(repositoryRoot, '.ai-editor-dev', 'provider-worker')
@@ -225,6 +229,16 @@ describe('Provider Worker configuration and signed protocol', () => {
       AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET: SIGNING_SECRET,
       AI_EDITOR_PROVIDER_WORKER_PORT: '47892'
     }, { repositoryRoot }), /Invalid Provider Worker port/)
+    assert.equal(loadProviderWorkerConfig({
+      NODE_ENV: 'development',
+      AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET: SIGNING_SECRET,
+      AI_EDITOR_PROVIDER_WORKER_EXECUTOR: 'chatgpt-sub'
+    }, { repositoryRoot }).executorMode, 'chatgpt-sub')
+    assert.throws(() => loadProviderWorkerConfig({
+      NODE_ENV: 'development',
+      AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET: SIGNING_SECRET,
+      AI_EDITOR_PROVIDER_WORKER_EXECUTOR: 'unknown'
+    }, { repositoryRoot }), /Unsupported Provider Worker executor/)
   })
 
   it('requires all mTLS files before production can start', () => {
@@ -488,6 +502,252 @@ describe('Provider Worker local lifecycle', () => {
     execute.body.fill(0)
     assert.equal(execution.status, 200)
     assert.equal(await execution.text(), '')
+  })
+})
+
+describe('Provider Worker ChatGPT subscription runtime', () => {
+  it('syncs the pool, rotates cooled accounts, preserves tool IDs and reports usage', async () => {
+    const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-worker-chatgpt-'))
+    temporaryDirectories.add(dataRoot)
+    const upstreamCalls = []
+    let firstAccountFailureStatus = 429
+    const fetchImpl = async (url, options = {}) => {
+      upstreamCalls.push({
+        url: String(url),
+        authorization: options.headers?.authorization,
+        body: options.body ? JSON.parse(options.body) : null
+      })
+      if (String(options.headers?.authorization || '').includes('access-first')) {
+        return new Response(JSON.stringify({
+          error: firstAccountFailureStatus === 429
+            ? { code: 'usage_limit', message: 'account quota reached' }
+            : { code: 'invalid_token', message: 'account login expired' }
+        }), {
+          status: firstAccountFailureStatus,
+          headers: {
+            'content-type': 'application/json',
+            ...(firstAccountFailureStatus === 429 ? { 'retry-after': '60' } : {})
+          }
+        })
+      }
+      const payload = [
+        'event: response.output_item.added',
+        'data: {"type":"response.output_item.added","item":{"type":"function_call","id":"fc_worker_ok","call_id":"tool_original","name":"demo","arguments":"{}"}}',
+        '',
+        'event: response.completed',
+        'data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"SUB_POOL_OK"}]}],"usage":{"input_tokens":11,"output_tokens":4}}}',
+        '',
+        ''
+      ].join('\n')
+      return new Response(payload, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream; charset=utf-8' }
+      })
+    }
+    const executor = new ChatgptSubscriptionExecutor({
+      dataRoot,
+      environment: 'test',
+      fetchImpl
+    })
+    const { origin } = await startWorker({ executor })
+    const configuration = {
+      schemaVersion: 1,
+      provider: 'chatgpt-sub',
+      enabled: true,
+      experimental: true,
+      responsesUrl: 'https://chatgpt.example/backend-api/codex/responses',
+      accountStrategy: 'priority',
+      modelIds: ['gpt-5.6-sol'],
+      accounts: [{
+        id: 'account-first',
+        label: 'First',
+        account_id: 'upstream-first',
+        access_token: 'access-first',
+        refresh_token: 'refresh-first',
+        expires_at: Date.now() + 60 * 60_000,
+        routing_enabled: true,
+        routing_weight: 1,
+        low_quota_threshold: 10,
+        status: 'active'
+      }, {
+        id: 'account-second',
+        label: 'Second',
+        account_id: 'upstream-second',
+        access_token: 'access-second',
+        refresh_token: 'refresh-second',
+        expires_at: Date.now() + 60 * 60_000,
+        routing_enabled: true,
+        routing_weight: 1,
+        low_quota_threshold: 10,
+        status: 'active'
+      }]
+    }
+    const configure = signedRequest(
+      origin,
+      '/internal/v1/runtime/chatgpt-sub',
+      { method: 'PUT', body: configuration }
+    )
+    const configured = await configure.fetch()
+    configure.body.fill(0)
+    assert.equal(configured.status, 200)
+    assert.deepEqual(await configured.json(), {
+      schemaVersion: 1,
+      provider: 'chatgpt-sub',
+      executor: 'chatgpt-sub',
+      enabled: true,
+      accountCount: 2,
+      routableAccountCount: 2,
+      modelCount: 1,
+      experimental: true
+    })
+
+    const modelsRequest = signedRequest(origin, '/internal/v1/models')
+    const models = await modelsRequest.fetch()
+    modelsRequest.body.fill(0)
+    assert.deepEqual(
+      (await models.json()).data.map(model => model.id),
+      ['gpt-5.6-sol']
+    )
+
+    const turnId = 'turn_chatgpt_pool_rotation'
+    const execute = signedRequest(origin, '/internal/v1/responses', {
+      method: 'POST',
+      turnId,
+      body: {
+        model: 'gpt-5.6-sol',
+        stream: true,
+        input: [{
+          type: 'function_call',
+          id: 'tool_mrrmem914mxsqfk7',
+          call_id: 'tool_mrrmem914mxsqfk7',
+          name: 'demo',
+          arguments: '{}'
+        }]
+      }
+    })
+    const response = await execute.fetch()
+    execute.body.fill(0)
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('x-ai-editor-provider-id'), 'chatgpt-sub')
+    assert.match(await response.text(), /SUB_POOL_OK/)
+    assert.equal(upstreamCalls.length, 2)
+    assert.equal(upstreamCalls[0].authorization, 'Bearer access-first')
+    assert.equal(upstreamCalls[1].authorization, 'Bearer access-second')
+    assert.match(upstreamCalls[0].body.input[0].id, /^fc_/)
+    assert.equal(
+      upstreamCalls[0].body.input[0].call_id,
+      'tool_mrrmem914mxsqfk7'
+    )
+
+    const poolRequest = signedRequest(
+      origin,
+      '/internal/v1/runtime/chatgpt-sub/accounts'
+    )
+    const poolResponse = await poolRequest.fetch()
+    poolRequest.body.fill(0)
+    assert.equal(poolResponse.status, 200)
+    const pool = await poolResponse.json()
+    assert.equal(pool.accounts[0].status, 'cooldown')
+    assert.ok(pool.accounts[0].runtime.cooldownUntil > Date.now())
+    assert.equal(pool.accounts[1].status, 'active')
+    assert.equal(pool.recentRouteDecisions[0].selectedAccountId, 'account-second')
+
+    const statusRequest = signedRequest(
+      origin,
+      `/internal/v1/turns/${turnId}`,
+      { turnId }
+    )
+    const statusResponse = await statusRequest.fetch()
+    statusRequest.body.fill(0)
+    const status = await statusResponse.json()
+    assert.deepEqual(status.usage, { inputTokens: 11, outputTokens: 4 })
+
+    firstAccountFailureStatus = 401
+    const authenticationConfiguration = structuredClone(configuration)
+    authenticationConfiguration.accounts[0].access_token = 'access-first-v2'
+    authenticationConfiguration.accounts[0].refresh_token = 'refresh-first-v2'
+    authenticationConfiguration.accounts[1].access_token = 'access-second-v2'
+    authenticationConfiguration.accounts[1].refresh_token = 'refresh-second-v2'
+    const reconfigure = signedRequest(
+      origin,
+      '/internal/v1/runtime/chatgpt-sub',
+      { method: 'PUT', body: authenticationConfiguration }
+    )
+    assert.equal((await reconfigure.fetch()).status, 200)
+    reconfigure.body.fill(0)
+    const authenticationTurn = signedRequest(origin, '/internal/v1/responses', {
+      method: 'POST',
+      turnId: 'turn_chatgpt_auth_rotation',
+      body: {
+        model: 'gpt-5.6-sol',
+        stream: true,
+        input: 'authentication rotation'
+      }
+    })
+    const authenticationResponse = await authenticationTurn.fetch()
+    assert.equal(authenticationResponse.status, 200)
+    await authenticationResponse.text()
+    authenticationTurn.body.fill(0)
+    assert.deepEqual(
+      upstreamCalls.slice(2, 4).map(call => call.authorization),
+      ['Bearer access-first-v2', 'Bearer access-second-v2']
+    )
+    const authPoolRequest = signedRequest(
+      origin,
+      '/internal/v1/runtime/chatgpt-sub/accounts'
+    )
+    const authPoolResponse = await authPoolRequest.fetch()
+    authPoolRequest.body.fill(0)
+    const authPool = await authPoolResponse.json()
+    assert.equal(authPool.accounts[0].status, 'auth_error')
+
+    const routingConfiguration = structuredClone(authenticationConfiguration)
+    routingConfiguration.accounts[0].access_token = 'access-first-v3'
+    routingConfiguration.accounts[0].refresh_token = 'refresh-first-v3'
+    routingConfiguration.accounts[0].routing_enabled = false
+    routingConfiguration.accounts[1].access_token = 'access-second-v3'
+    routingConfiguration.accounts[1].refresh_token = 'refresh-second-v3'
+    const routingConfigure = signedRequest(
+      origin,
+      '/internal/v1/runtime/chatgpt-sub',
+      { method: 'PUT', body: routingConfiguration }
+    )
+    assert.equal((await routingConfigure.fetch()).status, 200)
+    routingConfigure.body.fill(0)
+    const routingTurn = signedRequest(origin, '/internal/v1/responses', {
+      method: 'POST',
+      turnId: 'turn_chatgpt_routing_disabled',
+      body: {
+        model: 'gpt-5.6-sol',
+        stream: true,
+        input: 'routing participation'
+      }
+    })
+    const routingResponse = await routingTurn.fetch()
+    assert.equal(routingResponse.status, 200)
+    await routingResponse.text()
+    routingTurn.body.fill(0)
+    assert.equal(upstreamCalls.at(-1).authorization, 'Bearer access-second-v3')
+    assert.equal(
+      upstreamCalls.some(call => call.authorization === 'Bearer access-first-v3'),
+      false
+    )
+    assert.equal(fs.existsSync(path.join(dataRoot, 'codex-proxy-config.json')), false)
+    const storedText = fs.readdirSync(dataRoot, {
+      recursive: true,
+      withFileTypes: true
+    })
+      .filter(entry => entry.isFile())
+      .map(entry => fs.readFileSync(path.join(entry.parentPath, entry.name), 'utf8'))
+      .join('\n')
+    for (const secret of [
+      'access-first',
+      'refresh-first',
+      'access-second',
+      'refresh-second'
+    ]) {
+      assert.equal(storedText.includes(secret), false)
+    }
   })
 })
 

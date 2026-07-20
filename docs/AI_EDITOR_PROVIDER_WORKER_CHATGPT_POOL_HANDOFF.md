@@ -1,7 +1,7 @@
 # AI Editor Provider Worker：ChatGPT 订阅账号池交接
 
-更新时间：2026-07-20  
-分支：`codex/provider-worker-mvp`  
+更新时间：2026-07-20
+分支：`codex/provider-worker-mvp`
 阶段：PW2 / T133–T134
 
 ## 本轮完成
@@ -105,4 +105,3 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
 - 最迟完成时间：开始真实 Provider 联调前。
 - 未完成时被阻断的任务：真实 ChatGPT 回应验收；不阻断 T135 自动化开发。
 - 当前是否需要付款：否。
-

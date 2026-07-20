@@ -45,6 +45,14 @@ try {
     if (-not $valid.valid) {
         throw 'Expected valid isolated configuration'
     }
+    if ($valid.providerWorkerExecutor -ne 'chatgpt-sub') {
+        throw 'Real development mode must default to the ChatGPT subscription executor'
+    }
+    $mockValid = & $start -Mode all -DataRoot $testRoot -GatewayPort 47920 -EdgePort 47921 `
+        -ProviderWorkerPort 47930 -AuthenticationMode mock -ValidateOnly
+    if ($mockValid.providerWorkerExecutor -ne 'mock') {
+        throw 'Mock account mode must keep the mock Provider Worker executor'
+    }
 
     Assert-Throws -Message 'Shared port 47892 must be rejected' -Action {
         & $start -Mode gateway -DataRoot $testRoot -GatewayPort 47892 -ValidateOnly

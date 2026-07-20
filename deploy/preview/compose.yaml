@@ -63,6 +63,9 @@ services:
     profiles:
       - quick
     network_mode: host
+    extra_hosts:
+      - "region1.v2.argotunnel.com=${AI_EDITOR_CLOUDFLARED_REGION1_IP:-198.41.192.27}"
+      - "region2.v2.argotunnel.com=${AI_EDITOR_CLOUDFLARED_REGION2_IP:-198.41.200.233}"
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -71,6 +74,8 @@ services:
     command:
       - tunnel
       - --no-autoupdate
+      - --protocol
+      - ${AI_EDITOR_CLOUDFLARED_PROTOCOL:-http2}
       - --url
       - http://127.0.0.1:47920
 
@@ -79,6 +84,9 @@ services:
     profiles:
       - named
     network_mode: host
+    extra_hosts:
+      - "region1.v2.argotunnel.com=${AI_EDITOR_CLOUDFLARED_REGION1_IP:-198.41.192.27}"
+      - "region2.v2.argotunnel.com=${AI_EDITOR_CLOUDFLARED_REGION2_IP:-198.41.200.233}"
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -87,6 +95,8 @@ services:
     command:
       - tunnel
       - --no-autoupdate
+      - --protocol
+      - ${AI_EDITOR_CLOUDFLARED_PROTOCOL:-http2}
       - --config
       - /etc/cloudflared/config.yml
       - run

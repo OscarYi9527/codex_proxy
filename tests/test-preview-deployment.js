@@ -19,6 +19,9 @@ describe('public preview deployment boundary', () => {
     assert.match(compose, /AI_EDITOR_PROVIDER_WORKER_HOST:\s+127\.0\.0\.1/)
     assert.match(compose, /AI_EDITOR_PROVIDER_WORKER_ORIGIN:\s+http:\/\/127\.0\.0\.1:47930/)
     assert.match(compose, /--url\s*\n\s*-\s+http:\/\/127\.0\.0\.1:47920/)
+    assert.match(compose, /region1\.v2\.argotunnel\.com=\$\{AI_EDITOR_CLOUDFLARED_REGION1_IP/)
+    assert.match(compose, /region2\.v2\.argotunnel\.com=\$\{AI_EDITOR_CLOUDFLARED_REGION2_IP/)
+    assert.match(compose, /AI_EDITOR_CLOUDFLARED_PROTOCOL:-http2/)
     assert.match(compose, /network_mode:\s+host/)
     assert.match(compose, /no-new-privileges:true/)
     assert.match(compose, /cap_drop:\s*\n\s*-\s+ALL/)
@@ -29,6 +32,9 @@ describe('public preview deployment boundary', () => {
     const ignore = fs.readFileSync(path.join(root, '.gitignore'), 'utf8')
     const dockerIgnore = fs.readFileSync(path.join(root, '.dockerignore'), 'utf8')
     assert.match(environment, /AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET=\s*$/m)
+    assert.match(environment, /AI_EDITOR_CLOUDFLARED_PROTOCOL=http2/)
+    assert.match(environment, /AI_EDITOR_CLOUDFLARED_REGION1_IP=198\.41\.192\.27/)
+    assert.match(environment, /AI_EDITOR_CLOUDFLARED_REGION2_IP=198\.41\.200\.233/)
     assert.match(ignore, /deploy\/preview\/\.runtime\.env/)
     assert.match(ignore, /deploy\/preview\/state\//)
     assert.match(ignore, /deploy\/preview\/secrets\//)
@@ -44,6 +50,16 @@ describe('public preview deployment boundary', () => {
     assert.match(dockerfile, /USER node/)
     assert.match(start, /\^https:\/\/\[\^\/\]\+\$/)
     assert.match(start, /openssl rand -base64 48/)
+    assert.match(start, /AI_EDITOR_CLOUDFLARED_REGION1_IP 198\.41\.192\.27/)
+    assert.match(start, /AI_EDITOR_CLOUDFLARED_REGION2_IP 198\.41\.200\.233/)
+    assert.match(start, /Registered tunnel connection/)
+    assert.match(text(path.join('scripts', 'verify-preview.sh')), /--retry 30/)
+    const bootstrap = 'compose run --rm --no-deps -T gateway node gateway/dist/bootstrap-cli.js'
+    assert.match(start, new RegExp(bootstrap.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+    assert.ok(
+      start.indexOf(bootstrap) < start.indexOf('compose up -d provider-worker'),
+      'Gateway bootstrap must run before preview services start'
+    )
     assert.match(mihomo, /config\["allow-lan"\] = False/)
     assert.match(mihomo, /config\["bind-address"\] = "127\.0\.0\.1"/)
     assert.match(mihomo, /config\.pop\(unsafe_listener/)

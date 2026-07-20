@@ -53,17 +53,31 @@ cd ~/codex_proxy/deploy/preview
 ./scripts/start-preview.sh --quick --executor mock
 ```
 
+On the first real-auth start, the foreground bootstrap prints the fixed login
+name `admin` and a randomly generated one-time password. Save it immediately:
+the password is not written to preview state and is not printed again. The
+account must change it on first login.
+
 The script:
 
 1. generates a private Gateway/Worker signing secret;
 2. builds the pinned Node 24 preview image;
-3. starts Worker on loopback;
-4. starts Cloudflare Quick Tunnel and discovers its HTTPS origin;
-5. starts Gateway with that exact public origin;
-6. verifies local listeners and public `/live`.
+3. bootstraps the real-auth Gateway administrator in the foreground;
+4. starts Worker on loopback;
+5. starts Cloudflare Quick Tunnel and discovers its HTTPS origin;
+6. starts Gateway with that exact public origin;
+7. verifies local listeners and public `/live`.
 
 The generated origin is stored in
 `state/preview-origin.txt`. It changes when the quick tunnel is recreated.
+
+VMware NAT can receive Clash `198.18.0.0/15` fake-IP answers without receiving
+the corresponding TUN route. Preview therefore uses Cloudflare HTTP/2 and
+pins `region1.v2.argotunnel.com` / `region2.v2.argotunnel.com` to current
+Cloudflare edge addresses inside the cloudflared containers. These defaults
+are preview-only and can be replaced through
+`AI_EDITOR_CLOUDFLARED_REGION1_IP` and
+`AI_EDITOR_CLOUDFLARED_REGION2_IP` in `.runtime.env`.
 
 ## Named preview tunnel
 

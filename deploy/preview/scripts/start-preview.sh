@@ -110,6 +110,19 @@ fi
 if [[ -z "$(get_env AI_EDITOR_MIHOMO_IMAGE)" ]]; then
   set_env AI_EDITOR_MIHOMO_IMAGE metacubex/mihomo:stable
 fi
+if [[ -z "$(get_env AI_EDITOR_CLOUDFLARED_PROTOCOL)" ]]; then
+  set_env AI_EDITOR_CLOUDFLARED_PROTOCOL http2
+fi
+# Clash fake-IP DNS can leak through VMware NAT without the matching TUN
+# route. Pin the two documented Cloudflare tunnel region hosts to real edge
+# addresses for this disposable preview only. Operators can override either
+# value in .runtime.env if Cloudflare rotates the selected edge.
+if [[ -z "$(get_env AI_EDITOR_CLOUDFLARED_REGION1_IP)" ]]; then
+  set_env AI_EDITOR_CLOUDFLARED_REGION1_IP 198.41.192.27
+fi
+if [[ -z "$(get_env AI_EDITOR_CLOUDFLARED_REGION2_IP)" ]]; then
+  set_env AI_EDITOR_CLOUDFLARED_REGION2_IP 198.41.200.233
+fi
 
 compose() {
   docker compose --env-file "${RUNTIME_ENV}" -f "${COMPOSE_FILE}" "$@"
@@ -133,6 +146,11 @@ else
 fi
 
 compose build
+# Real-auth Gateway startup intentionally refuses to create an administrator
+# in a background service. Run the one-time bootstrap in the foreground so
+# its generated password is shown only to the operator. On later starts this
+# is an idempotent no-op because the account database already exists.
+compose run --rm --no-deps -T gateway node gateway/dist/bootstrap-cli.js
 if [[ "${WITH_CLASH}" -eq 1 ]]; then
   compose --profile clash up -d mihomo
 fi
@@ -153,6 +171,20 @@ if [[ "${MODE}" == "quick" ]]; then
   if [[ -z "${PUBLIC_ORIGIN}" ]]; then
     echo "Cloudflare quick tunnel did not publish a URL within 90 seconds." >&2
     compose --profile quick logs --no-color --tail 80 cloudflared-quick >&2
+    exit 1
+  fi
+  TUNNEL_CONNECTED=0
+  for _ in $(seq 1 90); do
+    if compose --profile quick logs --no-color cloudflared-quick 2>&1 \
+      | grep -q 'Registered tunnel connection'; then
+      TUNNEL_CONNECTED=1
+      break
+    fi
+    sleep 1
+  done
+  if [[ "${TUNNEL_CONNECTED}" -ne 1 ]]; then
+    echo "Cloudflare quick tunnel published a URL but did not connect within 90 seconds." >&2
+    compose --profile quick logs --no-color --tail 120 cloudflared-quick >&2
     exit 1
   fi
 else

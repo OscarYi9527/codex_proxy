@@ -58,7 +58,7 @@ WORKER_LIVE="$(
 )"
 PUBLIC_LIVE="$(
   curl --fail --silent --show-error \
-    --retry 6 --retry-all-errors --retry-delay 2 --max-time 15 \
+    --retry 30 --retry-all-errors --retry-delay 2 --max-time 15 \
     "${PUBLIC_ORIGIN}/live"
 )"
 

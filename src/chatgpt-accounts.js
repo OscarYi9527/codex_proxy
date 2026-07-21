@@ -818,8 +818,9 @@ export function pickActiveAccount(excludeIds = null, {
   return selectByStrategy(tierCandidates, normalizeAccountRoutingStrategy(strategy), sessionKey)
 }
 
-export async function ensureFreshToken(account, fetchImpl = fetch) {
+export async function ensureFreshToken(account, fetchImpl = fetch, { force = false } = {}) {
   const managedByLocalCodex = proxyConfig.activeChatgptAccountId === account.id
+  const previousAccessToken = account.access_token
   if (managedByLocalCodex) syncActiveAccountFromCodexHome(account)
   const credential = accountCredentialLifecycle(account)
   if (credential.temporary && !credential.compatible) {
@@ -834,9 +835,17 @@ export async function ensureFreshToken(account, fetchImpl = fetch) {
     error.retryable = false
     throw error
   }
-  if (account.expires_at && account.expires_at - Date.now() > REFRESH_SAFETY_MARGIN_MS) {
+  if (
+    !force &&
+    account.expires_at &&
+    account.expires_at - Date.now() > REFRESH_SAFETY_MARGIN_MS
+  ) {
     return account
   }
+  // Codex owns the active local account's rotating refresh token. A forced
+  // retry may reuse a token that Codex has already replaced in auth.json, but
+  // this proxy must never race Codex by refreshing that token independently.
+  if (managedByLocalCodex && account.access_token !== previousAccessToken) return account
   if (managedByLocalCodex) {
     const error = new Error('当前本机账号的 Token 尚未由 Codex 刷新，将暂时尝试其他账号')
     error.code = 'TOKEN_REFRESH_ACTIVE_SOURCE_STALE'
@@ -1227,18 +1236,47 @@ async function prepareAccountForBackendRequest(account, fetchImpl) {
   return (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || account
 }
 
+async function fetchBackendWithAuthRetry(account, fetchImpl, requestFactory) {
+  let currentAccount = await prepareAccountForBackendRequest(account, fetchImpl)
+  let response = await requestFactory(currentAccount)
+  if (response.status !== 401) return { account: currentAccount, response }
+
+  // A token can be revoked before its JWT expiry. Refresh once after an
+  // observed 401 so quota checks do not remain broken until the local expiry.
+  const rejectedAccessToken = currentAccount.access_token
+  try { await response.body?.cancel() } catch {}
+  currentAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || currentAccount
+  if (currentAccount.access_token === rejectedAccessToken) {
+    currentAccount = await ensureFreshToken(currentAccount, fetchImpl, { force: true })
+  }
+  currentAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || currentAccount
+  response = await requestFactory(currentAccount)
+  if (response.status === 401 || response.status === 403) {
+    let details = 'Backend authentication failed after token refresh'
+    try {
+      const text = await response.clone().text()
+      if (text) details = text
+    } catch {}
+    markAccountAuthFailure(currentAccount.id, response.status, details)
+  }
+  return { account: currentAccount, response }
+}
+
 async function fetchAccountResetCredits(account, fetchImpl = fetch) {
-  const currentAccount = await prepareAccountForBackendRequest(account, fetchImpl)
   const backendOrigin = new URL(proxyConfig.chatgptResponsesUrl).origin
-  const response = await fetchImpl(backendOrigin + RESET_CREDITS_PATH, withChinaDispatcher({
-    method: 'GET',
-    signal: AbortSignal.timeout(15_000),
-    headers: {
-      authorization: `Bearer ${currentAccount.access_token}`,
-      'chatgpt-account-id': currentAccount.account_id,
-      accept: 'application/json'
-    }
-  }))
+  const { account: currentAccount, response } = await fetchBackendWithAuthRetry(
+    account,
+    fetchImpl,
+    candidate => fetchImpl(backendOrigin + RESET_CREDITS_PATH, withChinaDispatcher({
+      method: 'GET',
+      signal: AbortSignal.timeout(15_000),
+      headers: {
+        authorization: `Bearer ${candidate.access_token}`,
+        'chatgpt-account-id': candidate.account_id,
+        accept: 'application/json'
+      }
+    }))
+  )
   if (!response.ok) {
     throw await accountBackendResponseError(response, '获取 Codex 重置次数')
   }
@@ -1474,17 +1512,22 @@ function syncActiveAccountFromCodexHome(account) {
 }
 
 async function refreshAccountUsageOnce(account, fetchImpl = fetch) {
-  account = await prepareAccountForBackendRequest(account, fetchImpl)
   const base = new URL(proxyConfig.chatgptResponsesUrl).origin
-  const response = await fetchImpl(base + USAGE_PATH, withChinaDispatcher({
-    method: 'GET',
-    signal: AbortSignal.timeout(15_000),
-    headers: {
-      authorization: `Bearer ${account.access_token}`,
-      'chatgpt-account-id': account.account_id,
-      accept: 'application/json'
-    }
-  }))
+  const result = await fetchBackendWithAuthRetry(
+    account,
+    fetchImpl,
+    candidate => fetchImpl(base + USAGE_PATH, withChinaDispatcher({
+      method: 'GET',
+      signal: AbortSignal.timeout(15_000),
+      headers: {
+        authorization: `Bearer ${candidate.access_token}`,
+        'chatgpt-account-id': candidate.account_id,
+        accept: 'application/json'
+      }
+    }))
+  )
+  account = result.account
+  const response = result.response
   if (!response.ok) {
     throw await accountBackendResponseError(response, '获取账号用量')
   }

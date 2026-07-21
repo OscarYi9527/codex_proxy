@@ -591,6 +591,180 @@ describe('自适应并发、租约和刷新单飞', () => {
     assert.ok(results.every(result => result.reason.code === 'TOKEN_REFRESH_TRANSIENT'))
   })
 
+  it('用量接口在未到期 Token 返回 401 时强制刷新并重试一次', async () => {
+    const originalAccounts = proxyConfig.chatgptAccounts
+    const originalActive = proxyConfig.activeChatgptAccountId
+    const originalUrl = proxyConfig.chatgptResponsesUrl
+    const account = {
+      id: 'usage-auth-retry',
+      account_id: 'upstream-usage-auth-retry',
+      access_token: 'stale-access',
+      refresh_token: 'refresh-token',
+      expires_at: Date.now() + 3_600_000,
+      status: 'active',
+      routing_enabled: true
+    }
+    proxyConfig.chatgptAccounts = [account]
+    proxyConfig.activeChatgptAccountId = null
+    proxyConfig.chatgptResponsesUrl = 'https://chatgpt.com/backend-api/codex/responses'
+    const authorizations = []
+    let refreshCalls = 0
+    const fetchImpl = async (url, options = {}) => {
+      if (String(url) === 'https://auth.openai.com/oauth/token') {
+        refreshCalls++
+        return new Response(JSON.stringify({
+          access_token: 'fresh-access',
+          refresh_token: 'fresh-refresh'
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (String(url).endsWith('/backend-api/wham/usage')) {
+        authorizations.push(options.headers.authorization)
+        if (options.headers.authorization === 'Bearer stale-access') {
+          return new Response(JSON.stringify({ error: { code: 'invalid_token' } }), {
+            status: 401,
+            headers: { 'content-type': 'application/json' }
+          })
+        }
+        return new Response(JSON.stringify({
+          plan_type: 'plus',
+          rate_limit: {
+            primary_window: { used_percent: 25, limit_window_seconds: 18_000 }
+          }
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      assert.fail(`unexpected URL: ${url}`)
+    }
+
+    try {
+      await refreshAccountUsage(account, fetchImpl)
+      const saved = proxyConfig.chatgptAccounts.find(item => item.id === account.id)
+      assert.strictEqual(refreshCalls, 1)
+      assert.deepStrictEqual(authorizations, ['Bearer stale-access', 'Bearer fresh-access'])
+      assert.strictEqual(saved.access_token, 'fresh-access')
+      assert.strictEqual(saved.refresh_token, 'fresh-refresh')
+      assert.strictEqual(saved.status, 'active')
+      assert.strictEqual(saved.usage.primary.remaining_percent, 75)
+    } finally {
+      proxyConfig.chatgptAccounts = originalAccounts
+      proxyConfig.activeChatgptAccountId = originalActive
+      proxyConfig.chatgptResponsesUrl = originalUrl
+    }
+  })
+
+  it('重置次数接口同样会在 401 后刷新 Token 并重试', async () => {
+    const originalAccounts = proxyConfig.chatgptAccounts
+    const originalActive = proxyConfig.activeChatgptAccountId
+    const originalUrl = proxyConfig.chatgptResponsesUrl
+    const account = {
+      id: 'reset-credits-auth-retry',
+      account_id: 'upstream-reset-credits-auth-retry',
+      access_token: 'stale-reset-access',
+      refresh_token: 'reset-refresh-token',
+      expires_at: Date.now() + 3_600_000,
+      status: 'active',
+      routing_enabled: true
+    }
+    proxyConfig.chatgptAccounts = [account]
+    proxyConfig.activeChatgptAccountId = null
+    proxyConfig.chatgptResponsesUrl = 'https://chatgpt.com/backend-api/codex/responses'
+    const authorizations = []
+    let refreshCalls = 0
+    const fetchImpl = async (url, options = {}) => {
+      if (String(url) === 'https://auth.openai.com/oauth/token') {
+        refreshCalls++
+        return new Response(JSON.stringify({
+          access_token: 'fresh-reset-access',
+          refresh_token: 'fresh-reset-refresh'
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (String(url).endsWith('/backend-api/wham/rate-limit-reset-credits')) {
+        authorizations.push(options.headers.authorization)
+        if (options.headers.authorization === 'Bearer stale-reset-access') {
+          return new Response(JSON.stringify({ error: { code: 'invalid_token' } }), {
+            status: 401,
+            headers: { 'content-type': 'application/json' }
+          })
+        }
+        return new Response(JSON.stringify({
+          reset_credits: {
+            available_count: 2,
+            total_earned_count: 3,
+            credits: []
+          }
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      assert.fail(`unexpected URL: ${url}`)
+    }
+
+    try {
+      const credits = await refreshAccountResetCredits(account, fetchImpl)
+      const saved = proxyConfig.chatgptAccounts.find(item => item.id === account.id)
+      assert.strictEqual(refreshCalls, 1)
+      assert.deepStrictEqual(authorizations, ['Bearer stale-reset-access', 'Bearer fresh-reset-access'])
+      assert.strictEqual(saved.access_token, 'fresh-reset-access')
+      assert.strictEqual(credits.available_count, 2)
+      assert.strictEqual(saved.reset_credits.available_count, 2)
+    } finally {
+      proxyConfig.chatgptAccounts = originalAccounts
+      proxyConfig.activeChatgptAccountId = originalActive
+      proxyConfig.chatgptResponsesUrl = originalUrl
+    }
+  })
+
+  it('401 后 Refresh Token 也失效时将账号标记为 auth_error', async () => {
+    const originalAccounts = proxyConfig.chatgptAccounts
+    const originalActive = proxyConfig.activeChatgptAccountId
+    const originalUrl = proxyConfig.chatgptResponsesUrl
+    const account = {
+      id: 'usage-refresh-relogin',
+      account_id: 'upstream-usage-refresh-relogin',
+      access_token: 'revoked-access',
+      refresh_token: 'revoked-refresh',
+      expires_at: Date.now() + 3_600_000,
+      status: 'active',
+      routing_enabled: true
+    }
+    proxyConfig.chatgptAccounts = [account]
+    proxyConfig.activeChatgptAccountId = null
+    proxyConfig.chatgptResponsesUrl = 'https://chatgpt.com/backend-api/codex/responses'
+    let usageCalls = 0
+    let refreshCalls = 0
+    const fetchImpl = async url => {
+      if (String(url) === 'https://auth.openai.com/oauth/token') {
+        refreshCalls++
+        return new Response(JSON.stringify({
+          error: 'invalid_grant',
+          error_description: 'Refresh token is invalid or revoked'
+        }), { status: 401, headers: { 'content-type': 'application/json' } })
+      }
+      if (String(url).endsWith('/backend-api/wham/usage')) {
+        usageCalls++
+        return new Response(JSON.stringify({ error: { code: 'invalid_token' } }), {
+          status: 401,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+      assert.fail(`unexpected URL: ${url}`)
+    }
+
+    try {
+      await assert.rejects(
+        refreshAccountUsage(account, fetchImpl),
+        error => error.code === 'TOKEN_REFRESH_RELOGIN_REQUIRED' && error.retryable === false
+      )
+      const saved = proxyConfig.chatgptAccounts.find(item => item.id === account.id)
+      assert.strictEqual(usageCalls, 1)
+      assert.strictEqual(refreshCalls, 1)
+      assert.strictEqual(saved.status, 'auth_error')
+      assert.strictEqual(saved.auth_error.type, 'relogin_required')
+      assert.strictEqual(saved.auth_error.status, 401)
+    } finally {
+      proxyConfig.chatgptAccounts = originalAccounts
+      proxyConfig.activeChatgptAccountId = originalActive
+      proxyConfig.chatgptResponsesUrl = originalUrl
+    }
+  })
+
   it('并发额度刷新合并为一次上游请求', async () => {
     const originalActive = proxyConfig.activeChatgptAccountId
     proxyConfig.activeChatgptAccountId = null

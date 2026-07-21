@@ -84,8 +84,9 @@
 
 ### 阶段 5–6：组织、权限、积分和并发风险
 
-- [ ] 在 Gateway API 强制执行一级管理员、二级管理员、组织用户权限和跨组织 `403`。
-- [ ] 对角色提升、跨组织访问和管理员正文查看写安全审计。
+- [x] 在 Gateway API 强制执行一级管理员、二级管理员、组织用户权限和跨组织 `403`。
+- [x] 对角色提升、跨组织访问写安全管理审计。
+- [ ] 对管理员正文查看写安全审计。
 - [ ] 实现组织月度积分池、用户积分分配、月底清零和按实际 Token/模型倍率扣分。
 - [ ] 为每个 Turn 建立幂等风险记录；并发 Turn 不重复占用，同一 Turn 重试不重复扣费。
 - [ ] 超过风险限制只阻止新 Turn；缺少上游 Token 用量时使用保守估算并明确标记。
@@ -110,6 +111,8 @@
 
 - [ ] 增加 Gateway 单元测试、API 合同测试、Edge 转发、Token 轮换/重放、组织越权、
   并发积分结算、凭据泄露和 React 页面测试。
+- [x] 增加 SQLite/PostgreSQL 组织 repository、跨组织授权、最后 Level-1、旧会话失效和
+  邀请码并发/过期合同测试。
 - [x] 第一轮已覆盖公共模块、配置、SQLite/PostgreSQL repository、Gateway Mock、
   Edge nonce/handoff 防重放、三模式和开发脚本生命周期。
 - [x] 增加真实 PKCE、Argon2id、授权码/Refresh Token 重放、DPAPI envelope、
@@ -128,9 +131,10 @@
 - [x] N006：Gateway/Edge 启动显式强制 TLS 校验；发现
   `NODE_TLS_REJECT_UNAUTHORIZED=0` 时 fail-closed。
 - [x] N007：实现 Provider `envelope-v1`、主密钥轮换和 plaintext 安全迁移。
-- [ ] N008（待发布验收）：Git/数据库/API/诊断/日志/备份全链路 Secret Scan
-  已实现并通过非部署测试；按当前要求暂未运行 `release:check`。
-- [ ] N009：完成组织、Level-2、邀请码、跨组织 `403` 和最后 Level-1 保护。
+- [x] N008：Git/数据库/API/诊断/日志/备份全链路 Secret Scan 已实现，
+  `release:check` 与 working scan 0 findings 通过。
+- [x] N009：组织、Level-2、邀请码、跨组织 `403`、旧会话失效和最后 Level-1
+  保护已实现，SQLite/PostgreSQL 合同与 `release:check` 通过。
 - [ ] N010：接入真实组织积分周期和用户分配，移除管理 API 固定零值。
 - [ ] N011：按 Turn ID 幂等预留风险积分，并覆盖 SQLite/PostgreSQL 并发事务。
 - [ ] N012：完成真实/估算用量结算、断连后完成、风险释放和后台对账。

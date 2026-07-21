@@ -568,19 +568,34 @@ export class AuthRepository {
   async findInvitation(codeDigest: string): Promise<{
     id: string
     organizationId: string
+    organizationStatus: 'active' | 'disabled'
     expiresAt: string
     maxUses: number
     useCount: number
     status: 'active' | 'revoked' | 'exhausted' | 'expired'
   } | null> {
     const row = await this.db
-      .selectFrom('invitations')
-      .select(['id', 'organization_id', 'expires_at', 'max_uses', 'use_count', 'status'])
-      .where('code_digest', '=', codeDigest)
+      .selectFrom('invitations as invitation')
+      .innerJoin(
+        'organizations as organization',
+        'organization.id',
+        'invitation.organization_id'
+      )
+      .select([
+        'invitation.id',
+        'invitation.organization_id',
+        'organization.status as organization_status',
+        'invitation.expires_at',
+        'invitation.max_uses',
+        'invitation.use_count',
+        'invitation.status'
+      ])
+      .where('invitation.code_digest', '=', codeDigest)
       .executeTakeFirst()
     return row ? {
       id: row.id,
       organizationId: row.organization_id,
+      organizationStatus: row.organization_status,
       expiresAt: row.expires_at,
       maxUses: row.max_uses,
       useCount: row.use_count,

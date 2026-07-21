@@ -170,8 +170,11 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
       })
       session.timer = setTimeout(() => {
         if (session.status !== 'waiting') return
-        this.cancelChild(session)
-        this.finish(session, 'error', 'OpenAI 官方登录等待超时，请重新发起。')
+        void this.cancelAndFinish(
+          session,
+          'error',
+          'OpenAI 官方登录等待超时，请重新发起。'
+        )
       }, 15 * 60 * 1000)
       session.timer.unref()
       return publicSession(session)
@@ -196,8 +199,7 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
     const session = this.#session
     if (!session) return
     if (session.status === 'waiting') {
-      this.cancelChild(session)
-      this.finish(session, 'cancelled', 'Gateway 已停止，登录已取消。')
+      await this.cancelAndFinish(session, 'cancelled', 'Gateway 已停止，登录已取消。')
     }
   }
 
@@ -241,8 +243,11 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
     if (this.#session?.id !== session.id || session.status !== 'waiting') return
     if (message['id'] === 1) {
       if (message['error']) {
-        this.cancelChild(session)
-        this.finish(session, 'error', 'Codex app-server 初始化失败。')
+        void this.cancelAndFinish(
+          session,
+          'error',
+          'Codex app-server 初始化失败。'
+        )
         return
       }
       this.write(session, { method: 'initialized', params: {} })
@@ -258,8 +263,11 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
       const result = message['result'] as Record<string, unknown> | undefined
       if (error || !isTrustedOpenAiLoginUrl(result?.['authUrl']) ||
           typeof result['loginId'] !== 'string') {
-        this.cancelChild(session)
-        this.finish(session, 'error', 'Codex app-server 未返回有效的登录地址。')
+        void this.cancelAndFinish(
+          session,
+          'error',
+          'Codex app-server 未返回有效的登录地址。'
+        )
         return
       }
       session.loginId = result['loginId']
@@ -271,8 +279,7 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
     const params = message['params'] as Record<string, unknown> | undefined
     if (session.loginId && params?.['loginId'] !== session.loginId) return
     if (params?.['success'] !== true) {
-      this.cancelChild(session)
-      this.finish(session, 'error', 'OpenAI 官方登录未完成。')
+      void this.cancelAndFinish(session, 'error', 'OpenAI 官方登录未完成。')
       return
     }
     void this.importCompletedLogin(session)
@@ -317,6 +324,18 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
       })
     }
     try { session.child?.kill() } catch {}
+  }
+
+  private async cancelAndFinish(
+    session: LoginSession,
+    status: LoginSession['status'],
+    message: string
+  ): Promise<void> {
+    if (session.finalizing || this.#session?.id !== session.id) return
+    session.finalizing = true
+    this.cancelChild(session)
+    await this.stopChild(session)
+    this.finish(session, status, message)
   }
 
   private async stopChild(session: LoginSession): Promise<void> {

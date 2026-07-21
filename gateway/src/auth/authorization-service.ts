@@ -214,6 +214,13 @@ export class AuthorizationService {
           statusCode: 400
         })
       }
+      if (invitation.organizationStatus !== 'active') {
+        throw new SafeError({
+          code: 'invitation_invalid',
+          message: '邀请码无效。',
+          statusCode: 400
+        })
+      }
       if (invitation.status === 'expired' || Date.parse(invitation.expiresAt) <= this.clock.nowMs()) {
         throw new SafeError({
           code: 'invitation_expired',

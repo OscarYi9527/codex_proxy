@@ -6,17 +6,19 @@ import {
 } from '../../../src/secret-scan.js'
 
 const INTENTIONAL_SECRET_ISSUANCE_ROUTES = new Set([
-  '/api/v1/oauth/token',
-  '/api/v1/account/password/change',
-  '/api/v1/account/webview-ticket',
-  '/api/v1/admin/providers/:providerId/chatgpt-login/start',
-  '/api/v1/admin/providers/:providerId/chatgpt-login/status'
+  'POST /api/v1/oauth/token',
+  'POST /api/v1/account/password/change',
+  'POST /api/v1/account/webview-ticket',
+  'POST /api/v1/admin/providers/:providerId/chatgpt-login/start',
+  'GET /api/v1/admin/providers/:providerId/chatgpt-login/status',
+  'POST /api/v1/admin/accounts/:accountId/temporary-password',
+  'POST /api/v1/admin/invitations'
 ])
 
 function guardedRoute(request: FastifyRequest): boolean {
   const route = request.routeOptions.url || ''
   return route.startsWith('/api/v1/') &&
-    !INTENTIONAL_SECRET_ISSUANCE_ROUTES.has(route)
+    !INTENTIONAL_SECRET_ISSUANCE_ROUTES.has(`${request.method} ${route}`)
 }
 
 export function gatewayResponseSecretFindings(

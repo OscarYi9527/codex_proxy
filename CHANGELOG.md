@@ -21,6 +21,10 @@
 - 新增 60 秒一次性 Webview ticket、30 分钟 HttpOnly 管理会话、Origin/CSRF 门禁和
   `/admin` 严格 CSP 管理外壳。
 - 新增服务端角色导航，以及普通用户账号、积分、设备与使用记录 React 页面。
+- 新增组织、账号角色和邀请码管理 API：Level-2 查询/写入强制限定本组织普通用户，
+  跨组织统一 `403` 并审计；角色/组织/状态变化使旧 Access/Webview 会话失效。
+- 新增事务化最后有效 Level-1 保护、组织状态串行锁、账号软删除和一次性临时密码；
+  邀请码只返回一次明文并以 keyed digest 存储，CAS 消费覆盖并发、过期和禁用组织。
 - Gateway/Edge 合同测试开始共同消费 My_Code 的 `edge-code-contract.json` fixture。
 - 新增 Level-1 Provider、凭据、模型路由和安全诊断 API，以及 Provider/诊断 React 页面。
 - 新增 Gateway 隔离 `CODEX_HOME` 的 OpenAI 官方登录端点；认证临时目录在导入后删除。
@@ -75,6 +79,8 @@
 - Gateway/Edge 配置加载对 `NODE_TLS_REJECT_UNAUTHORIZED=0` fail-closed，隔离开发脚本
   显式对子进程启用 TLS 校验，发布门禁拒绝不安全 Shell；自定义 CA 仅通过
   `NODE_EXTRA_CA_CERTS` 接入。
+- Gateway 关闭或取消隔离 Codex 官方登录时会等待子进程退出后再删除临时认证目录，
+  避免 Windows 文件句柄竞争造成目录残留，并放宽对应进程测试的总超时以消除门禁抖动。
 - 全账号检查、全池用量/重置次数同步不再为每个中间状态重写整份敏感配置；状态更新按
   最多 20 个账号合并并每批只提交一次，同时只覆盖任务实际修改的字段，避免回退并发
   发生的账号改名或 Refresh Token 轮换。

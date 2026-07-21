@@ -6,10 +6,12 @@ import { SequenceIdSource } from '../../src/common/ids.js'
 
 describe('isolated Codex app-server login adapter (T086)', () => {
   let root: string
+  let service: ProcessChatgptLoginService | undefined
   let previousCodexCliJs: string | undefined
   let previousFakeAuthUrl: string | undefined
 
   beforeEach(() => {
+    service = undefined
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-editor-chatgpt-login-'))
     previousCodexCliJs = process.env['CODEX_CLI_JS']
     previousFakeAuthUrl = process.env['FAKE_CODEX_AUTH_URL']
@@ -57,7 +59,8 @@ describe('isolated Codex app-server login adapter (T086)', () => {
     process.env['CODEX_CLI_JS'] = fakeCli
   })
 
-  afterEach(() => {
+  afterEach(async () => {
+    await service?.close()
     if (previousCodexCliJs === undefined) delete process.env['CODEX_CLI_JS']
     else process.env['CODEX_CLI_JS'] = previousCodexCliJs
     if (previousFakeAuthUrl === undefined) delete process.env['FAKE_CODEX_AUTH_URL']
@@ -66,7 +69,7 @@ describe('isolated Codex app-server login adapter (T086)', () => {
   })
 
   it('returns only safe status and imports auth.json before deleting the temp home', async () => {
-    const service = new ProcessChatgptLoginService(root, new SequenceIdSource())
+    service = new ProcessChatgptLoginService(root, new SequenceIdSource())
     let imported: string | undefined
     const started = await service.start('provider_test', async authJson => {
       imported = authJson
@@ -104,5 +107,17 @@ describe('isolated Codex app-server login adapter (T086)', () => {
       verificationUrl: null
     })
     await service.close()
-  })
+  }, 20_000)
+
+  it('waits for the isolated child before cleaning up on shutdown', async () => {
+    service = new ProcessChatgptLoginService(root, new SequenceIdSource())
+    await service.start('provider_cancelled', async () => {})
+
+    await service.close()
+
+    expect(service.status('provider_cancelled')).toMatchObject({
+      status: 'cancelled'
+    })
+    expect(fs.readdirSync(path.join(root, '.oauth-login'))).toEqual([])
+  }, 20_000)
 })

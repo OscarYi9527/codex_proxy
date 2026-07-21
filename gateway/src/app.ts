@@ -47,8 +47,15 @@ import {
 import { registerAccountUsageRoutes } from './api/account-usage-routes.js'
 import { registerManagementShell } from './api/management-shell.js'
 import { ProviderRepository } from './db/repositories/provider-repository.js'
+import { OrganizationRepository } from './db/repositories/organization-repository.js'
 import { ProviderService } from './providers/provider-service.js'
 import { registerAdminProviderRoutes } from './api/admin-provider-routes.js'
+import { registerAdminOrganizationRoutes } from './api/admin-organization-routes.js'
+import {
+  OrganizationAuthorizationPolicy
+} from './organizations/authorization-policy.js'
+import { OrganizationService } from './organizations/organization-service.js'
+import { InvitationService } from './invitations/invitation-service.js'
 import {
   ProcessChatgptLoginService,
   type ChatgptLoginCoordinator
@@ -220,6 +227,29 @@ export async function createGatewayApp(options: {
       database.db,
       callback => database.inTransaction(callback)
     )
+    const organizationRepository = new OrganizationRepository(
+      database.db,
+      callback => database.inTransaction(callback)
+    )
+    const organizationPolicy = new OrganizationAuthorizationPolicy(
+      organizationRepository,
+      clock,
+      ids
+    )
+    const organizationService = new OrganizationService(
+      organizationRepository,
+      organizationPolicy,
+      passwords,
+      clock,
+      ids
+    )
+    const invitationService = new InvitationService(
+      organizationRepository,
+      organizationPolicy,
+      digest,
+      clock,
+      ids
+    )
     const providerCredentialVault = new ProviderCredentialVault(
       providerCredentialKeyring as ProviderCredentialKeyring
     )
@@ -272,6 +302,11 @@ export async function createGatewayApp(options: {
     registerAdminProviderRoutes(app, {
       authenticate: authenticateAccount,
       service: providerService
+    })
+    registerAdminOrganizationRoutes(app, {
+      authenticate: authenticateAccount,
+      organizations: organizationService,
+      invitations: invitationService
     })
     registerV1Routes(app, { verifier: v1Verifier, models, responses })
   }

@@ -1,7 +1,7 @@
 import type { Kysely } from 'kysely'
 import type { GatewayDatabase } from '../schema.js'
 
-const text = 'varchar(4096)' as const
+const text = 'text' as const
 const id = 'varchar(80)' as const
 const timestamp = 'varchar(40)' as const
 const decimal = 'varchar(80)' as const

@@ -96,7 +96,8 @@
   动态运行时配置、脱敏诊断、角色合同测试和 React Provider/诊断页面。
 - [x] Edge、普通用户和二级管理员不能获取中央凭据、熔断或 Provider 路由诊断；角色降权
   后旧身份也会被服务端拒绝并写审计。
-- [x] `plaintext-v1` 仅允许回环开发、持续显示警告，并在 production/非回环启动时拒绝。
+- [x] 新建 Provider 凭据只写 `envelope-v1`；遗留 `plaintext-v1` 仅允许回环开发、
+  持续显示警告，并在 production/非回环启动时拒绝。
 - [x] 数据库 Relay 配置已通过非 Mock `/v1/models` 与真实 SSE Responses 集成测试。
 - [ ] T090 由 Oscar 在 Code 侧验证真实模型目录刷新；T091–T098 审计正文与保留仍待实现。
 - [ ] React 页面继续覆盖二级管理员组织管理；一级管理员 Provider/系统诊断页面已完成。
@@ -126,7 +127,7 @@
 - [x] N004：区分用量/重置次数的 synced、stale、unsupported、failed 状态。
 - [x] N006：Gateway/Edge 启动显式强制 TLS 校验；发现
   `NODE_TLS_REJECT_UNAUTHORIZED=0` 时 fail-closed。
-- [ ] N007：实现 Provider `envelope-v1`、主密钥轮换和 plaintext 安全迁移。
+- [x] N007：实现 Provider `envelope-v1`、主密钥轮换和 plaintext 安全迁移。
 - [ ] N008：增加 Git/数据库/API/诊断/日志/备份全链路 secret scan。
 - [ ] N009：完成组织、Level-2、邀请码、跨组织 `403` 和最后 Level-1 保护。
 - [ ] N010：接入真实组织积分周期和用户分配，移除管理 API 固定零值。

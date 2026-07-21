@@ -25,6 +25,8 @@ export interface ProviderCredentialRecord {
   readonly updatedAt: string
 }
 
+export type ProviderCredentialStorageKind = ProviderCredentialRecord['storageKind']
+
 export interface ModelRouteRecord {
   readonly id: string
   readonly publicModelId: string
@@ -164,6 +166,30 @@ export class ProviderRepository {
     }).execute()
   }
 
+  async updateCredentialPayload(options: {
+    providerId: string
+    credentialId: string
+    expectedStorageKind: ProviderCredentialStorageKind
+    expectedSecretPayload: string
+    storageKind: ProviderCredentialStorageKind
+    secretPayload: string
+    updatedAt: string
+  }): Promise<boolean> {
+    const result = await this.db
+      .updateTable('provider_credentials')
+      .set({
+        storage_kind: options.storageKind,
+        secret_payload: options.secretPayload,
+        updated_at: options.updatedAt
+      })
+      .where('id', '=', options.credentialId)
+      .where('provider_id', '=', options.providerId)
+      .where('storage_kind', '=', options.expectedStorageKind)
+      .where('secret_payload', '=', options.expectedSecretPayload)
+      .executeTakeFirst()
+    return Number(result.numUpdatedRows) === 1
+  }
+
   async deleteCredential(providerId: string, credentialId: string): Promise<boolean> {
     const result = await this.db
       .deleteFrom('provider_credentials')
@@ -219,15 +245,6 @@ export class ProviderRepository {
         version: expression('model_routes.version', '+', 1)
       })))
       .execute()
-  }
-
-  async countPlaintextCredentials(): Promise<number> {
-    const row = await this.db
-      .selectFrom('provider_credentials')
-      .select(({ fn }) => fn.countAll<number>().as('count'))
-      .where('storage_kind', '=', 'plaintext-v1')
-      .executeTakeFirstOrThrow()
-    return Number(row.count)
   }
 
   async insertAuditEvent(options: {

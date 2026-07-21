@@ -5,6 +5,8 @@ import {
   type RealGatewayFixture
 } from '../helpers/auth-fixture.js'
 import type { GatewayProviderRuntimeConfiguration } from '../../src/routing/standalone-route-adapter.js'
+import { ProviderCredentialVault } from '../../src/security/provider-credential-vault.js'
+import { StaticProviderCredentialKeyring } from '../../src/security/provider-master-key.js'
 
 describe('database Provider configuration drives the isolated runtime (T084-T087)', () => {
   let upstream: http.Server
@@ -188,7 +190,13 @@ describe('database Provider configuration drives the isolated runtime (T084-T087
 describe('persisted Provider startup configuration', () => {
   it('applies existing database Providers during Gateway startup', async () => {
     let configured: GatewayProviderRuntimeConfiguration | undefined
+    const keyring = new StaticProviderCredentialKeyring(
+      'provider-startup-key',
+      new Map([['provider-startup-key', new Uint8Array(32).fill(6)]])
+    )
+    const credentialVault = new ProviderCredentialVault(keyring)
     const fixture = await createRealGatewayFixture({
+      providerCredentialKeyring: keyring,
       providerAdapter: {
         async listModels() {
           return { object: 'list', data: [] }
@@ -214,13 +222,67 @@ describe('persisted Provider startup configuration', () => {
           updated_at: '2026-07-17T00:00:00.000Z',
           version: 1
         }).execute()
+        await database.db.insertInto('provider_credentials').values({
+          id: 'credential_seeded',
+          provider_id: 'provider_seeded',
+          storage_kind: 'envelope-v1',
+          secret_payload: credentialVault.seal('seeded-runtime-secret', {
+            providerId: 'provider_seeded',
+            credentialId: 'credential_seeded'
+          }),
+          created_at: '2026-07-17T00:00:00.000Z',
+          updated_at: '2026-07-17T00:00:00.000Z'
+        }).execute()
       }
     })
     try {
       expect(configured?.modelIds).toEqual([])
-      expect(configured?.relays).toEqual([])
+      expect(configured?.relays).toEqual([
+        expect.objectContaining({
+          id: 'provider_seeded',
+          api_key: 'seeded-runtime-secret'
+        })
+      ])
     } finally {
       await fixture.gateway.close()
     }
+  })
+
+  it('fails startup when an encrypted Provider key is unavailable', async () => {
+    const sourceKeyring = new StaticProviderCredentialKeyring(
+      'provider-source-key',
+      new Map([['provider-source-key', new Uint8Array(32).fill(7)]])
+    )
+    const sourceVault = new ProviderCredentialVault(sourceKeyring)
+    const unavailableKeyring = new StaticProviderCredentialKeyring(
+      'provider-other-key',
+      new Map([['provider-other-key', new Uint8Array(32).fill(8)]])
+    )
+    await expect(createRealGatewayFixture({
+      providerCredentialKeyring: unavailableKeyring,
+      prepareDatabase: async database => {
+        await database.db.insertInto('providers').values({
+          id: 'provider_unreadable',
+          kind: 'openai',
+          display_name: 'Unreadable Provider',
+          status: 'disabled',
+          config_json: '{}',
+          created_at: '2026-07-17T00:00:00.000Z',
+          updated_at: '2026-07-17T00:00:00.000Z',
+          version: 1
+        }).execute()
+        await database.db.insertInto('provider_credentials').values({
+          id: 'credential_unreadable',
+          provider_id: 'provider_unreadable',
+          storage_kind: 'envelope-v1',
+          secret_payload: sourceVault.seal('unreadable-provider-secret', {
+            providerId: 'provider_unreadable',
+            credentialId: 'credential_unreadable'
+          }),
+          created_at: '2026-07-17T00:00:00.000Z',
+          updated_at: '2026-07-17T00:00:00.000Z'
+        }).execute()
+      }
+    })).rejects.toThrow(/provider-source-key is unavailable/)
   })
 })

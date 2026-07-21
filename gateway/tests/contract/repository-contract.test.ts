@@ -3,7 +3,11 @@ import { databaseHandle, type DatabaseHandle } from '../../src/db/database.js'
 import { createPostgresDatabase } from '../../src/db/dialects/postgres.js'
 import { createSqliteDatabase } from '../../src/db/dialects/sqlite.js'
 import { up as applyInitialMigration } from '../../src/db/migrations/001_initial.js'
+import {
+  up as applyProviderCredentialPayloadMigration
+} from '../../src/db/migrations/002_provider_credential_payload_text.js'
 import { GatewayMetaRepository } from '../../src/db/repositories/gateway-meta-repository.js'
+import { ProviderRepository } from '../../src/db/repositories/provider-repository.js'
 
 type Factory = () => DatabaseHandle
 
@@ -28,6 +32,7 @@ describe.each(factories)('%s repository contract', (_dialect, factory) => {
     // exercises the complete schema without weakening the dual-dialect test.
     if (_dialect === 'postgres') {
       await applyInitialMigration(handle.db)
+      await applyProviderCredentialPayloadMigration(handle.db)
     } else {
       await handle.migrateToLatest()
     }
@@ -97,5 +102,52 @@ describe.each(factories)('%s repository contract', (_dialect, factory) => {
     if (_dialect === 'sqlite') {
       expect(await new GatewayMetaRepository(handle.db).get('rolled-back')).toBeNull()
     }
+  })
+
+  it('stores expanded credential envelopes and conditionally updates payloads', async () => {
+    const repository = new ProviderRepository(
+      handle.db,
+      callback => handle.inTransaction(callback)
+    )
+    await repository.insertProvider({
+      id: 'provider_contract',
+      kind: 'relay',
+      displayName: 'Contract Provider',
+      status: 'disabled',
+      config: {},
+      createdAt: '2026-07-21T00:00:00.000Z',
+      updatedAt: '2026-07-21T00:00:00.000Z',
+      version: 1
+    })
+    const initialPayload = `{"ciphertext":"${'A'.repeat(10_000)}"}`
+    await repository.insertCredential({
+      id: 'credential_contract',
+      providerId: 'provider_contract',
+      storageKind: 'envelope-v1',
+      secretPayload: initialPayload,
+      createdAt: '2026-07-21T00:00:00.000Z',
+      updatedAt: '2026-07-21T00:00:00.000Z'
+    })
+    const replacementPayload = `{"ciphertext":"${'B'.repeat(12_000)}"}`
+    await expect(repository.updateCredentialPayload({
+      providerId: 'provider_contract',
+      credentialId: 'credential_contract',
+      expectedStorageKind: 'envelope-v1',
+      expectedSecretPayload: initialPayload,
+      storageKind: 'envelope-v1',
+      secretPayload: replacementPayload,
+      updatedAt: '2026-07-21T00:01:00.000Z'
+    })).resolves.toBe(true)
+    await expect(repository.updateCredentialPayload({
+      providerId: 'provider_contract',
+      credentialId: 'credential_contract',
+      expectedStorageKind: 'envelope-v1',
+      expectedSecretPayload: initialPayload,
+      storageKind: 'envelope-v1',
+      secretPayload: 'stale-overwrite',
+      updatedAt: '2026-07-21T00:02:00.000Z'
+    })).resolves.toBe(false)
+    expect((await repository.listCredentials())[0]?.secretPayload)
+      .toBe(replacementPayload)
   })
 })

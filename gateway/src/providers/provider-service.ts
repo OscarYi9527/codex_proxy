@@ -15,10 +15,10 @@ import type {
   GatewayProviderRuntimeConfiguration,
   ProviderRouteAdapter
 } from '../routing/standalone-route-adapter.js'
+import { ProviderCredentialVault } from '../security/provider-credential-vault.js'
 import {
   assertCredentialStorageAllowed,
-  PLAINTEXT_STORAGE_WARNING,
-  requireDevelopmentPlaintext
+  PLAINTEXT_STORAGE_WARNING
 } from './credential-policy.js'
 import type { ChatgptLoginCoordinator } from './chatgpt-login-service.js'
 
@@ -104,10 +104,24 @@ function maskSecret(secret: string): string {
   return `${prefix}...${suffix}`
 }
 
-function safeCredential(record: ProviderCredentialRecord) {
+function credentialSecret(
+  record: ProviderCredentialRecord,
+  vault: ProviderCredentialVault
+): string {
+  if (record.storageKind === 'plaintext-v1') return record.secretPayload
+  return vault.open(record.secretPayload, {
+    providerId: record.providerId,
+    credentialId: record.id
+  })
+}
+
+function safeCredential(
+  record: ProviderCredentialRecord,
+  vault: ProviderCredentialVault
+) {
   return {
     id: record.id,
-    maskedPreview: maskSecret(record.secretPayload),
+    maskedPreview: maskSecret(credentialSecret(record, vault)),
     storageFormat: record.storageKind,
     updatedAt: record.updatedAt,
     lastUsedAt: null
@@ -116,7 +130,8 @@ function safeCredential(record: ProviderCredentialRecord) {
 
 function safeProvider(
   provider: ProviderRecord,
-  credentials: readonly ProviderCredentialRecord[]
+  credentials: readonly ProviderCredentialRecord[],
+  vault: ProviderCredentialVault
 ) {
   return {
     id: provider.id,
@@ -128,7 +143,7 @@ function safeProvider(
     updatedAt: provider.updatedAt,
     credentials: credentials
       .filter(credential => credential.providerId === provider.id)
-      .map(safeCredential),
+      .map(credential => safeCredential(credential, vault)),
     plaintextWarning: credentials.some(credential =>
       credential.providerId === provider.id &&
       credential.storageKind === 'plaintext-v1'
@@ -148,10 +163,11 @@ function publicModelId(
 
 function parseChatgptCredential(
   provider: ProviderRecord,
-  credential: ProviderCredentialRecord
+  credential: ProviderCredentialRecord,
+  secret: string
 ): Record<string, unknown> | null {
   try {
-    const parsed = JSON.parse(credential.secretPayload) as Record<string, unknown>
+    const parsed = JSON.parse(secret) as Record<string, unknown>
     const source = parsed['tokens'] && typeof parsed['tokens'] === 'object'
       ? parsed['tokens'] as Record<string, unknown>
       : parsed
@@ -179,14 +195,21 @@ export class ProviderService {
     private readonly config: GatewayConfig,
     private readonly clock: Clock,
     private readonly ids: IdSource,
-    private readonly chatgptLogin: ChatgptLoginCoordinator
+    private readonly chatgptLogin: ChatgptLoginCoordinator,
+    private readonly credentialVault: ProviderCredentialVault
   ) {}
 
   async initialize(): Promise<void> {
+    const credentials = await this.repository.listCredentials()
     assertCredentialStorageAllowed(
       this.config,
-      await this.repository.countPlaintextCredentials()
+      credentials.filter(credential => credential.storageKind === 'plaintext-v1').length
     )
+    // Verify every encrypted record at startup, including credentials owned by
+    // disabled Providers, so a missing key or tampered envelope fails closed.
+    for (const credential of credentials) {
+      credentialSecret(credential, this.credentialVault)
+    }
     // Preserve an explicitly supplied isolated standalone environment until
     // the Gateway database becomes the Provider source of truth. Once any
     // database Provider exists, all subsequent changes (including deleting
@@ -206,7 +229,9 @@ export class ProviderService {
       warning: credentials.some(item => item.storageKind === 'plaintext-v1')
         ? PLAINTEXT_STORAGE_WARNING
         : null,
-      providers: providers.map(provider => safeProvider(provider, credentials))
+      providers: providers.map(provider =>
+        safeProvider(provider, credentials, this.credentialVault)
+      )
     }
   }
 
@@ -243,7 +268,7 @@ export class ProviderService {
       await this.audit(repository, identity, 'provider.create', 'provider', provider.id, 'allowed')
     })
     await this.applyRuntimeConfiguration()
-    return safeProvider(provider, [])
+    return safeProvider(provider, [], this.credentialVault)
   }
 
   async update(
@@ -286,7 +311,11 @@ export class ProviderService {
   async provider(identity: AccessIdentity, providerId: string) {
     await this.requireLevel1(identity, 'provider.read', providerId)
     const provider = await this.requireProvider(providerId)
-    return safeProvider(provider, await this.repository.listCredentials(providerId))
+    return safeProvider(
+      provider,
+      await this.repository.listCredentials(providerId),
+      this.credentialVault
+    )
   }
 
   async remove(identity: AccessIdentity, providerId: string): Promise<void> {
@@ -302,15 +331,18 @@ export class ProviderService {
     body: Record<string, unknown>
   ) {
     await this.requireLevel1(identity, 'provider.credential.create', providerId)
-    requireDevelopmentPlaintext(this.config)
     await this.requireProvider(providerId)
     const secret = requiredText(body['secret'], 'Provider 凭据', 10_000)
     const now = this.clock.now().toISOString()
+    const credentialId = this.ids.opaque('cred')
     const credential: ProviderCredentialRecord = {
-      id: this.ids.opaque('cred'),
+      id: credentialId,
       providerId,
-      storageKind: 'plaintext-v1',
-      secretPayload: secret,
+      storageKind: 'envelope-v1',
+      secretPayload: this.credentialVault.seal(secret, {
+        providerId,
+        credentialId
+      }),
       createdAt: now,
       updatedAt: now
     }
@@ -323,8 +355,8 @@ export class ProviderService {
     )
     await this.applyRuntimeConfiguration()
     return {
-      ...safeCredential(credential),
-      warning: PLAINTEXT_STORAGE_WARNING
+      ...safeCredential(credential, this.credentialVault),
+      warning: null
     }
   }
 
@@ -441,9 +473,13 @@ export class ProviderService {
     const openaiCredential = openai ? credentialFor(openai.id) : undefined
     const deepseekCredential = deepseek ? credentialFor(deepseek.id) : undefined
     const runtime: GatewayProviderRuntimeConfiguration = {
-      deepseekApiKey: deepseekCredential?.secretPayload || '',
+      deepseekApiKey: deepseekCredential
+        ? credentialSecret(deepseekCredential, this.credentialVault)
+        : '',
       deepseekUrl: String(deepseek?.config['baseUrl'] || DEFAULTS.deepseekUrl),
-      openaiApiKey: openaiCredential?.secretPayload || '',
+      openaiApiKey: openaiCredential
+        ? credentialSecret(openaiCredential, this.credentialVault)
+        : '',
       openaiApiBaseUrl: String(openai?.config['baseUrl'] || DEFAULTS.openaiBaseUrl),
       chatgptResponsesUrl: String(
         chatgpt[0]?.config['baseUrl'] || DEFAULTS.chatgptResponsesUrl
@@ -451,7 +487,11 @@ export class ProviderService {
       chatgptAccounts: chatgpt.flatMap(provider =>
         credentials
           .filter(credential => credential.providerId === provider.id)
-          .map(credential => parseChatgptCredential(provider, credential))
+          .map(credential => parseChatgptCredential(
+            provider,
+            credential,
+            credentialSecret(credential, this.credentialVault)
+          ))
           .filter((value): value is Record<string, unknown> => value !== null)
       ),
       relays: relays.flatMap(provider => {
@@ -461,7 +501,7 @@ export class ProviderService {
           id: provider.id,
           name: provider.displayName,
           base_url: String(provider.config['baseUrl'] || ''),
-          api_key: credential.secretPayload,
+          api_key: credentialSecret(credential, this.credentialVault),
           models: provider.config['models'] as string[]
         }]
       }),

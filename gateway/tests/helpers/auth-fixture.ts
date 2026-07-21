@@ -8,6 +8,9 @@ import { databaseHandle, type DatabaseHandle } from '../../src/db/database.js'
 import { createSqliteDatabase } from '../../src/db/dialects/sqlite.js'
 import type { ProviderRouteAdapter } from '../../src/routing/standalone-route-adapter.js'
 import type { ChatgptLoginCoordinator } from '../../src/providers/chatgpt-login-service.js'
+import type {
+  ProviderCredentialKeyring
+} from '../../src/security/provider-master-key.js'
 
 export class MutableClock implements Clock {
   #nowMs: number
@@ -44,6 +47,7 @@ export async function createRealGatewayFixture(
     providerAdapter?: ProviderRouteAdapter
     useDefaultProviderAdapter?: boolean
     chatgptLogin?: ChatgptLoginCoordinator
+    providerCredentialKeyring?: ProviderCredentialKeyring
     prepareDatabase?: (database: DatabaseHandle) => Promise<void>
   } = {}
 ): Promise<RealGatewayFixture> {
@@ -77,25 +81,37 @@ export async function createRealGatewayFixture(
       throw new Error('Not used by authentication fixture')
     }
   } satisfies ProviderRouteAdapter
-  const gateway = await createGatewayApp({
-    config,
-    database,
-    clock,
-    ids: new SequenceIdSource(),
-    logger: new SafeLogger({ sink: () => undefined, clock }),
-    secrets: {
-      accessTokenKey: new Uint8Array(32).fill(7),
-      digestKey: new Uint8Array(32).fill(9)
-    },
-    bootstrapSink: (loginName, password) => {
-      bootstrap = { loginName, password }
-    },
-    ...(options.chatgptLogin ? { chatgptLogin: options.chatgptLogin } : {}),
-    ...(options.useDefaultProviderAdapter
-      ? {}
-      : { providerAdapter: options.providerAdapter || defaultTestAdapter })
-  })
-  if (!bootstrap) throw new Error('Expected bootstrap account')
+  let gateway: GatewayApp
+  try {
+    gateway = await createGatewayApp({
+      config,
+      database,
+      clock,
+      ids: new SequenceIdSource(),
+      logger: new SafeLogger({ sink: () => undefined, clock }),
+      secrets: {
+        accessTokenKey: new Uint8Array(32).fill(7),
+        digestKey: new Uint8Array(32).fill(9)
+      },
+      bootstrapSink: (loginName, password) => {
+        bootstrap = { loginName, password }
+      },
+      ...(options.chatgptLogin ? { chatgptLogin: options.chatgptLogin } : {}),
+      ...(options.providerCredentialKeyring
+        ? { providerCredentialKeyring: options.providerCredentialKeyring }
+        : {}),
+      ...(options.useDefaultProviderAdapter
+        ? {}
+        : { providerAdapter: options.providerAdapter || defaultTestAdapter })
+    })
+  } catch (error) {
+    await database.close()
+    throw error
+  }
+  if (!bootstrap) {
+    await gateway.close()
+    throw new Error('Expected bootstrap account')
+  }
   return { gateway, database, clock, bootstrap }
 }
 

@@ -1,7 +1,6 @@
 import type { GatewayConfig } from '../../src/config.js'
 import {
-  assertCredentialStorageAllowed,
-  requireDevelopmentPlaintext
+  assertCredentialStorageAllowed
 } from '../../src/providers/credential-policy.js'
 
 function config(
@@ -22,10 +21,9 @@ function config(
   }
 }
 
-describe('plaintext-v1 Provider credential policy (T089)', () => {
+describe('legacy plaintext-v1 Provider credential startup policy (T089)', () => {
   it('allows loopback development with a warning boundary', () => {
     expect(() => assertCredentialStorageAllowed(config('development'), 1)).not.toThrow()
-    expect(() => requireDevelopmentPlaintext(config('development'))).not.toThrow()
   })
 
   it('fails startup and writes outside isolated loopback development', () => {
@@ -33,8 +31,6 @@ describe('plaintext-v1 Provider credential policy (T089)', () => {
       .toThrow(/Production Gateway refuses startup/)
     expect(() => assertCredentialStorageAllowed(config('development', '0.0.0.0'), 1))
       .toThrow(/Non-loopback Gateway refuses startup/)
-    expect(() => requireDevelopmentPlaintext(config('production')))
-      .toThrow(/不允许创建明文/)
     expect(() => assertCredentialStorageAllowed(config('production'), 0)).not.toThrow()
   })
 })

@@ -87,7 +87,7 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
 
   const headers = () => ({ authorization: `Bearer ${accessToken}` })
 
-  it('creates a Relay, masks its plaintext credential and applies a dynamic model route', async () => {
+  it('creates a Relay, encrypts and masks its credential, then applies a dynamic model route', async () => {
     const created = await fixture.gateway.app.inject({
       method: 'POST',
       url: '/api/v1/admin/providers',
@@ -114,10 +114,23 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
     expect(credential.statusCode).toBe(200)
     expect(credential.json()).toMatchObject({
       maskedPreview: 'sk-...abcd',
-      storageFormat: 'plaintext-v1',
+      storageFormat: 'envelope-v1',
       lastUsedAt: null
     })
     expect(credential.body).not.toContain('sk-isolated-provider-secret-abcd')
+    const storedCredential = await fixture.database.db
+      .selectFrom('provider_credentials')
+      .selectAll()
+      .where('id', '=', credential.json().id)
+      .executeTakeFirstOrThrow()
+    expect(storedCredential.storage_kind).toBe('envelope-v1')
+    expect(storedCredential.secret_payload)
+      .not.toContain('sk-isolated-provider-secret-abcd')
+    expect(JSON.parse(storedCredential.secret_payload)).toMatchObject({
+      version: 1,
+      algorithm: 'AES-256-GCM',
+      key_id: 'provider-test-key-v1'
+    })
 
     const listed = await fixture.gateway.app.inject({
       method: 'GET',
@@ -126,7 +139,8 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
     })
     expect(listed.statusCode).toBe(200)
     expect(listed.body).not.toContain('sk-isolated-provider-secret-abcd')
-    expect(listed.json().warning).toMatch(/plaintext-v1/)
+    expect(listed.json().warning).toBeNull()
+    expect(listed.json().providers[0].plaintextWarning).toBeNull()
     expect(listed.json().providers[0].credentials[0].maskedPreview).toBe('sk-...abcd')
 
     expect(runtime.relays).toEqual([
@@ -247,7 +261,14 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
     expect(listed.body).not.toContain('chatgpt-access-secret')
     expect(listed.body).not.toContain('chatgpt-refresh-secret')
     expect(listed.json().providers[0].credentials[0].storageFormat)
-      .toBe('plaintext-v1')
+      .toBe('envelope-v1')
+    const stored = await fixture.database.db
+      .selectFrom('provider_credentials')
+      .select(['storage_kind', 'secret_payload'])
+      .executeTakeFirstOrThrow()
+    expect(stored.storage_kind).toBe('envelope-v1')
+    expect(stored.secret_payload).not.toContain('chatgpt-access-secret')
+    expect(stored.secret_payload).not.toContain('chatgpt-refresh-secret')
     expect(runtime.chatgptAccounts).toEqual([
       expect.objectContaining({
         id: 'chatgpt-account-test',

@@ -16,6 +16,7 @@
     "start:standalone": "node src/launcher.js --mode standalone",
     "start:edge": "node src/launcher.js --mode edge",
     "gateway:dev": "npm run dev --workspace @ai-editor/gateway",
+    "gateway:provider-credentials": "npm run provider-credentials --workspace @ai-editor/gateway --",
     "gateway:build": "npm run build --workspace @ai-editor/gateway",
     "gateway:test": "npm run test --workspace @ai-editor/gateway",
     "admin:dev": "npm run dev --workspace @ai-editor/admin-web",

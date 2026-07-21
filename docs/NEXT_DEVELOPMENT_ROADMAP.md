@@ -11,15 +11,16 @@
 
 下一阶段不应继续堆叠零散页面功能，而应先补齐四条主链路：
 
-1. **standalone 大号池治理正在从“同步 HTTP 请求 + 整份 JSON 重写”升级为完整健康状态机。**
-   N001/N002 已完成可恢复任务、进度/取消 API 和每批一次的账号 patch；下一步是 N003/N004
-   的连续失败、置信度、恢复状态机和 usage/reset-credit 四态语义。
+1. **standalone 大号池健康状态机第一阶段已经完成。**
+   N001–N004 已交付可恢复任务、进度/取消 API、每批一次的账号 patch、连续失败/恢复状态机
+   和 usage/reset-credit 四态语义；下一步进入 N005 批次运维和 N024 通知闭环。
 2. **Gateway 的积分、Turn 风险和结算是当前最大的产品功能缺口。**
    数据表已经存在，但请求预检只验证登录、设备、Turn ID 和模型；Responses 完成后没有
    风险释放、实际/估算用量落库或幂等结算。管理页面显示的积分仍是固定零值。
-3. **Gateway 生产化仍被 `plaintext-v1` Provider 凭据阻塞。**
-   当前策略会拒绝在 production 或非回环地址启动明文凭据，这是正确的 fail-closed 行为；
-   但在 `envelope-v1`、主密钥轮换和迁移工具完成前，Gateway 不能视为可生产部署。
+3. **Gateway Provider 信封加密已完成，生产安全下一阻塞项是 N008。**
+   N007 已实现 `envelope-v1`、主密钥轮换、事务迁移和 fail-closed 验密；遗留明文仍会被
+   production 拒绝。Git、数据库、API、日志、诊断和备份的全链路 Secret Scan 尚未完成，
+   因此 Gateway 仍不能视为可生产部署。
 4. **组织/RBAC 和审计保留必须与积分结算一起完成，而不是只补页面。**
    Level-2 的组织用户、邀请码页面仍是占位；跨组织强制 `403`、最后一个 Level-1 保护、
    管理员正文查看审计和正文到期清理尚未形成完整服务层。
@@ -33,14 +34,14 @@
 |---|---|---|
 | 全账号检查曾是同步长请求（N001 已修复） | `POST /admin/api/chatgpt-accounts/check-all` 现创建持久化任务 | 当前可查询进度、取消，并从最后提交批次恢复 |
 | 账号状态曾多次重写整份配置（N002 已修复） | `JsonAccountStore` 捕获 patch，每 20 个账号 flush | 当前每批最多一次敏感配置写入，并保留并发更新字段 |
-| 状态只有最后一次快照 | 每账号仅保存一个 `health_check` | 无法判断连续失败次数、首次发生时间、恢复趋势和自动处置置信度 |
-| 用量与重置次数已能独立同步 | `refreshAccountQuotaSnapshot()` 分别保存 usage/reset-credit 成功与错误 | 基础语义正确，下一步需要“不支持/失败/陈旧”三态和独立调度周期 |
+| 健康状态机已补齐（N003） | 健康事件保存首次/最近时间、连续失败、置信度、范围和处置 | 网络/5xx 连续三次隔离，成功恢复；永久凭据失效立即停止调度 |
+| 用量与重置次数四态已补齐（N004） | usage/reset-credit 分别保存 `synced/stale/unsupported/failed` | 不支持的套餐不再伪造零值或账号故障 |
 | Gateway 积分仍为占位 | `AccountService.status()`、`me()` 返回固定 `0.000000` | 前端显示不代表真实可用余额 |
 | Turn 没有风险预留 | `RequestPreflight.verify()` 只检查身份、设备、Turn ID、模型 | 并发请求可能在未来接入结算时透支或重复扣费 |
 | Responses 没有结算 hook | `ResponsesGateway.handle()` 直接转发 adapter | 客户端断开、上游完成、估算用量和重试尚未进入统一事务 |
 | 积分/风险表尚无业务 repository | `organization_credit_periods`、`user_credit_allocations`、`risk_policies`、`turn_risks` 仅在 schema/migration 出现 | 数据模型已预留，但核心服务未实现 |
 | 组织管理页面仍是占位 | React `PlaceholderPage` 覆盖 `organization`、`invitations` | Level-2 管理闭环未形成 |
-| Provider 凭据只能明文开发 | `ProviderService.addCredential()` 固定写入 `plaintext-v1` | production/non-loopback 启动被安全策略拒绝 |
+| Provider 信封加密已完成（N007） | `ProviderService.addCredential()` 只写 `envelope-v1`，启动时全量验密 | 遗留明文可事务迁移；轮换、回滚和逐凭据重包可验证 |
 | Gateway 仍复用进程内 standalone adapter | `StandaloneRouteAdapter` 动态导入 `src/server.js` 并复制 `chatgptAccounts` | 新增的分级、健康和账号历史没有中央数据库边界 |
 | Gateway 测试分支覆盖率不足 | 2026-07-21：statements 88.80%，branches 70.23%；`account-usage-routes`、`management-shell`、登录异常分支偏低 | “新增代码覆盖率 80%”若包含分支覆盖率，当前尚未达标 |
 | 审计时开发 shell 继承了禁用 TLS 的环境变量（N006 已修复） | Gateway/Edge 配置、开发脚本和发布门禁均显式保护 TLS 校验 | 禁用证书验证时启动/发布检查 fail-closed |
@@ -144,6 +145,8 @@ POST   /admin/api/chatgpt-accounts/check-tasks/:taskId/resume
 
 ### N007：Provider `envelope-v1`
 
+- **2026-07-21 实现状态：已完成。** 运维流程见
+  [`PROVIDER_CREDENTIAL_ENCRYPTION.md`](PROVIDER_CREDENTIAL_ENCRYPTION.md)。
 - Gateway 主密钥不进入数据库；支持 Windows DPAPI、macOS Keychain，以及服务端环境密钥
   或 KMS adapter。
 - 数据库只保存 AES-256-GCM 信封：key id、nonce、ciphertext、tag、algorithm version。

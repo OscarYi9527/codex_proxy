@@ -53,6 +53,11 @@ import {
   ProcessChatgptLoginService,
   type ChatgptLoginCoordinator
 } from './providers/chatgpt-login-service.js'
+import {
+  loadProviderCredentialKeyring,
+  type ProviderCredentialKeyring
+} from './security/provider-master-key.js'
+import { ProviderCredentialVault } from './security/provider-credential-vault.js'
 
 export interface GatewayApp {
   readonly app: FastifyInstance
@@ -73,16 +78,20 @@ export async function createGatewayApp(options: {
   bootstrapSink?: (loginName: string, temporaryPassword: string) => void
   providerAdapter?: ProviderRouteAdapter
   chatgptLogin?: ChatgptLoginCoordinator
+  providerCredentialKeyring?: ProviderCredentialKeyring
 } = {}): Promise<GatewayApp> {
   const config = options.config || loadGatewayConfig()
   const clock = options.clock || new SystemClock()
   const ids = options.ids || new CryptoIdSource()
   const logger = options.logger || new SafeLogger({ clock })
-  const database = options.database || createGatewayDatabase(config)
   const mock = config.authMode === 'mock'
     ? new MockStateService({ state: config.mockState, clock, ids })
     : null
   fs.mkdirSync(config.dataRoot, { recursive: true, mode: 0o700 })
+  const providerCredentialKeyring = config.authMode === 'real'
+    ? options.providerCredentialKeyring || loadProviderCredentialKeyring(config)
+    : null
+  const database = options.database || createGatewayDatabase(config)
   await database.migrateToLatest()
 
   const app = Fastify({
@@ -203,6 +212,9 @@ export async function createGatewayApp(options: {
       database.db,
       callback => database.inTransaction(callback)
     )
+    const providerCredentialVault = new ProviderCredentialVault(
+      providerCredentialKeyring as ProviderCredentialKeyring
+    )
     chatgptLogin = options.chatgptLogin ||
       new ProcessChatgptLoginService(config.dataRoot, ids, () => clock.now())
     const providerService = new ProviderService(
@@ -211,7 +223,8 @@ export async function createGatewayApp(options: {
       config,
       clock,
       ids,
-      chatgptLogin
+      chatgptLogin,
+      providerCredentialVault
     )
     await providerService.initialize()
     const models = new ModelCatalog(providerAdapter)

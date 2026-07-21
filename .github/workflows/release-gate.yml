@@ -11,6 +11,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Secret Scan falls back to the HEAD diff on a clean CI checkout.
+          # Keep the parent commit so HEAD is not interpreted as a root commit.
+          fetch-depth: 2
       - uses: actions/setup-node@v4
         with:
           node-version: 22.19.0

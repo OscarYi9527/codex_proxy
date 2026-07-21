@@ -34,7 +34,7 @@ jobs:
           if (-not (Test-Path -LiteralPath release-check.log)) {
             exit 0
           }
-          $tail = (Get-Content -LiteralPath release-check.log -Tail 80) -join "`n"
+          $tail = (Get-Content -LiteralPath release-check.log -Tail 240) -join "`n"
           Write-Host '::group::Release gate failure tail'
           Write-Host $tail
           Write-Host '::endgroup::'

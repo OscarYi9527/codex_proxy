@@ -117,14 +117,29 @@ describe('request body upload safety', () => {
     })
     try {
       const startedAt = Date.now()
-      const response = await fetch(`http://127.0.0.1:${server.address().port}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ input: 'x'.repeat(2 * 1024 * 1024) })
+      const result = await new Promise((resolve, reject) => {
+        const request = createHttpRequest({
+          host: '127.0.0.1',
+          port: server.address().port,
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'content-length': String(2 * 1024 * 1024)
+          }
+        }, response => {
+          const chunks = []
+          response.on('data', chunk => chunks.push(chunk))
+          response.once('end', () => resolve({
+            statusCode: response.statusCode,
+            body: JSON.parse(Buffer.concat(chunks).toString('utf8'))
+          }))
+        })
+        request.once('error', reject)
+        request.flushHeaders()
       })
-      assert.strictEqual(response.status, 413)
+      assert.strictEqual(result.statusCode, 413)
       assert.ok(Date.now() - startedAt < 2_000)
-      assert.strictEqual((await response.json()).type, 'request_too_large')
+      assert.strictEqual(result.body.type, 'request_too_large')
     } finally {
       await new Promise(resolve => server.close(resolve))
     }

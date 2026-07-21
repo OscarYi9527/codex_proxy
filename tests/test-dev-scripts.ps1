@@ -56,12 +56,18 @@ try {
         throw 'Mock account mode must keep the mock Provider Worker executor'
     }
     $publicEdgeValid = & $start -Mode edge -DataRoot $testRoot `
-        -GatewayOrigin 'https://preview.example.com/' -AuthenticationMode real -ValidateOnly
+        -GatewayOrigin 'https://preview.example.com/' `
+        -EdgeOutboundProxy 'http://127.0.0.1:7890/' `
+        -AuthenticationMode real `
+        -ValidateOnly
     if ($publicEdgeValid.edgeGatewayOrigin -ne 'https://preview.example.com') {
         throw 'Edge-only development mode must normalize an explicit public Gateway origin'
     }
     if ($publicEdgeValid.edgeNodeEnvironment -ne 'production') {
         throw 'An Edge connected to a public Gateway must use production safety checks'
+    }
+    if ($publicEdgeValid.edgeOutboundProxy -ne 'http://127.0.0.1:7890') {
+        throw 'Edge-only development mode must normalize an explicit loopback outbound proxy'
     }
 
     Assert-Throws -Message 'Shared port 47892 must be rejected' -Action {
@@ -92,6 +98,26 @@ try {
     Assert-Throws -Message 'Gateway origin override must require HTTPS' -Action {
         & $start -Mode edge -DataRoot $testRoot `
             -GatewayOrigin 'http://preview.example.com' -ValidateOnly
+    }
+    Assert-Throws -Message 'Edge outbound proxy must be edge-only' -Action {
+        & $start -Mode all -DataRoot $testRoot `
+            -EdgeOutboundProxy 'http://127.0.0.1:7890' -ValidateOnly
+    }
+    Assert-Throws -Message 'Edge outbound proxy must reject a remote host' -Action {
+        & $start -Mode edge -DataRoot $testRoot `
+            -EdgeOutboundProxy 'http://proxy.example.com:7890' -ValidateOnly
+    }
+    Assert-Throws -Message 'Edge outbound proxy must reject credentials' -Action {
+        & $start -Mode edge -DataRoot $testRoot `
+            -EdgeOutboundProxy 'http://user:pass@127.0.0.1:7890' -ValidateOnly
+    }
+    Assert-Throws -Message 'Edge outbound proxy must reject a path' -Action {
+        & $start -Mode edge -DataRoot $testRoot `
+            -EdgeOutboundProxy 'http://127.0.0.1:7890/proxy' -ValidateOnly
+    }
+    Assert-Throws -Message 'Edge outbound proxy must reject HTTPS' -Action {
+        & $start -Mode edge -DataRoot $testRoot `
+            -EdgeOutboundProxy 'https://127.0.0.1:7890' -ValidateOnly
     }
 
     New-Item -ItemType Directory -Force -Path $testRoot | Out-Null

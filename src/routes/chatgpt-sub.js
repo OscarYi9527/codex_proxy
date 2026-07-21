@@ -2,7 +2,7 @@
 // Handles gpt-* models via ChatGPT backend (uses Codex auth headers)
 
 import { proxyConfig } from '../config.js'
-import { requestLog } from '../logger.js'
+import { requestLog, safeErrorText } from '../logger.js'
 import { sendJson, pipeResponsesUpstream, fetchWithRetry, setProxyMeta } from '../server-utils.js'
 import { recordUsage, recordAccountOutcome, recordOperationalEvent, saveStats } from '../stats.js'
 import { chinaFetch, withChinaDispatcher } from '../china-fetch.js'
@@ -116,7 +116,7 @@ export async function refreshBelowReserveAccounts(
       await refreshImpl(account, fetchImpl)
     } catch (error) {
       console.warn('[codex-proxy] on-demand quota refresh failed for %s: %s',
-        account.label || account.id, error.message)
+        account.label || account.id, safeErrorText(error))
     }
   }
   return true
@@ -366,7 +366,9 @@ export async function sendWithAccountRotation(
         ? 'circuit_open'
         : (error.code?.startsWith('TOKEN_REFRESH_') ? 'token_refresh' : 'network')
       const errorCause = error.cause?.code || error.cause?.message || null
-      const errorMessage = errorCause ? `${error.message} (cause=${errorCause})` : error.message
+      const errorMessage = safeErrorText(
+        errorCause ? `${error.message} (cause=${errorCause})` : error
+      )
       recordAccountOutcome(account.id, {
         latencyMs: Date.now() - attemptStartedAt,
         errorType,
@@ -507,16 +509,17 @@ export async function handleChatGptSub(req, res, body, resolved, {
       result = await sendWithRotation(req, chatGptFetch, upstreamBody, { model: resolved.model, tryResponsesLite })
     } catch (error) {
       if (error.accountPoolExhausted) {
+        const lastError = safeErrorText(error)
         const details = {
           ...poolAvailabilityDetails(resolved.model),
           account_attempts: Number(error.accountAttempts) || MAX_ACCOUNT_ATTEMPTS_PER_REQUEST,
-          last_error: error.message
+          last_error: lastError
         }
         requestLog(req, `account_pool_attempts_exhausted details=${JSON.stringify(details)}`)
         return sendJson(res, 503, {
           error: {
             type: 'account_pool_attempts_exhausted',
-            message: `Two ChatGPT account attempts failed. Check account login, network, cooldown, and recent route decisions. Last error: ${error.message}`,
+            message: `Two ChatGPT account attempts failed. Check account login, network, cooldown, and recent route decisions. Last error: ${lastError}`,
             details
           }
         }, { 'retry-after': '3' })

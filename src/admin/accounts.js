@@ -9,6 +9,7 @@ import { publicProxyConfig } from './shared.js'
 import { parseChatgptAccountImport } from '../account-import.js'
 import { accountCheckTaskManager } from '../account-check-tasks.js'
 import { JsonAccountStore, listAccountHealthEvents } from '../account-store.js'
+import { safeErrorText } from '../logger.js'
 
 async function runBatchedAccountOperation(accounts, operation, {
   batchSize = 20,
@@ -52,7 +53,7 @@ export async function handleChatgptAccountAdd(req, res, body) {
     }
     return sendJson(res, 200, { config: publicProxyConfig(proxyConfig), message })
   } catch (error) {
-    return sendJson(res, 400, { error: { type: 'invalid_request_error', message: error.message } })
+    return sendJson(res, 400, { error: { type: 'invalid_request_error', message: safeErrorText(error) } })
   }
 }
 
@@ -102,7 +103,7 @@ export function handleChatgptAccountsImport(req, res, body) {
         rejected.push({
           accountId: record.accountId,
           label,
-          reason: error.message
+          reason: safeErrorText(error)
         })
         continue
       }
@@ -153,7 +154,7 @@ export function handleChatgptAccountsImport(req, res, body) {
     })
   } catch (error) {
     return sendJson(res, 400, {
-      error: { type: 'invalid_request_error', message: error.message }
+      error: { type: 'invalid_request_error', message: safeErrorText(error) }
     })
   }
 }
@@ -188,7 +189,7 @@ export async function handleChatgptAccountImportCurrent(req, res) {
       message: `已从当前 Codex CLI 快捷导入账号${usageMessage}`
     })
   } catch (error) {
-    return sendJson(res, 400, { error: { type: 'invalid_request_error', message: error.message } })
+    return sendJson(res, 400, { error: { type: 'invalid_request_error', message: safeErrorText(error) } })
   }
 }
 
@@ -198,7 +199,7 @@ export async function handleChatgptAccountDelete(req, res, accountId) {
     const masked = publicProxyConfig({ ...proxyConfig, chatgptAccounts: newCfg.chatgptAccounts })
     return sendJson(res, 200, { config: masked, message: '账号已删除' })
   } catch (error) {
-    return sendJson(res, 500, { error: { type: 'server_error', message: error.message } })
+    return sendJson(res, 500, { error: { type: 'server_error', message: safeErrorText(error) } })
   }
 }
 
@@ -211,7 +212,7 @@ export function handleChatgptAccountsReorder(req, res, body) {
     })
   } catch (error) {
     return sendJson(res, 400, {
-      error: { type: 'invalid_request_error', message: error.message }
+      error: { type: 'invalid_request_error', message: safeErrorText(error) }
     })
   }
 }
@@ -225,7 +226,7 @@ export function handleChatgptAccountRename(req, res, accountId, body) {
     })
   } catch (error) {
     return sendJson(res, error.message === 'Account not found' ? 404 : 400, {
-      error: { type: 'invalid_request_error', message: error.message }
+      error: { type: 'invalid_request_error', message: safeErrorText(error) }
     })
   }
 }
@@ -280,7 +281,7 @@ export function handleChatgptAccountRouting(req, res, accountId, body) {
     })
   } catch (error) {
     return sendJson(res, error.message === 'Account not found' ? 404 : 400, {
-      error: { type: 'invalid_request_error', message: error.message }
+      error: { type: 'invalid_request_error', message: safeErrorText(error) }
     })
   }
 }
@@ -317,7 +318,7 @@ export async function handleChatgptAccountRefreshUsage(req, res, accountId) {
         : '账号用量和重置次数已同步'
     })
   } catch (error) {
-    return sendJson(res, 502, { error: { type: 'server_error', message: error.message } })
+    return sendJson(res, 502, { error: { type: 'server_error', message: safeErrorText(error) } })
   }
 }
 
@@ -346,12 +347,12 @@ export async function handleChatgptAccountsRefreshAll(req, res) {
           target.push(`${account.label || account.id}: ${snapshot.warnings.join('；')}`)
         }
       } catch (error) {
-        errors.push(`${account.label || account.id}: ${error.message}`)
+        errors.push(`${account.label || account.id}: ${safeErrorText(error)}`)
       }
     })
   } catch (error) {
     return sendJson(res, 500, {
-      error: { type: 'server_error', message: `批量账号状态写入失败：${error.message}` }
+      error: { type: 'server_error', message: `批量账号状态写入失败：${safeErrorText(error)}` }
     })
   }
   const masked = publicProxyConfig(proxyConfig)
@@ -462,7 +463,7 @@ export function handleChatgptAccountCheckTaskResume(
     })
   } catch (error) {
     return sendJson(res, 409, {
-      error: { type: 'conflict_error', message: error.message }
+      error: { type: 'conflict_error', message: safeErrorText(error) }
     })
   }
 }
@@ -528,7 +529,7 @@ export async function handleChatgptAccountSwitch(req, res, accountId) {
       message: `已切换到「${account.label || account.account_id}」，${restart.message}`
     })
   } catch (error) {
-    return sendJson(res, 500, { error: { type: 'server_error', message: error.message } })
+    return sendJson(res, 500, { error: { type: 'server_error', message: safeErrorText(error) } })
   }
 }
 
@@ -561,7 +562,7 @@ export async function handleChatgptAccountResetCreditsGet(req, res, accountId) {
         message: latest.reset_credit_error || '当前套餐不支持 Codex 重置次数'
       })
     }
-    return sendJson(res, 502, { error: { type: 'server_error', message: error.message } })
+    return sendJson(res, 502, { error: { type: 'server_error', message: safeErrorText(error) } })
   }
 }
 
@@ -577,7 +578,9 @@ export async function handleChatgptAccountsRefreshResetCreditsAll(req, res) {
       } catch (error) {
         const latest = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || account
         const target = latest.reset_credit_status === 'unsupported' ? notices : errors
-        target.push(`${account.label || account.id}: ${latest.reset_credit_error || error.message}`)
+        target.push(
+          `${account.label || account.id}: ${safeErrorText(latest.reset_credit_error || error)}`
+        )
       } finally {
         const latest = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || account
         const status = latest.reset_credit_status || 'stale'
@@ -586,7 +589,7 @@ export async function handleChatgptAccountsRefreshResetCreditsAll(req, res) {
     })
   } catch (error) {
     return sendJson(res, 500, {
-      error: { type: 'server_error', message: `批量重置次数写入失败：${error.message}` }
+      error: { type: 'server_error', message: `批量重置次数写入失败：${safeErrorText(error)}` }
     })
   }
   return sendJson(res, 200, {
@@ -633,7 +636,10 @@ export async function handleChatgptAccountResetQuota(req, res, accountId, body) 
         ? 400
         : 502
     return sendJson(res, status, {
-      error: { type: status === 502 ? 'server_error' : 'invalid_request_error', message: error.message }
+      error: {
+        type: status === 502 ? 'server_error' : 'invalid_request_error',
+        message: safeErrorText(error)
+      }
     })
   }
 }

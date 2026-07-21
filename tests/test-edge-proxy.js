@@ -73,12 +73,21 @@ afterEach(async () => {
 
 describe('Edge real model and Responses proxy contract (T038/T041/T042)', () => {
   it('forwards non-Mock models and Responses streams through GatewayClient', async () => {
+    let unsafeModels = false
+    const diagnosticToken = [
+      `eyJ${'a'.repeat(16)}`,
+      'b'.repeat(24),
+      'c'.repeat(32)
+    ].join('.')
     const gatewayClient = {
       async initialize() {},
       async getSafeStatus() {
         return { state: 'ready', checkedAt: new Date().toISOString(), actions: [] }
       },
       async models() {
+        if (unsafeModels) {
+          return { diagnostic: `Bearer ${diagnosticToken}` }
+        }
         return {
           object: 'list',
           data: [{ id: 'real-edge-model', object: 'model', owned_by: 'ai-editor' }]
@@ -121,6 +130,12 @@ describe('Edge real model and Responses proxy contract (T038/T041/T042)', () => 
     )
     assert.equal(ticket.status, 200)
     assert.deepEqual(JSON.parse(ticket.body), { ticket: 'ticket', expiresIn: 60 })
+
+    unsafeModels = true
+    const blocked = await request(port, 'GET', '/v1/models')
+    assert.equal(blocked.status, 500)
+    assert.match(blocked.body, /secret_scan_blocked/)
+    assert.ok(!blocked.body.includes(diagnosticToken))
   })
 })
 

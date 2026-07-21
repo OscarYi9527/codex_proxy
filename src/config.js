@@ -3,6 +3,8 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { credentialStoreEnabled, decryptConfigSecrets, encryptConfigSecrets, initializeCredentialStore } from './credential-store.js'
 import { backupBeforeMigration, migrateConfigDocument } from './migrations.js'
+import { safeErrorText } from './logger.js'
+import { assertNoSecrets } from './secret-scan.js'
 
 const PROXY_DIR = path.dirname(fileURLToPath(import.meta.url))
 const STORAGE_ROOT = path.resolve(
@@ -11,7 +13,9 @@ const STORAGE_ROOT = path.resolve(
 const CONFIG_FILE = path.join(STORAGE_ROOT, 'codex-proxy-config.json')
 const CONFIG_BACKUP_DIR = path.join(STORAGE_ROOT, '.config-backups')
 const ACCOUNT_BACKUP_DIR = path.join(STORAGE_ROOT, '.account-backups')
+const MIGRATION_BACKUP_DIR = path.join(STORAGE_ROOT, '.migration-backups')
 let credentialProtection = { enabled: false, reason: 'not initialized' }
+let warnedDeferredCredentialMigration = false
 
 // A previously initialized install must decrypt before the first config load.
 if (process.platform === 'win32' && fs.existsSync(path.join(STORAGE_ROOT, '.credential-key.dpapi.json'))) {
@@ -80,6 +84,16 @@ function writeCredentialJson(filePath, value) {
   atomicWriteJson(filePath, credentialStoreEnabled() ? encryptConfigSecrets(value) : value)
 }
 
+function writeCredentialBackupJson(filePath, value) {
+  const stored = credentialStoreEnabled() ? encryptConfigSecrets(value) : value
+  assertNoSecrets(stored, {
+    source: `account-backup:${path.basename(filePath)}`,
+    allowProtectedValues: true,
+    message: 'Account backup requires encrypted credentials'
+  })
+  atomicWriteJson(filePath, stored)
+}
+
 function loadProxyConfig() {
   let fileCfg = {}
   try {
@@ -94,7 +108,19 @@ function loadProxyConfig() {
       }
     }
   } catch (error) {
-    if (error.code !== 'ENOENT') console.error('[codex-proxy] failed to load config:', error.message)
+    if (error.code !== 'ENOENT') {
+      if (error.code === 'SECRET_SCAN_FAILED') {
+        if (!warnedDeferredCredentialMigration) {
+          warnedDeferredCredentialMigration = true
+          console.warn(
+            '[codex-proxy] config migration deferred until credentials are protected:',
+            safeErrorText(error)
+          )
+        }
+      } else {
+        console.error('[codex-proxy] failed to load config:', safeErrorText(error))
+      }
+    }
   }
 
   const base = (process.env.CODEX_OPENAI_API_BASE_URL || process.env.OPENAI_BASE_URL || fileCfg.openai_api_base_url || CONFIG_DEFAULTS.openaiApiBaseUrl).replace(/\/+$/, '')
@@ -200,7 +226,12 @@ function createConfigSnapshot(reason = 'change') {
   const safeReason = String(reason).replace(/[^a-z0-9_-]+/gi, '-').slice(0, 40) || 'change'
   const file = path.join(CONFIG_BACKUP_DIR, `${stamp}-${safeReason}.json`)
   const current = readStoredJson(CONFIG_FILE)
-  atomicWriteJson(file, configForSettingsSnapshot(current))
+  const snapshot = configForSettingsSnapshot(current)
+  assertNoSecrets(snapshot, {
+    source: `settings-backup:${path.basename(file)}`,
+    message: 'Settings backup contains a secret'
+  })
+  atomicWriteJson(file, snapshot)
   try { fs.chmodSync(file, 0o600) } catch {}
   pruneJsonBackups(CONFIG_BACKUP_DIR)
   return file
@@ -213,7 +244,7 @@ export function createAccountBackup(reason = 'change') {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
   const safeReason = String(reason).replace(/[^a-z0-9_-]+/gi, '-').slice(0, 40) || 'change'
   const file = path.join(ACCOUNT_BACKUP_DIR, `${stamp}-${safeReason}.json`)
-  writeCredentialJson(file, {
+  writeCredentialBackupJson(file, {
     version: 1,
     created_at: new Date().toISOString(),
     chatgpt_accounts: current.chatgpt_accounts || [],
@@ -305,15 +336,27 @@ function sanitizeExistingConfigSnapshots() {
         const file = path.join(CONFIG_BACKUP_DIR, name)
         const parsed = readStoredJson(file)
         if (parsed?._snapshot?.scope === 'settings-only') continue
-        atomicWriteJson(file, configForSettingsSnapshot(parsed))
+        const snapshot = configForSettingsSnapshot(parsed)
+        assertNoSecrets(snapshot, {
+          source: `existing-settings-backup:${name}`,
+          message: 'Existing settings backup contains a secret'
+        })
+        atomicWriteJson(file, snapshot)
         try { fs.chmodSync(file, 0o600) } catch {}
       } catch (error) {
-        console.error('[codex-proxy] failed to sanitize config snapshot %s: %s', name, error.message)
+        console.error(
+          '[codex-proxy] failed to sanitize config snapshot %s: %s',
+          name,
+          safeErrorText(error)
+        )
       }
     }
   } catch (error) {
     if (error.code !== 'ENOENT') {
-      console.error('[codex-proxy] failed to sanitize an existing config snapshot:', error.message)
+      console.error(
+        '[codex-proxy] failed to sanitize an existing config snapshot:',
+        safeErrorText(error)
+      )
     }
   }
 }
@@ -324,6 +367,10 @@ export function restoreConfigSnapshot(name) {
   const source = path.join(CONFIG_BACKUP_DIR, safeName)
   const parsed = readStoredJson(source)
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Snapshot is invalid')
+  assertNoSecrets(parsed, {
+    source: `settings-restore:${safeName}`,
+    message: 'Settings backup contains a secret'
+  })
   const current = readStoredJson(CONFIG_FILE)
   createConfigSnapshot('before-rollback')
   createAccountBackup('before-settings-rollback')
@@ -407,12 +454,16 @@ export function initializeCredentialProtection() {
     migratedFiles++
   }
   if (fs.existsSync(CONFIG_FILE)) migrate(CONFIG_FILE)
-  try {
-    for (const name of fs.readdirSync(ACCOUNT_BACKUP_DIR).filter(item => item.endsWith('.json'))) {
-      migrate(path.join(ACCOUNT_BACKUP_DIR, name))
+  for (const directory of [ACCOUNT_BACKUP_DIR, MIGRATION_BACKUP_DIR]) {
+    try {
+      for (const name of fs.readdirSync(directory).filter(item =>
+        item.endsWith('.json') || item.endsWith('.bak')
+      )) {
+        migrate(path.join(directory, name))
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
     }
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error
   }
   reloadProxyConfig()
   return { ...credentialProtection, migratedFiles }

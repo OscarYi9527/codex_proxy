@@ -8,6 +8,7 @@ import {
 } from '../../src/db/migrations/002_provider_credential_payload_text.js'
 import { GatewayMetaRepository } from '../../src/db/repositories/gateway-meta-repository.js'
 import { ProviderRepository } from '../../src/db/repositories/provider-repository.js'
+import { scanGatewayDatabaseSecrets } from '../../src/security/database-secret-scan.js'
 
 type Factory = () => DatabaseHandle
 
@@ -149,5 +150,103 @@ describe.each(factories)('%s repository contract', (_dialect, factory) => {
     })).resolves.toBe(false)
     expect((await repository.listCredentials())[0]?.secretPayload)
       .toBe(replacementPayload)
+  })
+
+  it('secret-scans Provider payloads, audit metadata and sanitized text', async () => {
+    const repository = new ProviderRepository(handle.db)
+    await repository.insertProvider({
+      id: 'provider_secret_scan',
+      kind: 'openai',
+      displayName: 'Secret Scan Provider',
+      status: 'disabled',
+      config: {},
+      createdAt: '2026-07-21T00:00:00.000Z',
+      updatedAt: '2026-07-21T00:00:00.000Z',
+      version: 1
+    })
+    const envelope = JSON.stringify({
+      version: 1,
+      algorithm: 'AES-256-GCM',
+      key_id: 'provider-contract-key',
+      nonce: Buffer.alloc(12, 1).toString('base64'),
+      ciphertext: Buffer.alloc(32, 2).toString('base64'),
+      tag: Buffer.alloc(16, 3).toString('base64')
+    })
+    await repository.insertCredential({
+      id: 'credential_secret_scan',
+      providerId: 'provider_secret_scan',
+      storageKind: 'envelope-v1',
+      secretPayload: envelope,
+      createdAt: '2026-07-21T00:00:00.000Z',
+      updatedAt: '2026-07-21T00:00:00.000Z'
+    })
+    expect((await scanGatewayDatabaseSecrets(handle.db)).findingCount).toBe(0)
+
+    const jwt = [
+      `eyJ${'a'.repeat(16)}`,
+      'b'.repeat(24),
+      'c'.repeat(32)
+    ].join('.')
+    await handle.db.insertInto('accounts').values({
+      id: 'account_secret_scan',
+      login_name: 'secret-scan-admin',
+      email: null,
+      role: 'level1',
+      organization_id: null,
+      status: 'active',
+      expires_at: null,
+      must_change_password: 0,
+      must_provide_email: 0,
+      created_at: '2026-07-21T00:00:00.000Z',
+      updated_at: '2026-07-21T00:00:00.000Z',
+      disabled_at: null,
+      disabled_by: null,
+      version: 1
+    }).execute()
+    await repository.insertAuditEvent({
+      id: 'audit_secret_scan_redacted',
+      actorAccountId: 'account_secret_scan',
+      organizationId: null,
+      action: 'secret.scan.redacted',
+      targetType: 'test',
+      targetId: null,
+      outcome: 'failed',
+      safeMetadata: { diagnostic: `Bearer ${jwt}` },
+      createdAt: '2026-07-21T00:00:00.000Z'
+    })
+    const redactedAudit = await handle.db
+      .selectFrom('admin_audit_events')
+      .select('safe_metadata_json')
+      .where('id', '=', 'audit_secret_scan_redacted')
+      .executeTakeFirstOrThrow()
+    expect(redactedAudit.safe_metadata_json).not.toContain(jwt)
+    expect(redactedAudit.safe_metadata_json).toContain('[REDACTED]')
+
+    await handle.db
+      .updateTable('provider_credentials')
+      .set({
+        storage_kind: 'plaintext-v1',
+        secret_payload: `provider_${'s'.repeat(32)}`
+      })
+      .where('id', '=', 'credential_secret_scan')
+      .execute()
+    await handle.db.insertInto('admin_audit_events').values({
+      id: 'audit_secret_scan',
+      actor_account_id: 'account_secret_scan',
+      organization_id: null,
+      action: 'secret.scan.fixture',
+      target_type: 'test',
+      target_id: null,
+      outcome: 'failed',
+      safe_metadata_json: JSON.stringify({ diagnostic: `Bearer ${jwt}` }),
+      created_at: '2026-07-21T00:00:00.000Z'
+    }).execute()
+
+    const report = await scanGatewayDatabaseSecrets(handle.db)
+    expect(report.findings.map(item => item.kind)).toEqual(
+      expect.arrayContaining(['provider-plaintext-credential', 'jwt'])
+    )
+    expect(JSON.stringify(report)).not.toContain(jwt)
+    expect(JSON.stringify(report)).not.toContain(`provider_${'s'.repeat(32)}`)
   })
 })

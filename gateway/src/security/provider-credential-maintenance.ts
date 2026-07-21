@@ -4,6 +4,7 @@ import {
   type ProviderCredentialRecord
 } from '../db/repositories/provider-repository.js'
 import { ProviderCredentialVault } from './provider-credential-vault.js'
+import { redactText } from '../common/redaction.js'
 
 export type ProviderCredentialMaintenanceOperation = 'verify' | 'migrate' | 'rewrap'
 
@@ -34,7 +35,7 @@ function context(record: ProviderCredentialRecord) {
 }
 
 function safeFailure(record: ProviderCredentialRecord, error: unknown): Error {
-  const reason = error instanceof Error ? error.message : 'unknown failure'
+  const reason = error instanceof Error ? redactText(error.message) : 'unknown failure'
   return new Error(
     `Provider credential verification failed for ${record.id}: ${reason}`
   )

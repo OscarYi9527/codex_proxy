@@ -5,6 +5,7 @@ import { proxyConfig, reloadProxyConfig, saveProxyConfig, CONFIG_FILE, addRelay,
 import { readJson, sendJson } from './server-utils.js'
 import { syncRelayModels } from './sync-models.js'
 import { publicProxyConfig } from './admin/shared.js'
+import { safeErrorText } from './logger.js'
 
 export { publicProxyConfig } from './admin/shared.js'
 export { summarizeCodexLaunchFailure, resolveCodexLaunch, getChatgptLoginPreflight, isLocalAdminRequest, parseDeviceAuthOutput, privateBrowserArgs, officialLoginUrlWithHint, findPrivateBrowser, findDuplicateAccount, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginPreflight, handleChatgptLoginCancel } from './admin/login.js'
@@ -48,7 +49,7 @@ export async function handleAdminConfigPut(req, res) {
     const masked = publicProxyConfig(newCfg)
     return sendJson(res, 200, { config: masked, reloaded: true })
   } catch (error) {
-    return sendJson(res, 400, { error: { type: 'invalid_request_error', message: error.message } })
+    return sendJson(res, 400, { error: { type: 'invalid_request_error', message: safeErrorText(error) } })
   }
 }
 
@@ -72,7 +73,7 @@ export async function handleRelayAdd(req, res, body) {
     syncRelayModels()
     return sendJson(res, 200, { config: masked, message: '中转站已添加，已同步到 codex-models.json' })
   } catch (error) {
-    return sendJson(res, 400, { error: { type: 'invalid_request_error', message: error.message } })
+    return sendJson(res, 400, { error: { type: 'invalid_request_error', message: safeErrorText(error) } })
   }
 }
 
@@ -83,6 +84,6 @@ export async function handleRelayDelete(req, res, relayId) {
     const masked = publicProxyConfig(newCfg)
     return sendJson(res, 200, { config: masked, message: '中转站已删除，已同步到 codex-models.json' })
   } catch (error) {
-    return sendJson(res, 500, { error: { type: 'server_error', message: error.message } })
+    return sendJson(res, 500, { error: { type: 'server_error', message: safeErrorText(error) } })
   }
 }

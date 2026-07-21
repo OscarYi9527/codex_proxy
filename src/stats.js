@@ -4,6 +4,7 @@ import path from 'path'
 import { STORAGE_ROOT, atomicWriteJson } from './config.js'
 import { estimateRequestCost } from './pricing.js'
 import { backupBeforeMigration, CURRENT_STATS_SCHEMA, migrateStatsDocument } from './migrations.js'
+import { safeErrorText } from './logger.js'
 
 const STATS_FILE = path.join(STORAGE_ROOT, 'codex-proxy-stats.json')
 const DAILY_RETENTION_DAYS = 370
@@ -60,7 +61,7 @@ export function saveStats() {
     atomicWriteJson(STATS_FILE, stats)
     return true
   } catch (error) {
-    console.error('[codex-proxy] failed to persist statistics:', error.message)
+    console.error('[codex-proxy] failed to persist statistics:', safeErrorText(error))
     return false
   }
 }
@@ -202,7 +203,7 @@ export function recordAccountOutcome(accountId, {
     : 0
   account.last_status = code || null
   account.last_error_type = errorType || null
-  account.last_error_message = errorMessage ? String(errorMessage).slice(0, 300) : null
+  account.last_error_message = errorMessage ? safeErrorText(errorMessage, 300) : null
   account.last_request_at = new Date().toISOString()
   account.recent_events ||= []
   account.recent_events.push({
@@ -210,7 +211,7 @@ export function recordAccountOutcome(accountId, {
     status: code || null,
     latency_ms: Math.max(0, Number(latencyMs) || 0),
     error_type: errorType || null,
-    error_message: errorMessage ? String(errorMessage).slice(0, 300) : null
+    error_message: errorMessage ? safeErrorText(errorMessage, 300) : null
   })
   const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000
   account.recent_events = account.recent_events
@@ -240,7 +241,7 @@ export function recordOperationalEvent(type, {
     provider: provider ? String(provider) : null,
     from_account_id: fromAccountId ? String(fromAccountId) : null,
     to_account_id: toAccountId ? String(toAccountId) : null,
-    reason: reason ? String(reason).slice(0, 100) : null
+    reason: reason ? safeErrorText(reason, 100) : null
   }
   stats.operational_events ||= []
   stats.operational_events.push(event)

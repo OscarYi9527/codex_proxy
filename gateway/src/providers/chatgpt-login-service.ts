@@ -5,6 +5,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { IdSource } from '../common/ids.js'
 import { SafeError } from '../common/errors.js'
+import { redactText } from '../common/redaction.js'
 
 export type ChatgptLoginState = 'idle' | 'waiting' | 'success' | 'error' | 'cancelled'
 
@@ -340,7 +341,7 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
     session.child = null
     try { fs.rmSync(session.tempHome, { recursive: true, force: true }) } catch {}
     session.status = status
-    session.message = message
+    session.message = redactText(message).slice(0, 2000)
   }
 
   private async resolveLaunch(): Promise<CodexLaunch> {

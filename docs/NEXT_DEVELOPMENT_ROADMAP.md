@@ -4,7 +4,7 @@
 > [`DEVELOPMENT_EXECUTION_PLAN.md`](DEVELOPMENT_EXECUTION_PLAN.md)；本文保留需求背景和设计细节。
 
 日期：2026-07-21<br>
-审计基线：`feature/ai-editor-account-gateway@c75dcd9`<br>
+审计基线：`feature/ai-editor-account-gateway@125e683`；N008 实现待发布验收<br>
 适用范围：standalone 账号池、AI Editor Gateway/Edge、React 管理端、运维与安全门禁
 
 ## 1. 结论摘要
@@ -17,10 +17,11 @@
 2. **Gateway 的积分、Turn 风险和结算是当前最大的产品功能缺口。**
    数据表已经存在，但请求预检只验证登录、设备、Turn ID 和模型；Responses 完成后没有
    风险释放、实际/估算用量落库或幂等结算。管理页面显示的积分仍是固定零值。
-3. **Gateway Provider 信封加密已完成，生产安全下一阻塞项是 N008。**
-   N007 已实现 `envelope-v1`、主密钥轮换、事务迁移和 fail-closed 验密；遗留明文仍会被
-   production 拒绝。Git、数据库、API、日志、诊断和备份的全链路 Secret Scan 尚未完成，
-   因此 Gateway 仍不能视为可生产部署。
+3. **Gateway Provider 信封加密已完成，N008 已进入发布验收。**
+   N007 已实现 `envelope-v1`、主密钥轮换、事务迁移和 fail-closed 验密；N008 已补齐
+   Git、数据库、Standalone/Edge/Gateway API、日志、诊断、审计和备份门禁，非部署测试
+   全部通过。由于当前明确暂不部署，包含隔离部署合同的 `release:check` 尚未执行，
+   Gateway 仍不能视为已完成生产发布验收。
 4. **组织/RBAC 和审计保留必须与积分结算一起完成，而不是只补页面。**
    Level-2 的组织用户、邀请码页面仍是占位；跨组织强制 `403`、最后一个 Level-1 保护、
    管理员正文查看审计和正文到期清理尚未形成完整服务层。
@@ -42,6 +43,7 @@
 | 积分/风险表尚无业务 repository | `organization_credit_periods`、`user_credit_allocations`、`risk_policies`、`turn_risks` 仅在 schema/migration 出现 | 数据模型已预留，但核心服务未实现 |
 | 组织管理页面仍是占位 | React `PlaceholderPage` 覆盖 `organization`、`invitations` | Level-2 管理闭环未形成 |
 | Provider 信封加密已完成（N007） | `ProviderService.addCredential()` 只写 `envelope-v1`，启动时全量验密 | 遗留明文可事务迁移；轮换、回滚和逐凭据重包可验证 |
+| 全链路 Secret Scan 已实现（N008 待验收） | 统一 scanner、Git gate、数据库启动扫描、三层响应守卫和备份写前扫描 | 非部署测试为 0 findings；待发布阶段执行 `release:check` |
 | Gateway 仍复用进程内 standalone adapter | `StandaloneRouteAdapter` 动态导入 `src/server.js` 并复制 `chatgptAccounts` | 新增的分级、健康和账号历史没有中央数据库边界 |
 | Gateway 测试分支覆盖率不足 | 2026-07-21：statements 88.80%，branches 70.23%；`account-usage-routes`、`management-shell`、登录异常分支偏低 | “新增代码覆盖率 80%”若包含分支覆盖率，当前尚未达标 |
 | 审计时开发 shell 继承了禁用 TLS 的环境变量（N006 已修复） | Gateway/Edge 配置、开发脚本和发布门禁均显式保护 TLS 校验 | 禁用证书验证时启动/发布检查 fail-closed |
@@ -162,6 +164,12 @@ POST   /admin/api/chatgpt-accounts/check-tasks/:taskId/resume
 - `redeem_request_id`
 - Provider `secret_payload`
 - OAuth 授权码、Webview ticket、Edge nonce
+
+**2026-07-21 实现状态：待发布验收。** 统一规则、Git staged/working/untracked 门禁、
+Gateway 数据库扫描与 production fail-closed、Standalone/Edge/Gateway 响应守卫、
+日志/错误/审计脱敏以及加密备份保护均已完成。运维说明见
+[`SECRET_SCAN.md`](SECRET_SCAN.md)。非部署验证通过；按当前要求未运行会执行隔离部署合同的
+`release:check`。
 
 ## 5. P0：组织、权限、积分和幂等结算
 

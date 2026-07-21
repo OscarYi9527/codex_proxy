@@ -87,6 +87,7 @@ function runNpm(args, label) {
 }
 
 for (const [script, label] of [
+  ['secret:scan', 'Git change secret scan'],
   ['test', 'standalone and Edge tests'],
   ['gateway:test', 'Gateway tests'],
   ['admin:test', 'admin-web tests'],

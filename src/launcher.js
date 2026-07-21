@@ -2,6 +2,7 @@
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseProxyMode } from './mode.js'
+import { safeErrorText } from './logger.js'
 
 export async function startSelectedMode(options = {}) {
   const mode = options.mode || parseProxyMode(options)
@@ -31,7 +32,7 @@ const isMain = process.argv[1]
 
 if (isMain) {
   startSelectedMode().catch(error => {
-    console.error(`[codex-proxy] startup failed: ${error.message}`)
+    console.error(`[codex-proxy] startup failed: ${safeErrorText(error)}`)
     process.exitCode = 1
   })
 }

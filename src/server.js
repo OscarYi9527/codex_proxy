@@ -11,7 +11,7 @@ import {
   initializeCredentialProtection,
   proxyConfig
 } from './config.js'
-import { requestLog } from './logger.js'
+import { requestLog, safeErrorText } from './logger.js'
 import { sendJson, readJson, id, setProxyMeta } from './server-utils.js'
 import { getCircuitStates, resetCircuits } from './circuit-breaker.js'
 import { resolveCodexModel, buildModelsResponse, isChatGptSubModel, isOpenAIApiModel, isRelayModel, shouldRouteViaOpenAIApi } from './models.js'
@@ -31,6 +31,11 @@ import {
   accountCheckTaskManager,
   initializeAccountCheckTasks
 } from './account-check-tasks.js'
+
+const INTENTIONAL_SECRET_ISSUANCE_ROUTES = new Set([
+  '/admin/api/chatgpt-login/start',
+  '/admin/api/chatgpt-login/status'
+])
 
 const PORT = Number(process.env.CODEX_PROXY_PORT || 47892)
 const HOST = process.env.CODEX_PROXY_HOST || '127.0.0.1'
@@ -135,6 +140,8 @@ export function createServer({
     })
     setProxyMeta(res, { requestId: req.requestId, startedAt: Date.now() })
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`)
+    res.secretScanResponse = url.pathname.startsWith('/admin/api/') &&
+      !INTENTIONAL_SECRET_ISSUANCE_ROUTES.has(url.pathname)
 
     if (!(req.method === 'GET' && ['/health', '/live', '/ready'].includes(url.pathname))) {
       requestLog(req)
@@ -218,8 +225,8 @@ export function createServer({
             dispatchResponsesTarget(target, req, attemptRes, attemptBody, attemptResolved))
       } catch (error) {
         if (req.clientAbortSignal.aborted || res.destroyed) return
-        console.error('[codex-proxy] request failed:', error.message)
-        if (!res.headersSent) return sendJson(res, Number(error.status) || 502, { error: { type: error.code === 'NO_VIRTUAL_ROUTE' ? 'route_unavailable' : (error.code === 'BUDGET_EXCEEDED' ? 'budget_exceeded' : 'proxy_error'), message: error.message, ...(error.decision ? { details: error.decision } : {}) } })
+        console.error('[codex-proxy] request failed:', safeErrorText(error))
+        if (!res.headersSent) return sendJson(res, Number(error.status) || 502, { error: { type: error.code === 'NO_VIRTUAL_ROUTE' ? 'route_unavailable' : (error.code === 'BUDGET_EXCEEDED' ? 'budget_exceeded' : 'proxy_error'), message: safeErrorText(error), ...(error.decision ? { details: error.decision } : {}) } })
         if (!res.writableEnded) res.end()
       }
       return
@@ -244,8 +251,8 @@ export function createServer({
             dispatchChatCompletionsTarget(target, req, attemptRes, attemptBody, attemptResolved))
       } catch (error) {
         if (req.clientAbortSignal.aborted || res.destroyed) return
-        console.error('[codex-proxy] chat/completions failed:', error.message)
-        if (!res.headersSent) return sendJson(res, Number(error.status) || 502, { error: { type: error.code === 'NO_VIRTUAL_ROUTE' ? 'route_unavailable' : (error.code === 'BUDGET_EXCEEDED' ? 'budget_exceeded' : 'proxy_error'), message: error.message, ...(error.decision ? { details: error.decision } : {}) } })
+        console.error('[codex-proxy] chat/completions failed:', safeErrorText(error))
+        if (!res.headersSent) return sendJson(res, Number(error.status) || 502, { error: { type: error.code === 'NO_VIRTUAL_ROUTE' ? 'route_unavailable' : (error.code === 'BUDGET_EXCEEDED' ? 'budget_exceeded' : 'proxy_error'), message: safeErrorText(error), ...(error.decision ? { details: error.decision } : {}) } })
         if (!res.writableEnded) res.end()
       }
       return
@@ -458,7 +465,7 @@ export function startStandaloneServer() {
     saveStats()
     saveProviderHealth()
     server.close(error => {
-      if (error) console.error('[codex-proxy] graceful shutdown error:', error.message)
+      if (error) console.error('[codex-proxy] graceful shutdown error:', safeErrorText(error))
       process.exit(error ? 1 : 0)
     })
     setTimeout(() => {

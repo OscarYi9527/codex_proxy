@@ -10,6 +10,7 @@
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
     "provider-credentials": "tsx src/provider-credentials-cli.ts",
+    "secret-scan": "tsx src/secret-scan-cli.ts",
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "node --experimental-vm-modules ../node_modules/jest/bin/jest.js --config jest.config.cjs --runInBand",

@@ -8,6 +8,7 @@ import { resetProviderHealth } from '../provider-health.js'
 import { getRuntimeDeploymentInfo } from '../runtime-info.js'
 import { isLocalAdminRequest } from './login.js'
 import { publicProxyConfig } from './shared.js'
+import { safeErrorText } from '../logger.js'
 
 export function handleRuntimeInfoGet(req, res) {
   return sendJson(res, 200, getRuntimeDeploymentInfo())
@@ -56,7 +57,7 @@ export function handleDeployUpdate(req, res) {
     })
   } catch (error) {
     return sendJson(res, 500, {
-      error: { type: 'server_error', message: `无法启动部署脚本：${error.message}` }
+      error: { type: 'server_error', message: `无法启动部署脚本：${safeErrorText(error)}` }
     })
   }
 }
@@ -78,7 +79,7 @@ export async function handleAccountBackupRestore(req, res) {
     })
   } catch (error) {
     return sendJson(res, 400, {
-      error: { type: 'invalid_request_error', message: error.message }
+      error: { type: 'invalid_request_error', message: safeErrorText(error) }
     })
   }
 }
@@ -93,7 +94,7 @@ export async function handleConfigRollback(req, res) {
     })
   } catch (error) {
     return sendJson(res, 400, {
-      error: { type: 'invalid_request_error', message: error.message }
+      error: { type: 'invalid_request_error', message: safeErrorText(error) }
     })
   }
 }

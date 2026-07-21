@@ -6,6 +6,7 @@ import { proxyConfig } from '../config.js'
 import { addChatgptAccount, normalizeAccountPoolTier, parseAuthJson } from '../chatgpt-accounts.js'
 import { readJson, sendJson } from '../server-utils.js'
 import { publicProxyConfig } from './shared.js'
+import { safeErrorText } from '../logger.js'
 
 let loginSession = null
 
@@ -112,7 +113,11 @@ export function summarizeCodexLaunchFailure(output, fallback = 'Codex CLI 无法
       !/^[\^~]+$/.test(line) &&
       !/^file:\/\/\//i.test(line)
     )
-  return lines.find(line => /^Error:/i.test(line))?.replace(/^Error:\s*/i, '') || lines.at(-1) || fallback
+  return safeErrorText(
+    lines.find(line => /^Error:/i.test(line))?.replace(/^Error:\s*/i, '') ||
+    lines.at(-1) ||
+    fallback
+  )
 }
 
 function probeCodexLaunch(candidate) {
@@ -151,7 +156,7 @@ function probeCodexLaunch(candidate) {
       error: summarizeCodexLaunchFailure(combined || result.error?.message, `退出码 ${result.status}`)
     }
   } catch (error) {
-    return { ok: false, error: error.message }
+    return { ok: false, error: safeErrorText(error) }
   }
 }
 
@@ -522,7 +527,7 @@ function finishLoginSession(session, status, message) {
   if (loginSession?.id !== session.id) return
   cleanupLoginTemp(session)
   session.status = status
-  session.message = message
+  session.message = safeErrorText(message, 2000)
   if (session.timer) clearTimeout(session.timer)
   session.timer = null
   session.child = null
@@ -644,7 +649,7 @@ export async function handleChatgptLoginStart(req, res) {
     }, 15 * 60 * 1000)
     return sendJson(res, 202, publicLoginSession())
   } catch (error) {
-    return sendJson(res, 500, { error: { type: 'server_error', message: error.message } })
+    return sendJson(res, 500, { error: { type: 'server_error', message: safeErrorText(error) } })
   }
 }
 

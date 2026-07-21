@@ -9,8 +9,14 @@ import {
 } from './local-account-store.js'
 import { LocalHandoffService } from './local-handoff.js'
 import { GatewayClient } from './gateway-client.js'
+import { safeErrorText } from '../logger.js'
+import { scanValueSecrets } from '../secret-scan.js'
 
 const BODY_LIMIT = 16 * 1024 * 1024
+const INTENTIONAL_SECRET_ISSUANCE_ROUTES = new Set([
+  '/ai-editor/handoff/start',
+  '/ai-editor/webview-ticket'
+])
 
 function opaque(prefix) {
   return `${prefix}_${crypto.randomUUID().replaceAll('-', '')}`
@@ -51,8 +57,27 @@ async function readJson(req) {
 }
 
 function sendJson(res, status, value, requestId) {
-  const payload = status === 204 ? '' : JSON.stringify(value)
-  res.writeHead(status, {
+  let responseStatus = status
+  let responseValue = value
+  if (res.secretScanResponse === true && status !== 204) {
+    const findings = scanValueSecrets(value, {
+      source: 'edge-api-response',
+      maxFindings: 20
+    })
+    if (findings.length) {
+      responseStatus = 500
+      responseValue = {
+        error: {
+          code: 'secret_scan_blocked',
+          message: 'Edge 响应包含不允许返回的敏感字段，已阻止发送。',
+          requestId,
+          retryable: false
+        }
+      }
+    }
+  }
+  const payload = responseStatus === 204 ? '' : JSON.stringify(responseValue)
+  res.writeHead(responseStatus, {
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(payload),
     'cache-control': 'no-store',
@@ -164,6 +189,7 @@ export function createEdgeServer(options = {}) {
     try {
       validateLocalRequest(req, config)
       const url = new URL(req.url, `http://${req.headers.host}`)
+      res.secretScanResponse = !INTENTIONAL_SECRET_ISSUANCE_ROUTES.has(url.pathname)
 
       if (req.method === 'GET' && url.pathname === '/live') {
         return sendJson(res, 200, {
@@ -323,7 +349,7 @@ export function createEdgeServer(options = {}) {
       return sendJson(res, statusCode, {
         error: {
           code,
-          message: statusCode >= 500 ? 'Edge 暂时不可用。' : error.message,
+          message: statusCode >= 500 ? 'Edge 暂时不可用。' : safeErrorText(error),
           requestId,
           retryable: error.retryable === true || statusCode >= 500
         }

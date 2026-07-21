@@ -61,4 +61,22 @@ describe('versioned document migrations', () => {
       fs.rmSync(directory, { recursive: true, force: true })
     }
   })
+
+  it('refuses a migration backup containing an unprotected secret', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-migration-secret-'))
+    try {
+      const file = path.join(directory, 'unsafe.json')
+      const raw = JSON.stringify({
+        access_token: `access_${'x'.repeat(32)}`
+      })
+      assert.throws(() => backupBeforeMigration(file, raw, {
+        from: 0,
+        to: 1,
+        now: new Date('2026-07-21T00:00:00.000Z')
+      }), /Migration backup contains an unprotected secret/)
+      assert.equal(fs.existsSync(path.join(directory, '.migration-backups')), false)
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true })
+    }
+  })
 })

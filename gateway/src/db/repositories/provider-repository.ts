@@ -1,6 +1,7 @@
 import type { Kysely, Transaction } from 'kysely'
 import type { GatewayDatabase } from '../schema.js'
 import type { AccountRole } from '../../auth/types.js'
+import { redactValue } from '../../common/redaction.js'
 
 type DatabaseExecutor = Kysely<GatewayDatabase> | Transaction<GatewayDatabase>
 export type ProviderKind = 'chatgpt' | 'openai' | 'deepseek' | 'relay'
@@ -266,7 +267,7 @@ export class ProviderRepository {
       target_type: options.targetType,
       target_id: options.targetId,
       outcome: options.outcome,
-      safe_metadata_json: JSON.stringify(options.safeMetadata || {}),
+      safe_metadata_json: JSON.stringify(redactValue(options.safeMetadata || {})),
       created_at: options.createdAt
     }).execute()
   }

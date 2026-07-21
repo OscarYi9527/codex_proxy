@@ -2,6 +2,7 @@
 import fs from 'fs'
 import { sendJson, readJson } from '../server-utils.js'
 import { normalizeRouteModel, getThreadRouteFile, readThreadRouteState, writeThreadRoute } from '../models.js'
+import { safeErrorText } from '../logger.js'
 
 export function handleThreadRouteReq(req, res, url) {
   const match = url.pathname.match(/^\/control\/threads\/([^/]+)\/route$/)
@@ -27,7 +28,7 @@ export function handleThreadRouteReq(req, res, url) {
     try {
       if (routeFile && fs.existsSync(routeFile)) fs.unlinkSync(routeFile)
     } catch (error) {
-      return sendJson(res, 500, { error: { type: 'server_error', message: error.message } })
+      return sendJson(res, 500, { error: { type: 'server_error', message: safeErrorText(error) } })
     }
     return sendJson(res, 200, { thread_id: threadId, cleared: true })
   }
@@ -44,6 +45,6 @@ export function handleThreadRouteReq(req, res, url) {
     const payload = writeThreadRoute(threadId, model, body.reasoning_effort || body.effort)
     return sendJson(res, 200, payload)
   }).catch(error => {
-    return sendJson(res, 400, { error: { type: 'invalid_request_error', message: error.message } })
+    return sendJson(res, 400, { error: { type: 'invalid_request_error', message: safeErrorText(error) } })
   })
 }

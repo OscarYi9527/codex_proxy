@@ -22,7 +22,7 @@
 |---|---|---|---|
 | S0 安全止血 | N006 | Gateway/Edge 对禁用 TLS 校验 fail-closed，开发脚本显式启用 TLS，发布门禁覆盖 | 已完成 |
 | S1 大号池稳定性 | N001–N004 | 300 账号任务可进度查询/取消/恢复；每批最多一次持久化；健康和同步语义可追溯 | 已完成 |
-| S2 凭据生产安全 | N007–N008 | Provider 信封加密、轮换、迁移及全链路 Secret Scan 上线 | 执行中 |
+| S2 凭据生产安全 | N007–N008 | Provider 信封加密、轮换、迁移及全链路 Secret Scan 上线 | 待验收 |
 | S3 批量运维 | N005、N024 | 批次/标签/归档和去重通知闭环 | 未开始 |
 | S4 组织与审计 | N009、N016、N018 | 组织 RBAC、最后 Level-1 保护、审计和对应管理页面验收 | 未开始 |
 | S5 积分事务 | N010–N012 | 周期、分配、Turn 幂等预留、结算和对账通过双数据库并发测试 | 未开始 |
@@ -41,7 +41,7 @@
 | N005 | P1 | 未开始 | N001–N004、N008 | 导入批次、来源、标签、到期、负责人、批量归档与通知 | 批次操作可审计/回滚；删除前加密备份；通知内容脱敏 |
 | N006 | P0 | 已完成 | 无 | Gateway/Edge TLS 启动门禁、开发脚本环境覆盖、发布测试 | `NODE_TLS_REJECT_UNAUTHORIZED=0` 启动失败；自定义 CA 仅走 `NODE_EXTRA_CA_CERTS`；发布检查通过 |
 | N007 | P0 | 已完成 | N006 | Provider `envelope-v1`、主密钥适配、轮换和明文迁移工具 | 生产禁止新增明文；轮换/回滚/逐凭据重包测试；日志和 CLI 无明文 |
-| N008 | P0 | 未开始 | N006 | Git/数据库/API/诊断/日志/备份 Secret Scan | JWT、OAuth、API Key、Authorization、secret payload 等夹具全部拦截 |
+| N008 | P0 | 待验收 | N006 | Git/数据库/API/诊断/日志/备份 Secret Scan | Git 多行 diff/敏感制品、SQLite/PostgreSQL、Standalone/Edge/Gateway 响应、日志错误和加密备份测试通过；待 `release:check` |
 | N009 | P0 | 未开始 | N007、N008 | 组织 CRUD、Level-2、邀请码、跨组织隔离、最后 Level-1 保护 | 跨组织统一 403；会话版本失效；SQLite/PostgreSQL 权限合同 |
 | N010 | P0 | 未开始 | N009 | 月度积分周期、组织池、用户分配、定点 decimal | 唯一周期、分配不超额、历史不改写；`status/me` 无固定零值 |
 | N011 | P0 | 未开始 | N010 | 按 Turn ID 幂等风险预留和并发额度保护 | 100 并发、重复 Turn、数据库 busy/事务重放均不重复占用 |
@@ -86,3 +86,4 @@
 | 2026-07-21 | N003/N004 | 未开始 → 已完成 | 健康状态机和用量四态完成；`release:check` 通过（Standalone/Edge 149、Gateway 60、Admin 8） |
 | 2026-07-21 | N007 | 未开始 → 执行中 | AES-256-GCM 信封、DPAPI/Keychain/KMS Keyring、原子迁移和轮换/回滚 CLI 进入集成验证 |
 | 2026-07-21 | N007 | 执行中 → 已完成 | 新凭据只写 `envelope-v1`；启动全量验密；明文迁移和逐凭据重包失败整体回滚；SQLite/PostgreSQL、AAD/篡改、轮换/回滚和 CLI 脱敏测试通过；`release:check` 通过（Standalone/Edge 149、Gateway 78、Admin 8） |
+| 2026-07-21 | N008 | 未开始 → 待验收 | 统一 Secret Scan、Git 门禁、Gateway 数据库 fail-closed、Standalone/Edge/Gateway 响应守卫、错误/审计脱敏和加密备份保护已实现；非部署验证通过（Standalone/Edge 157、Gateway 84、Admin 8，双前端构建，working scan 0 findings）；按要求暂不部署，`release:check` 留待发布验收 |

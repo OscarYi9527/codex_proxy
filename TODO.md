@@ -128,7 +128,8 @@
 - [x] N006：Gateway/Edge 启动显式强制 TLS 校验；发现
   `NODE_TLS_REJECT_UNAUTHORIZED=0` 时 fail-closed。
 - [x] N007：实现 Provider `envelope-v1`、主密钥轮换和 plaintext 安全迁移。
-- [ ] N008：增加 Git/数据库/API/诊断/日志/备份全链路 secret scan。
+- [ ] N008（待发布验收）：Git/数据库/API/诊断/日志/备份全链路 Secret Scan
+  已实现并通过非部署测试；按当前要求暂未运行 `release:check`。
 - [ ] N009：完成组织、Level-2、邀请码、跨组织 `403` 和最后 Level-1 保护。
 - [ ] N010：接入真实组织积分周期和用户分配，移除管理 API 固定零值。
 - [ ] N011：按 Turn ID 幂等预留风险积分，并覆盖 SQLite/PostgreSQL 并发事务。

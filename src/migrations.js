@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { assertNoSecrets } from './secret-scan.js'
 
 export const CURRENT_CONFIG_SCHEMA = 3
 export const CURRENT_STATS_SCHEMA = 2
@@ -93,6 +94,17 @@ export function backupBeforeMigration(filePath, rawText, {
   to,
   now = new Date()
 } = {}) {
+  let value = rawText
+  try {
+    value = JSON.parse(rawText)
+  } catch {
+    // Non-JSON documents are scanned as text.
+  }
+  assertNoSecrets(value, {
+    source: `migration-backup:${path.basename(filePath)}`,
+    allowProtectedValues: true,
+    message: 'Migration backup contains an unprotected secret'
+  })
   const directory = path.join(path.dirname(filePath), '.migration-backups')
   fs.mkdirSync(directory, { recursive: true })
   const stamp = now.toISOString().replace(/[:.]/g, '-')

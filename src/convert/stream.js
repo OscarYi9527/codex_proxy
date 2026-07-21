@@ -4,6 +4,7 @@
 import { id, asText, anthropicToResponse } from './anthropic.js'
 import { recordUsage, saveStats } from '../stats.js'
 import { proxyMetaHeaders } from '../server-utils.js'
+import { safeErrorText } from '../logger.js'
 
 export function writeEvent(res, state, type, payload = {}) {
   const event = { type, sequence_number: state.sequence++, ...payload }
@@ -199,7 +200,7 @@ export async function streamAnthropicToResponses(upstream, res, body, customTool
       const data = frame.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n')
       if (!data || data === '[DONE]') continue
       try { onAnthropicEvent(res, state, JSON.parse(data)) } catch (error) {
-        console.error('[codex-proxy] SSE conversion error:', error.message)
+        console.error('[codex-proxy] SSE conversion error:', safeErrorText(error))
       }
     }
   }
@@ -357,7 +358,7 @@ export async function streamChatCompletionToResponses(upstream, res, body, { pro
         if (chunk.usage) usage = chunk.usage
         onChatCompletionChunk(res, state, chunk)
       } catch (error) {
-        console.error('[codex-proxy] Chat SSE conversion error:', error.message)
+        console.error('[codex-proxy] Chat SSE conversion error:', safeErrorText(error))
       }
     }
   }

@@ -1,5 +1,6 @@
 import fs from 'fs'
 import path from 'path'
+import { safeErrorText } from './logger.js'
 
 const MAX_EVENTS_PER_PROVIDER = 10000
 const EVENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
@@ -67,7 +68,7 @@ export function recordProviderOutcome(provider, {
   health.last_checked_at = now
   health.last_status = Number(status) || null
   health.last_latency_ms = Math.max(0, Number(latencyMs) || 0)
-  health.last_error = error ? String(error?.message || error).slice(0, 300) : null
+  health.last_error = error ? safeErrorText(error, 300) : null
   health.source = source
   if (healthState === 'healthy') {
     health.last_success_at = now
@@ -150,7 +151,7 @@ export function saveProviderHealth() {
     atomicWrite(healthFile, state)
     return true
   } catch (error) {
-    console.error('[codex-proxy] failed to persist provider health:', error.message)
+    console.error('[codex-proxy] failed to persist provider health:', safeErrorText(error))
     return false
   }
 }

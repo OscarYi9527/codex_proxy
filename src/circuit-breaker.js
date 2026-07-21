@@ -3,6 +3,7 @@
 // reacts to provider-level timeouts, network errors and 5xx responses.
 
 import { recordOperationalEvent } from './stats.js'
+import { safeErrorText } from './logger.js'
 
 const DEFAULT_FAILURE_THRESHOLD = 3
 const DEFAULT_RESET_TIMEOUT_MS = 30_000
@@ -90,8 +91,8 @@ export function recordCircuitResult(name, {
   circuit.lastFailure = {
     at: new Date().toISOString(),
     status: Number(status) || null,
-    message: error?.message || null,
-    cause: error?.cause?.code || error?.cause?.message || null
+    message: error ? safeErrorText(error) : null,
+    cause: error?.cause ? safeErrorText(error.cause) : null
   }
   circuit.halfOpenProbeActive = false
   circuit.halfOpenProbeStartedAt = null
@@ -102,7 +103,10 @@ export function recordCircuitResult(name, {
     circuit.openedAt = Date.now()
     if (!wasOpen) {
       circuit.openedCount = Number(circuit.openedCount || 0) + 1
-      recordOperationalEvent('circuit_open', { provider: name, reason: error?.message || `HTTP ${status}` })
+      recordOperationalEvent('circuit_open', {
+        provider: name,
+        reason: error ? safeErrorText(error) : `HTTP ${status}`
+      })
     }
   }
 }

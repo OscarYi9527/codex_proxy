@@ -1,4 +1,5 @@
 import { proxyConfig } from '../config.js'
+import { safeErrorText } from '../logger.js'
 import { sendJson } from '../server-utils.js'
 import { chinaFetch, withChinaDispatcher } from '../china-fetch.js'
 import { resolveOpenAIUpstream } from './openai-api.js'
@@ -18,7 +19,7 @@ async function pingDeepSeek(fetchImpl) {
     })
     return { ok: r.ok || r.status < 500, status: r.status, latency: Date.now() - start }
   } catch (e) {
-    return { ok: false, error: e.message, latency: Date.now() - start }
+    return { ok: false, error: safeErrorText(e), latency: Date.now() - start }
   }
 }
 
@@ -37,7 +38,7 @@ async function pingOpenAIApi(fetchImpl) {
     const r = await probeFetch(modelsUrl, options)
     return { ok: r.ok, status: r.status, latency: Date.now() - start, note: upstream.mode === 'relay' ? `经中转站: ${upstream.relayName}` : '' }
   } catch (e) {
-    return { ok: false, error: e.message, latency: Date.now() - start }
+    return { ok: false, error: safeErrorText(e), latency: Date.now() - start }
   }
 }
 
@@ -52,7 +53,7 @@ async function pingChatGptSub(fetchImpl) {
     const ok = r.ok || r.status === 401 || r.status === 405
     return { ok, status: r.status, latency: Date.now() - start, note: (r.status === 401 || r.status === 405) ? '可访问 (需认证)' : '' }
   } catch (e) {
-    return { ok: false, error: e.message, latency: Date.now() - start }
+    return { ok: false, error: safeErrorText(e), latency: Date.now() - start }
   }
 }
 
@@ -71,7 +72,7 @@ async function pingRelay(fetchImpl, relayId) {
     })
     return { ok: r.ok, status: r.status, latency: Date.now() - start }
   } catch (e) {
-    return { ok: false, error: e.message, latency: Date.now() - start }
+    return { ok: false, error: safeErrorText(e), latency: Date.now() - start }
   }
 }
 
@@ -98,7 +99,7 @@ async function pingModel(fetchImpl, model) {
       })
       return { ok: r.ok, status: r.status, latency: Date.now() - start }
     } catch (e) {
-      return { ok: false, error: e.message, latency: Date.now() - start }
+      return { ok: false, error: safeErrorText(e), latency: Date.now() - start }
     }
   }
 
@@ -119,7 +120,7 @@ async function pingModel(fetchImpl, model) {
       const r = await probeFetch(upstream.chatCompletionsUrl, options)
       return { ok: r.ok, status: r.status, latency: Date.now() - start }
     } catch (e) {
-      return { ok: false, error: e.message, latency: Date.now() - start }
+      return { ok: false, error: safeErrorText(e), latency: Date.now() - start }
     }
   }
 

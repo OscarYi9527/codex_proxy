@@ -16,6 +16,7 @@ import { id } from './server-utils.js'
 import { chinaFetch, withChinaDispatcher } from './china-fetch.js'
 import { getStats, statsDayKey } from './stats.js'
 import { appendAccountHealthEvents } from './account-store.js'
+import { safeErrorText } from './logger.js'
 
 export const CHATGPT_CODEX_OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 const OAUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token'
@@ -393,7 +394,7 @@ export function classifyAccountSyncFailure(error, {
     status: unsupported ? 'unsupported' : 'failed',
     error: unsupported
       ? `${endpoint === 'reset_credit' ? '重置次数' : '用量'}端点不受当前套餐支持`
-      : String(error?.message || error).slice(0, 300)
+      : safeErrorText(error, 300)
   }
 }
 
@@ -1074,7 +1075,7 @@ export async function ensureFreshToken(account, fetchImpl = fetch) {
         })
       })
     } catch (cause) {
-      const error = new Error(`ChatGPT 账号 token 刷新遇到网络错误：${cause.message}`)
+      const error = new Error(`ChatGPT 账号 token 刷新遇到网络错误：${safeErrorText(cause)}`)
       error.code = 'TOKEN_REFRESH_TRANSIENT'
       error.retryable = true
       error.cause = cause
@@ -1567,13 +1568,13 @@ export async function consumeAccountResetCredit(account, {
       const refreshedAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || latestAccount
       await refreshAccountUsage(refreshedAccount, fetchImpl)
     } catch (error) {
-      refreshWarnings.push(error?.message || String(error))
+      refreshWarnings.push(safeErrorText(error))
     }
     try {
       const refreshedAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || latestAccount
       await refreshAccountResetCredits(refreshedAccount, fetchImpl)
     } catch (error) {
-      refreshWarnings.push(error?.message || String(error))
+      refreshWarnings.push(safeErrorText(error))
     }
     return {
       reset_at: latestAccount.last_quota_reset_at,
@@ -1954,7 +1955,11 @@ async function refreshAllUsageQuiet() {
         failures,
         nextAttemptAt: Date.now() + GLOBAL_USAGE_REFRESH_MS * Math.pow(2, failures - 1)
       })
-      console.error('[codex-proxy] usage refresh failed for %s: %s', account.label || account.id, error.message)
+      console.error(
+        '[codex-proxy] usage refresh failed for %s: %s',
+        account.label || account.id,
+        safeErrorText(error)
+      )
     }
     await new Promise(resolve => setTimeout(resolve, 500 + Math.floor(Math.random() * 1000)))
   }
@@ -1970,7 +1975,7 @@ async function refreshAllResetCreditsQuiet() {
         console.warn(
           '[codex-proxy] reset-credit refresh failed for %s: %s',
           account.label || account.id,
-          error.message
+          safeErrorText(error)
         )
       }
     }
@@ -1994,7 +1999,10 @@ async function refreshActiveUsageQuiet() {
       failures,
       nextAttemptAt: Date.now() + ACTIVE_USAGE_REFRESH_MS * Math.pow(2, failures - 1)
     })
-    console.error('[codex-proxy] active-account usage refresh failed: %s', error.message)
+    console.error(
+      '[codex-proxy] active-account usage refresh failed: %s',
+      safeErrorText(error)
+    )
   }
 }
 

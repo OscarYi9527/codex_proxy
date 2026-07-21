@@ -9,6 +9,7 @@ import { getRuntimeDeploymentInfo } from '../runtime-info.js'
 import { buildAutomaticDiagnosis } from '../diagnostics.js'
 import { getPriceCatalog, updatePriceCatalog } from '../pricing.js'
 import { getCostReport } from '../cost-governance.js'
+import { safeErrorText } from '../logger.js'
 
 export function handleStatsGet(req, res) {
   return sendJson(res, 200, getStats())
@@ -62,7 +63,9 @@ export async function handlePriceCatalogPut(req, res) {
       message: '模型价格目录已更新；后续完成请求将按新价格估算'
     })
   } catch (error) {
-    return sendJson(res, 400, { error: { type: 'invalid_request_error', message: error.message } })
+    return sendJson(res, 400, {
+      error: { type: 'invalid_request_error', message: safeErrorText(error) }
+    })
   }
 }
 

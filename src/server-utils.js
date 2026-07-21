@@ -4,6 +4,8 @@
 import { assertCircuitAvailable, recordCircuitResult } from './circuit-breaker.js'
 import { recordProviderOutcome } from './provider-health.js'
 import { attachHttpErrorGuide } from './error-guide.js'
+import { safeErrorText } from './logger.js'
+import { scanValueSecrets } from './secret-scan.js'
 
 const MAX_BODY_BYTES = 16 * 1024 * 1024
 
@@ -38,8 +40,25 @@ export function proxyMetaHeaders(res, extra = {}) {
 }
 
 export function sendJson(res, status, data, headers = {}) {
-  const text = JSON.stringify(attachHttpErrorGuide(status, data))
-  res.writeHead(status, {
+  let responseStatus = status
+  let responseData = attachHttpErrorGuide(status, data)
+  if (res.secretScanResponse === true) {
+    const findings = scanValueSecrets(responseData, {
+      source: 'standalone-admin-response',
+      maxFindings: 20
+    })
+    if (findings.length) {
+      responseStatus = 500
+      responseData = {
+        error: {
+          type: 'secret_scan_blocked',
+          message: '响应包含不允许返回的敏感字段，已阻止发送。'
+        }
+      }
+    }
+  }
+  const text = JSON.stringify(responseData)
+  res.writeHead(responseStatus, {
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(text),
     ...proxyMetaHeaders(res),
@@ -130,7 +149,7 @@ export async function fetchWithRetry(fetchImpl, url, options, maxAttempts = 5) {
         await response.body?.cancel().catch(() => {})
         retryDelayMs = Math.min(maxRetryDelayMs, retryAfterMs(response) ?? retryDelayMs)
         lastError = new Error(`Upstream returned HTTP ${response.status} (attempt ${attempt + 1}/${maxAttempts}): ${body.slice(0, 200)}`)
-        console.error('[codex-proxy]', lastError.message)
+        console.error('[codex-proxy]', safeErrorText(lastError))
       } else {
         // Only the request's final outcome (after all internal retries) counts
         // toward the circuit breaker, so a request that succeeds on a retry, or
@@ -155,7 +174,10 @@ export async function fetchWithRetry(fetchImpl, url, options, maxAttempts = 5) {
       if (callerAborted) throw error
       if (attempt < maxAttempts - 1 && isRetryableError(error)) {
         console.error('[codex-proxy] fetch error (attempt %d/%d): %s cause=%s',
-          attempt + 1, maxAttempts, error.message, error.cause?.code || error.cause?.message || '-')
+          attempt + 1,
+          maxAttempts,
+          safeErrorText(error),
+          safeErrorText(error.cause?.code || error.cause?.message || '-'))
       } else {
         if (error.code !== 'CIRCUIT_OPEN') recordCircuitResult(circuitKey, { error })
         throw error

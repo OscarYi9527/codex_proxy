@@ -58,6 +58,10 @@ import {
   type ProviderCredentialKeyring
 } from './security/provider-master-key.js'
 import { ProviderCredentialVault } from './security/provider-credential-vault.js'
+import { registerResponseSecretGuard } from './security/response-secret-guard.js'
+import {
+  assertGatewayDatabaseSecretsSafe
+} from './security/database-secret-scan.js'
 
 export interface GatewayApp {
   readonly app: FastifyInstance
@@ -93,6 +97,9 @@ export async function createGatewayApp(options: {
     : null
   const database = options.database || createGatewayDatabase(config)
   await database.migrateToLatest()
+  if (config.environment === 'production') {
+    await assertGatewayDatabaseSecretsSafe(database.db)
+  }
 
   const app = Fastify({
     logger: false,
@@ -109,6 +116,7 @@ export async function createGatewayApp(options: {
   registerRequestContext(app, ids)
   registerNoStore(app)
   registerSafeErrors(app, logger)
+  registerResponseSecretGuard(app)
 
   app.get('/live', async () => ({
     status: 'ok',

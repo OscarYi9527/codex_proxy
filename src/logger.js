@@ -2,6 +2,7 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { redactSecretText } from './secret-scan.js'
 
 const REQUEST_LOG = path.join(os.homedir(), '.claude', 'proxy', 'codex-proxy-requests.log')
 const MAX_LOG_BYTES = 10 * 1024 * 1024
@@ -19,7 +20,7 @@ function rotateRequestLogIfNeeded() {
     fs.renameSync(REQUEST_LOG, previous)
   } catch (error) {
     if (error.code !== 'ENOENT') {
-      console.error('[codex-proxy] request log rotation failed:', error.message)
+      console.error('[codex-proxy] request log rotation failed:', safeErrorText(error))
     }
   }
 }
@@ -34,12 +35,11 @@ function isNoisyAdminRead(req) {
 }
 
 export function redactSecrets(value) {
-  return String(value ?? '')
-    .replace(/\b(Bearer|Basic)\s+[^\s|,;]+/gi, '$1 [REDACTED]')
-    .replace(/\b(sk-[A-Za-z0-9._-]{8,}|rt\.[A-Za-z0-9._-]{8,})\b/g, '[REDACTED]')
-    .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, '[REDACTED]')
-    .replace(/([?&](?:api_?key|access_?token|refresh_?token|authorization)=)[^&\s]+/gi, '$1[REDACTED]')
-    .replace(/("(?:api_?key|access_?token|refresh_?token|authorization)"\s*:\s*")[^"]+(")/gi, '$1[REDACTED]$2')
+  return redactSecretText(value)
+}
+
+export function safeErrorText(error, maxLength = 1000) {
+  return redactSecrets(error?.message || error || 'Unknown error').slice(0, maxLength)
 }
 
 export function requestLog(req, extra = '') {

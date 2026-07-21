@@ -1,7 +1,7 @@
 import { proxyConfig } from './config.js'
 import { accountRemainingPercent } from './chatgpt-accounts.js'
 import { getProviderHealth } from './provider-health.js'
-import { requestLog } from './logger.js'
+import { requestLog, safeErrorText } from './logger.js'
 import { budgetDecision, BudgetExceededError, targetUnitCost } from './cost-governance.js'
 
 export const VIRTUAL_MODELS = [
@@ -272,7 +272,7 @@ export async function executeRoutingPlan(req, res, body, resolved, dispatch) {
       if (attemptRes.passthrough || res.headersSent) throw error
       const status = statusForThrownError(error)
       if (index < plan.length - 1 && shouldFallbackResponse(status, error.code || '')) {
-        requestLog(req, `cross_provider_fallback from=${target.provider} error=${error.code || error.message} to=${plan[index + 1].provider}`)
+        requestLog(req, `cross_provider_fallback from=${target.provider} error=${safeErrorText(error.code || error)} to=${plan[index + 1].provider}`)
         continue
       }
       throw error

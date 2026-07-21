@@ -672,10 +672,18 @@ export class ChatgptSubscriptionExecutor {
         false
       )
     }
-    await this.#runtime.accounts.refreshAccountUsage(
-      account,
-      this.#runtime.china.chinaFetch(this.fetchImpl)
-    )
+    try {
+      await this.#runtime.accounts.refreshAccountUsage(
+        account,
+        this.#runtime.china.chinaFetch(this.fetchImpl)
+      )
+    } catch (error) {
+      await this.#persistCredentials()
+      if (isProviderReloginRequired(error)) {
+        throw providerReloginRequiredError()
+      }
+      throw error
+    }
     await this.#persistCredentials()
   }
 

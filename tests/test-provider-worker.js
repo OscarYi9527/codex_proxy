@@ -1249,6 +1249,84 @@ describe('Provider Worker ChatGPT subscription runtime', () => {
     assert.equal(pool.accounts[0].status, 'auth_error')
     assert.equal(pool.accounts[0].health.lastErrorType, 'token_refresh')
   })
+
+  it('normalizes a manual usage refresh with a rejected token to relogin-required', async () => {
+    const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-worker-usage-invalid-'))
+    temporaryDirectories.add(dataRoot)
+    const executor = new ChatgptSubscriptionExecutor({
+      dataRoot,
+      environment: 'test',
+      fetchImpl: async url => {
+        assert.equal(String(url), 'https://auth.openai.com/oauth/token')
+        return new Response(JSON.stringify({
+          error: 'invalid_grant',
+          error_description: 'refresh token revoked'
+        }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+    })
+    const { origin } = await startWorker({ executor })
+    const configuration = signedRequest(
+      origin,
+      '/internal/v1/runtime/chatgpt-sub',
+      {
+        method: 'PUT',
+        body: {
+          schemaVersion: 1,
+          provider: 'chatgpt-sub',
+          enabled: true,
+          experimental: true,
+          responsesUrl: 'https://chatgpt.example/backend-api/codex/responses',
+          accountStrategy: 'priority',
+          modelIds: ['gpt-5.6-sol'],
+          accounts: [{
+            id: 'account-usage-invalid',
+            label: 'Usage refresh invalid',
+            account_id: 'upstream-usage-invalid',
+            access_token: 'expired-access',
+            refresh_token: 'revoked-refresh',
+            expires_at: Date.now() - 60_000,
+            routing_enabled: true,
+            credential_version: 1,
+            status: 'active'
+          }]
+        }
+      }
+    )
+    assert.equal((await configuration.fetch()).status, 200)
+    configuration.body.fill(0)
+
+    const refreshUsage = signedRequest(
+      origin,
+      '/internal/v1/runtime/chatgpt-sub/accounts/account-usage-invalid/refresh-usage',
+      {
+        method: 'POST',
+        body: {}
+      }
+    )
+    const refreshUsageResponse = await refreshUsage.fetch()
+    refreshUsage.body.fill(0)
+    assert.equal(refreshUsageResponse.status, 409)
+    const refreshUsageError = await refreshUsageResponse.json()
+    assert.equal(
+      refreshUsageError.error.code,
+      'worker_provider_relogin_required'
+    )
+    assert.equal(refreshUsageError.error.retryable, false)
+
+    const poolRequest = signedRequest(
+      origin,
+      '/internal/v1/runtime/chatgpt-sub/accounts'
+    )
+    const poolResponse = await poolRequest.fetch()
+    poolRequest.body.fill(0)
+    assert.equal(poolResponse.status, 200)
+    const pool = await poolResponse.json()
+    assert.equal(pool.accounts[0].status, 'auth_error')
+    assert.equal(pool.accounts[0].quota.syncStatus, 'error')
+  })
 })
 
 describe('Provider Worker Turn store', () => {

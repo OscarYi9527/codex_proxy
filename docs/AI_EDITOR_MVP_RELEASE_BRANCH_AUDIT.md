@@ -7,7 +7,7 @@
 服务器 MVP 发布基线为：
 
 ```text
-origin/codex/provider-worker-mvp@34c59a4327bd45e3d2435d6d3dbcf970f3fea91c
+origin/codex/provider-worker-mvp@efb69c5f3f772de1100ea47a0d16d037c9f99067
 ```
 
 本轮发布候选为：
@@ -32,6 +32,7 @@ merge 建立已审计的祖先关系。这样会保留 Gateway、Edge、Provider
 | `origin/codex/oscar-t091-account-security` | 账号安全和发布边界 | 已完全包含 |
 | `origin/codex/fix-chatgpt-circuit-recovery` | 旧 `master` 血统的熔断修复 | 不直接 merge；有效逻辑已由 MVP 提交重新实现 |
 | `origin/codex/fix-cross-provider-tool-ids` | 旧 `master` 血统的工具 ID/大请求修复 | 不直接 merge；有效逻辑已由 MVP 提交重新实现 |
+| `origin/codex/stabilize-request-body-test` | 独立的请求体测试稳定化方案 | 不直接 merge；运行时定时器语义已在候选中统一修复 |
 | `origin/master` | 旧 standalone 主线 | 不作为 Gateway/Worker 发布基线 |
 
 ## Black 分支提交映射
@@ -69,7 +70,7 @@ MVP 已在 Gateway/Edge/Worker 架构上重新实现相同修复：
 | `f56093a` 跨 Provider 工具调用 ID | `9b37554`，并覆盖 Edge 转换路径 |
 | `1bdccb0` 遗留 half-open 探测 | `3a1cd54` |
 | `b4928eb` 限制恢复探测 | `a43887f`，并覆盖 Provider Worker |
-| `f1be606` 大请求上传死锁 | `a34aa5c`，覆盖 standalone、Edge、Worker |
+| `f1be606` 大请求上传死锁 | `a34aa5c`，覆盖 standalone、Edge、Worker；`7286b76` 修复 Node 22 下上传超时定时器提前退出 |
 | `06a4262` 账号级熔断隔离 | `94f9f15` |
 | `d8c9097` 运行数据目录隔离 | `CODEX_PROXY_STORAGE_ROOT` 和隔离数据根实现 |
 | `73631a2` 第三方声明 | `0616c77` 恢复可分发声明 |
@@ -81,17 +82,22 @@ MVP 已在 Gateway/Edge/Worker 架构上重新实现相同修复：
 
 ## 已完成的候选验证
 
-- root standalone/Edge/Provider Worker：`183/183`；
+- root standalone/Edge/Provider Worker：`186/186`；
 - Gateway：`154/154`；
 - Admin Web：`31/31`；
+- 请求体聚焦测试：`6/6`，连续执行 `20` 轮通过；
 - TypeScript、JavaScript 和 PowerShell 检查通过；
 - Gateway 与 Admin 生产构建通过；
 - Provider Worker 发布边界：`29` 个 allowlist 文件；
 - Provider Worker 制品：`30` 个文件；
 - `npm audit`：`0 vulnerabilities`；
-- 完整 `npm run release:check`：通过；
-- 共享 `47892` 未重启，PID 保持 `32260`；
-- 预发布 Edge 在门禁后恢复为健康 `edge` 模式。
+- `npm run test:dev-scripts` 在独占固定测试端口后通过；
+- 本地 `npm run release:check` 的各组成门禁均已分别通过；两次聚合运行分别因已有预发布
+  Edge 占用 `47921`、并发任务瞬时占用 `47930` 而在固定端口前置检查处停止，不属于代码失败；
+- 共享 `47892` 未重启，验证期间 PID 保持 `50904`；
+- 预发布 Edge 在门禁后恢复为健康 `edge` 模式；
+- 候选运行时修复提交：`7286b76 fix(proxy): keep upload timeout timers referenced`；
+- GitHub Windows `Release gate` 需在候选分支推送后再次确认全绿。
 
 ## 推荐发布顺序
 

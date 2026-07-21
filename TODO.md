@@ -3,6 +3,17 @@
 > 2026-07-21 深度需求审计、代码证据、N001–N024 验收标准和推荐迭代顺序见
 > [`docs/NEXT_DEVELOPMENT_ROADMAP.md`](docs/NEXT_DEVELOPMENT_ROADMAP.md)。
 
+## RK3588 日本节点中转
+
+- [x] 从 `b7dc7ea` 新建 `feature/rk3588-japan-relay`，与当前 Gateway 交付隔离。
+- [x] 增加独立 `rk3588` 模式，支持模型目录、Responses、Chat Completions 和 SSE。
+- [x] 强制 loopback + Tailscale Serve、私域 Host 白名单和客户端文件 Key 鉴权。
+- [x] RK→日本使用独立 HTTPS origin 和独立上游 Key，拒绝关闭 TLS 证书校验。
+- [x] 增加请求大小、超时、最大在途数、响应头白名单和 POST 不重试边界。
+- [x] 增加 ARM64 Docker Compose、Codex provider、密钥轮换、验收与回滚文档。
+- [x] 自动化验证同事→RK3588→日本→Codex 两跳链路逐跳替换 Key 且只发送一次 POST。
+- [ ] 在真实 RK3588、真实 tailnet ACL、日本节点和最终 Codex 账号上完成脱敏现场验收。
+
 ## P0：Gateway / Edge 协作迁移与仓库管理
 
 ### 仓库和文件存放

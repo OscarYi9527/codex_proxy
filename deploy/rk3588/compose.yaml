@@ -1,0 +1,49 @@
+services:
+  rk3588-relay:
+    build:
+      context: ../..
+      dockerfile: deploy/rk3588/Dockerfile
+    image: codex-proxy-rk3588:local
+    network_mode: host
+    restart: unless-stopped
+    read_only: true
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    environment:
+      NODE_ENV: production
+      RK3588_RELAY_HOST: 127.0.0.1
+      RK3588_RELAY_PORT: ${RK3588_RELAY_PORT:-47930}
+      RK3588_ALLOWED_HOSTS: ${RK3588_ALLOWED_HOSTS:?set the private Tailscale hostname}
+      RK3588_UPSTREAM_ORIGIN: ${RK3588_UPSTREAM_ORIGIN:?set the HTTPS Japan relay origin}
+      RK3588_CLIENT_API_KEY_FILE: /run/secrets/rk3588-client-api-key
+      RK3588_UPSTREAM_API_KEY_FILE: /run/secrets/japan-upstream-api-key
+      RK3588_MAX_IN_FLIGHT: ${RK3588_MAX_IN_FLIGHT:-8}
+      RK3588_BODY_LIMIT_MB: ${RK3588_BODY_LIMIT_MB:-16}
+      RK3588_UPSTREAM_TIMEOUT_MS: ${RK3588_UPSTREAM_TIMEOUT_MS:-600000}
+      NODE_EXTRA_CA_CERTS: ${NODE_EXTRA_CA_CERTS:-}
+    volumes:
+      - type: bind
+        source: /etc/codex-rk3588/rk3588-client-api-key
+        target: /run/secrets/rk3588-client-api-key
+        read_only: true
+      - type: bind
+        source: /etc/codex-rk3588/japan-upstream-api-key
+        target: /run/secrets/japan-upstream-api-key
+        read_only: true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch(`http://127.0.0.1:$${process.env.RK3588_RELAY_PORT || 47930}/live`).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    mem_limit: 512m
+    cpus: 2.0

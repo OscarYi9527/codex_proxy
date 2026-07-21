@@ -52,6 +52,8 @@
     "src/edge/gateway-client.js",
     "src/edge/local-account-store.js",
     "src/edge/local-handoff.js",
+    "src/rk3588/relay-config.js",
+    "src/rk3588/relay-server.js",
     "src/circuit-breaker.js",
     "src/china-fetch.js",
     "src/convert/anthropic.js",

@@ -359,6 +359,33 @@ powershell -ExecutionPolicy Bypass -File `
   "$HOME\.codex-local-multi-proxy\uninstall-codex-proxy-autostart.ps1"
 ```
 
+## RK3588 私域日本中转
+
+`rk3588` 模式提供独立的 ARM64 友好中转入口：
+
+```text
+同事 Codex → Tailscale 私域 HTTPS → RK3588 :47930
+           → HTTPS 日本节点 → Codex/Responses 兼容服务器
+```
+
+它只监听 `127.0.0.1`，由 Tailscale Serve 发布 tailnet 私域名；入站和 RK→日本使用
+两枚不同的文件 Key，并强制 Host 白名单、TLS 校验、请求大小、超时和在途并发上限。
+支持 `/v1/models`、`/v1/responses` 与 `/v1/chat/completions`，SSE 直接按流转发，
+已接受的 POST 不自动重试。
+
+```bash
+# 配置项均为示意；真实 Key 只放权限为 0400 的独立文件。
+export RK3588_ALLOWED_HOSTS='rk3588-relay.example-tailnet.ts.net'
+export RK3588_UPSTREAM_ORIGIN='https://jp-relay.example.com'
+export RK3588_CLIENT_API_KEY_FILE='/run/secrets/rk3588-client-api-key'
+export RK3588_UPSTREAM_API_KEY_FILE='/run/secrets/japan-upstream-api-key'
+npm run start:rk3588
+```
+
+RK3588 Docker Compose、Tailscale、Codex 自定义 provider、日本节点两跳配置、真实上线
+验收和回滚步骤见
+[`docs/RK3588_JAPAN_RELAY.md`](docs/RK3588_JAPAN_RELAY.md)。
+
 ## AI Editor Gateway / Edge 开发基线
 
 当前分支同时保留第一轮合同 Mock，并已加入 T023–T033 真实产品认证与安全本机绑定、
@@ -969,7 +996,8 @@ VS Code 兼容层会把 `chatgpt.cliExecutable` 指向 `codex-vscode-launcher.ex
 ## 仓库结构
 
 - `src/server.js`：HTTP 服务、模型路由和管理 API 入口。
-- `src/launcher.js` / `src/mode.js`：默认 standalone 与隔离 Edge 运行模式入口。
+- `src/launcher.js` / `src/mode.js`：standalone、Edge、Gateway 与 RK3588 运行模式入口。
+- `src/rk3588/`：私域 API Key 鉴权、受限并发和日本 HTTPS 上游流式中转。
 - `src/edge/`：仅监听本机的 AI Editor Edge、OS 安全存储、真实 handoff 与兼容 Mock。
 - `gateway/`：Fastify/TypeScript Gateway、真实产品认证、模型/Responses 路由、
   Kysely 双数据库边界、迁移和测试。

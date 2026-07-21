@@ -14,6 +14,12 @@ export async function startSelectedMode(options = {}) {
     const { startEdgeServer } = await import('./edge/edge-server.js')
     return startEdgeServer()
   }
+  if (mode === 'rk3588') {
+    const { startRk3588RelayServer } = await import(
+      './rk3588/relay-server.js'
+    )
+    return startRk3588RelayServer()
+  }
   const compiled = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'gateway', 'dist', 'server.js')
   try {
     const { startGatewayServer } = await import(pathToFileURL(compiled).href)

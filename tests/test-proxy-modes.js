@@ -4,16 +4,22 @@ import path from 'node:path'
 import { parseProxyMode, PROXY_MODES } from '../src/mode.js'
 import { loadEdgeConfig } from '../src/edge/edge-config.js'
 
-describe('Proxy standalone/edge/gateway modes', () => {
+describe('Proxy standalone/edge/gateway/rk3588 modes', () => {
   it('keeps standalone as the compatibility default', () => {
     assert.equal(parseProxyMode({ argv: [], env: {} }), 'standalone')
-    assert.deepEqual(PROXY_MODES, ['standalone', 'edge', 'gateway'])
+    assert.deepEqual(PROXY_MODES, [
+      'standalone',
+      'edge',
+      'gateway',
+      'rk3588'
+    ])
   })
 
   it('accepts explicit CLI and environment selection', () => {
     assert.equal(parseProxyMode({ argv: ['--mode', 'edge'], env: {} }), 'edge')
     assert.equal(parseProxyMode({ argv: ['--mode=gateway'], env: {} }), 'gateway')
     assert.equal(parseProxyMode({ argv: [], env: { CODEX_PROXY_MODE: 'edge' } }), 'edge')
+    assert.equal(parseProxyMode({ argv: ['--mode=rk3588'], env: {} }), 'rk3588')
     assert.throws(() => parseProxyMode({ argv: ['--mode', 'invalid'], env: {} }), /Unsupported/)
   })
 

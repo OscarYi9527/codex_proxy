@@ -25,6 +25,10 @@
   跨组织统一 `403` 并审计；角色/组织/状态变化使旧 Access/Webview 会话失效。
 - 新增事务化最后有效 Level-1 保护、组织状态串行锁、账号软删除和一次性临时密码；
   邀请码只返回一次明文并以 keyed digest 存储，CAS 消费覆盖并发、过期和禁用组织。
+- 新增 ARM64 友好的 `rk3588` 中转模式：Tailscale 私域入口、文件 Key 双层鉴权、Host/
+  TLS/正文/超时/并发门禁，以及到日本 Responses 兼容节点的 SSE 流式透传。
+- 新增 RK3588 只读、无 capability 的 Docker Compose 部署，以及私域名、Codex 自定义
+  provider、日本两跳节点、真实验收和安全回滚文档。
 - Gateway/Edge 合同测试开始共同消费 My_Code 的 `edge-code-contract.json` fixture。
 - 新增 Level-1 Provider、凭据、模型路由和安全诊断 API，以及 Provider/诊断 React 页面。
 - 新增 Gateway 隔离 `CODEX_HOME` 的 OpenAI 官方登录端点；认证临时目录在导入后删除。

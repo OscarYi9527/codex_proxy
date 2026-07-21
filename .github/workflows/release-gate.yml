@@ -38,7 +38,17 @@ jobs:
           Write-Host '::group::Release gate failure tail'
           Write-Host $tail
           Write-Host '::endgroup::'
-          $annotation = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+          $matches = Select-String -LiteralPath release-check.log `
+            -Pattern '^\s*not ok ', '^# fail [1-9]', '^FAIL ', '^\s+● ', 'failed with exit code' `
+            -Context 8, 16
+          $diagnostic = if ($matches) {
+            ($matches | ForEach-Object {
+              @($_.Context.PreContext) + @($_.Line) + @($_.Context.PostContext)
+            } | Select-Object -Unique) -join "`n"
+          } else {
+            (Get-Content -LiteralPath release-check.log -Tail 80) -join "`n"
+          }
+          $annotation = $diagnostic.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
           Write-Host "::error title=Release gate failure::$annotation"
 
   rk3588-arm64-image:

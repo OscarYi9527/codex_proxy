@@ -267,6 +267,15 @@ try {
             -Port $EdgePort `
             -ProcessId $processId `
             -DataRoot $DataRoot
+        [ordered]@{
+            mode = 'edge'
+            gatewayOrigin = $edgeGatewayOrigin
+            edgeOutboundProxy = $normalizedEdgeOutboundProxy
+            edgePort = $EdgePort
+            startedAt = [DateTimeOffset]::UtcNow.ToString('o')
+        } | ConvertTo-Json | Set-Content `
+            -LiteralPath (Join-Path $DataRoot 'edge-runtime-config.json') `
+            -Encoding utf8
         Write-Host "Edge healthy: PID $processId, http://127.0.0.1:$EdgePort -> $edgeGatewayOrigin"
     }
 } catch {

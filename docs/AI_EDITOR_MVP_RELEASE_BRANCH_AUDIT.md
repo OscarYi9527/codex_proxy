@@ -26,7 +26,7 @@ merge 建立已审计的祖先关系。这样会保留 Gateway、Edge、Provider
 | 分支 | 相对发布候选 | 处理结论 |
 | --- | --- | --- |
 | `origin/codex/provider-worker-mvp` | 服务器 MVP 基线 | PR 合并目标 |
-| `origin/feature/ai-editor-account-gateway` | Black 最新账号/Gateway 分支 | 5 个缺失增量已 forward-port，并已记录性 merge |
+| `origin/feature/ai-editor-account-gateway@7e57c3c` | Black 最新账号/Gateway 分支 | 共同节点后的两个新提交仍是 standalone 账号健康检查改动；不直接覆盖 MVP，待合同映射后再决定是否移植 |
 | `origin/feature/custom-api-urls` | Black 与 Oscar 的共同稳定起点 | 已完全包含 |
 | `origin/codex/fix-cross-provider-tool-ids-edge` | Edge 跨 Provider 工具 ID 修复 | 已完全包含 |
 | `origin/codex/oscar-t091-account-security` | 账号安全和发布边界 | 已完全包含 |
@@ -59,6 +59,17 @@ d889c96 merge(mvp): record audited Black gateway integration
 
 该 merge 使用已验证候选树，不重新选择旧分支文件；其作用是让以后能用
 `git merge-base --is-ancestor` 明确判断 Black 分支已经审计合入。
+
+最新 Black 分支在 `ae9a88f` 之后又增加：
+
+| Black 提交 | 当前处理 |
+| --- | --- |
+| `ccfa9c7` 可恢复账号健康检查任务 | 暂不直接 merge；改动集中在旧 standalone 账号存储和管理页，尚未完成 Gateway/Provider Worker 合同映射 |
+| `7e57c3c` 账号健康状态与同步语义 | 暂不直接 merge；与上项成对审计，避免把旧架构的大量删除带入 MVP |
+
+因此，`origin/feature/ai-editor-account-gateway` 不能直接作为当前 MVP 的 merge source。
+如果这些 standalone 账号检查能力也必须进入 MVP，应先由 Black 提供基于
+`codex/provider-worker-mvp` 的独立移植提交、接口合同变更和测试结果，再进入下一次集成门。
 
 ## 旧 Bug 分支的语义映射
 

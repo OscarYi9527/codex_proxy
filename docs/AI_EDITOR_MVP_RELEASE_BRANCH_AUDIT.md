@@ -97,7 +97,10 @@ MVP 已在 Gateway/Edge/Worker 架构上重新实现相同修复：
 - 共享 `47892` 未重启，验证期间 PID 保持 `50904`；
 - 预发布 Edge 在门禁后恢复为健康 `edge` 模式；
 - 候选运行时修复提交：`7286b76 fix(proxy): keep upload timeout timers referenced`；
-- GitHub Windows `Release gate` 需在候选分支推送后再次确认全绿。
+- 发布环境已统一到仓库 `.nvmrc` 的 Node.js `24.15.0`；GitHub Actions 使用同一版本；
+- GitHub 运行 `29797010710` 暴露出旧 workflow 固定 Node.js 22 时 Gateway Jest 集成门禁无法完成；
+  本地用 Node.js 22 可复现该不兼容，Node.js 24.15.0 是当前项目约束和已验证版本；
+- GitHub Windows `Release gate` 需在本次 workflow 修正推送后再次确认全绿。
 
 ## 推荐发布顺序
 

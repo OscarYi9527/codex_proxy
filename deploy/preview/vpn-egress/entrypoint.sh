@@ -32,8 +32,8 @@ if [ "${auth_lines}" -lt 2 ]; then
   exit 1
 fi
 
-install -d -m 0750 -o root -g root /run/ai-editor-vpn
-install -d -m 0750 -o tinyproxy -g tinyproxy /run/tinyproxy
+install -d -m 0750 /run/ai-editor-vpn
+install -d -m 0750 /run/tinyproxy
 rm -f "${OPENVPN_READY}" "${OPENVPN_LOG}"
 
 cleanup() {

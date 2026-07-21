@@ -28,6 +28,10 @@ services:
       - ALL
     cap_add:
       - NET_ADMIN
+      # The host operator owns mode-0600 bind-mounted secrets. The container
+      # runs as root but drops every default capability, so it needs this
+      # narrow capability only to read those two explicit read-only mounts.
+      - DAC_OVERRIDE
     security_opt:
       - no-new-privileges:true
     devices:

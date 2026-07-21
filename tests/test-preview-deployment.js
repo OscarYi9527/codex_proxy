@@ -34,6 +34,7 @@ describe('public preview deployment boundary', () => {
     assert.match(compose, /profiles:\s*\n\s*-\s+openvpn/)
     assert.match(compose, /\/dev\/net\/tun:\/dev\/net\/tun/)
     assert.match(compose, /cap_add:\s*\n\s*-\s+NET_ADMIN/)
+    assert.match(compose, /-\s+DAC_OVERRIDE/)
     assert.match(compose, /secrets\/openvpn\/client\.ovpn:\/run\/ai-editor-vpn\/client\.ovpn:ro/)
     assert.match(compose, /secrets\/openvpn\/auth:\/run\/ai-editor-vpn\/auth:ro/)
   })

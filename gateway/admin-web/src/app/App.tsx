@@ -9,13 +9,18 @@ import { CreditManagementPage } from '../pages/credits/CreditManagementPage'
 import { AuditPage } from '../pages/audit/AuditPage'
 import { DiagnosticsPage } from '../pages/system/DiagnosticsPage'
 import { ProvidersPage } from '../pages/system/ProvidersPage'
+import { CompactManagementPage } from '../pages/compact/CompactManagementPage'
 import { managementApi, type ManagementApiClient } from './api-client'
-import { managementBootstrapFromEvent } from './bootstrap'
+import {
+  browserManagementBootstrapFromHash,
+  managementBootstrapFromEvent
+} from './bootstrap'
 import { accountRoleLabel } from './labels'
 import type {
   AccountDetails,
   DeviceSession,
   ManagementRoute,
+  ManagementBootstrapMessage,
   ManagementSession,
   InvitationSummary,
   ModelRouteResponse,
@@ -29,6 +34,8 @@ import type {
 } from './types'
 
 interface LoadedManagementData {
+  readonly surface: 'embedded' | 'browser'
+  readonly initialRoute: ManagementRoute
   readonly session: ManagementSession
   readonly account: AccountDetails
   readonly devices: readonly DeviceSession[]
@@ -73,10 +80,8 @@ export function App({
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    const receive = (event: MessageEvent) => {
+    const beginBootstrap = (bootstrap: ManagementBootstrapMessage) => {
       if (bootstrapping.current || data) return
-      const bootstrap = managementBootstrapFromEvent(event, expectedOrigin)
-      if (!bootstrap) return
       bootstrapping.current = true
       void (async () => {
         try {
@@ -97,6 +102,8 @@ export function App({
             }
             setRoute('security')
             setData({
+              surface: bootstrap.surface,
+              initialRoute: 'security',
               session: passwordChangeSession,
               account,
               devices,
@@ -139,6 +146,8 @@ export function App({
               : [null, null, null, null]
           setRoute(initialRoute)
           setData({
+            surface: bootstrap.surface,
+            initialRoute,
             session,
             account,
             devices,
@@ -158,6 +167,19 @@ export function App({
           setError('管理会话建立失败，请关闭标签页后重试。')
         }
       })()
+    }
+    const receive = (event: MessageEvent) => {
+      const bootstrap = managementBootstrapFromEvent(event, expectedOrigin)
+      if (bootstrap) beginBootstrap(bootstrap)
+    }
+    const browserBootstrap = browserManagementBootstrapFromHash(window.location.hash)
+    if (browserBootstrap) {
+      window.history.replaceState(
+        null,
+        '',
+        `${window.location.pathname}${window.location.search}`
+      )
+      beginBootstrap(browserBootstrap)
     }
     window.addEventListener('message', receive)
     return () => window.removeEventListener('message', receive)
@@ -226,6 +248,18 @@ export function App({
           creditViews
         }
       : current)
+  }
+
+  if (data.surface === 'embedded') {
+    return (
+      <CompactManagementPage
+        client={client}
+        account={data.account}
+        providers={data.providers}
+        fullRoute={data.initialRoute}
+        onRefresh={refreshProviderData}
+      />
+    )
   }
 
   return (

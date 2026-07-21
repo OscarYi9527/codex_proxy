@@ -135,6 +135,15 @@ function accountIdPreview(accountId: string): string {
   return `${accountId.slice(0, 8)}…${accountId.slice(-4)}`
 }
 
+function safeChatgptAccountLabel(value: unknown, fallback: string): string {
+  const label = typeof value === 'string' ? value.trim() : ''
+  return label &&
+    !label.includes('\uFFFD') &&
+    !/\?{2,}/.test(label)
+    ? label
+    : fallback
+}
+
 function providerKind(value: unknown): ProviderKind {
   if (!['chatgpt', 'openai', 'deepseek', 'relay'].includes(String(value))) {
     throw new SafeError({
@@ -462,9 +471,7 @@ function parseChatgptCredential(
 		const settings = credentialSettingsMap(provider.config)[credential.id] || {}
 		return {
 			id: credential.id,
-			label: typeof settings['label'] === 'string' && settings['label'].trim()
-				? settings['label'].trim()
-				: provider.displayName,
+			label: safeChatgptAccountLabel(settings['label'], provider.displayName),
 			account_id: String(source['account_id'] || source['accountId'] || credential.id),
 			access_token: accessToken || '',
 			refresh_token: refreshToken || '',

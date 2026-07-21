@@ -14,6 +14,7 @@ export interface ChatgptLoginStatus {
   readonly message?: string
   readonly startedAt?: string
   readonly verificationUrl?: string | null
+  readonly userCode?: string | null
   readonly codexSource?: string | null
   readonly codexVersion?: string | null
 }
@@ -37,9 +38,9 @@ interface LoginSession {
   status: Exclude<ChatgptLoginState, 'idle'>
   message: string
   verificationUrl: string | null
+  userCode: string | null
   codexSource: string | null
   codexVersion: string | null
-  loginId: string | null
   child: ChildProcessWithoutNullStreams | null
   timer: NodeJS.Timeout | null
   finalizing: boolean
@@ -61,6 +62,7 @@ function publicSession(session: LoginSession | null): ChatgptLoginStatus {
     message: session.message,
     startedAt: session.startedAt,
     verificationUrl: session.verificationUrl,
+    userCode: session.userCode,
     codexSource: session.codexSource,
     codexVersion: session.codexVersion
   }
@@ -84,6 +86,18 @@ function assertUsableAuthJson(raw: string): void {
 function isTrustedOpenAiLoginUrl(value: unknown): value is string {
   return typeof value === 'string' &&
     /^https:\/\/(?:auth\.openai\.com|chatgpt\.com)\//i.test(value)
+}
+
+function deviceAuthDetails(value: string): {
+  readonly verificationUrl: string | null
+  readonly userCode: string | null
+} {
+  const text = value.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
+  const urls = [...text.matchAll(/https:\/\/[^\s<>"']+/gi)]
+    .map(match => match[0].replace(/[.,;:)]+$/, ''))
+  const verificationUrl = urls.find(isTrustedOpenAiLoginUrl) || null
+  const userCode = text.match(/\b[A-Z0-9]{4,8}(?:-[A-Z0-9]{4,8})+\b/)?.[0] || null
+  return { verificationUrl, userCode }
 }
 
 export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
@@ -128,9 +142,9 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
       status: 'waiting',
       message: '正在启动隔离的 OpenAI 官方登录…',
       verificationUrl: null,
+      userCode: null,
       codexSource: launch.source || null,
       codexVersion: launch.version || null,
-      loginId: null,
       child: null,
       timer: null,
       finalizing: false
@@ -142,7 +156,8 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
         ...(launch.argsPrefix || []),
         '-c',
         'cli_auth_credentials_store="file"',
-        'app-server'
+        'login',
+        '--device-auth'
       ], {
         cwd: tempHome,
         env: {
@@ -156,17 +171,6 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
       })
       session.child = child
       this.attach(session, child)
-      this.write(session, {
-        method: 'initialize',
-        id: 1,
-        params: {
-          clientInfo: {
-            name: 'ai-editor-gateway',
-            title: 'AI Editor Gateway',
-            version: '0.1.0'
-          }
-        }
-      })
       session.timer = setTimeout(() => {
         if (session.status !== 'waiting') return
         void this.stopAndFinish(
@@ -203,26 +207,21 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
   }
 
   private attach(session: LoginSession, child: ChildProcessWithoutNullStreams): void {
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', chunk => {
-      stdout += chunk.toString('utf8')
-      let boundary = stdout.indexOf('\n')
-      while (boundary >= 0) {
-        const line = stdout.slice(0, boundary).trim()
-        stdout = stdout.slice(boundary + 1)
-        if (line) {
-          try {
-            this.handleMessage(session, JSON.parse(line) as Record<string, unknown>)
-          } catch {
-            // Codex may emit non-protocol output; never surface it because it can contain details.
-          }
-        }
-        boundary = stdout.indexOf('\n')
+    let output = ''
+    const consume = (chunk: Buffer) => {
+      output = `${output}${chunk.toString('utf8')}`.slice(-12_000)
+      const details = deviceAuthDetails(output)
+      if (details.verificationUrl) session.verificationUrl = details.verificationUrl
+      if (details.userCode) session.userCode = details.userCode
+      if (session.verificationUrl) {
+        session.message = session.userCode
+          ? `请在系统浏览器打开登录地址，并输入一次性代码 ${session.userCode}。`
+          : '请在系统浏览器打开登录地址，并按页面提示完成 OpenAI 官方登录。'
       }
-    })
+    }
+    child.stdout.on('data', consume)
     child.stderr.on('data', chunk => {
-      stderr = `${stderr}${chunk.toString('utf8')}`.slice(-4000)
+      consume(Buffer.from(chunk))
     })
     child.on('error', error => {
       this.finish(session, 'error', `无法启动 Codex app-server：${error.message}`)
@@ -231,55 +230,24 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
       if (this.#session?.id !== session.id ||
           session.status !== 'waiting' ||
           session.finalizing) return
-      const safeReason = /^Node\.js v\d+/im.test(stderr)
+      if (code === 0) {
+        void this.importCompletedLogin(session)
+        return
+      }
+      const safeReason = /^Node\.js v\d+/im.test(output)
         ? 'Codex CLI 启动失败，请检查 CLI 安装是否完整。'
-        : `Codex app-server 提前退出（code ${code ?? 'unknown'}）。`
+        : `Codex device-auth 提前退出（code ${code ?? 'unknown'}）。`
       this.finish(session, 'error', safeReason)
     })
-  }
-
-  private handleMessage(session: LoginSession, message: Record<string, unknown>): void {
-    if (this.#session?.id !== session.id || session.status !== 'waiting') return
-    if (message['id'] === 1) {
-      if (message['error']) {
-        void this.stopAndFinish(session, 'error', 'Codex app-server 初始化失败。')
-        return
-      }
-      this.write(session, { method: 'initialized', params: {} })
-      this.write(session, {
-        method: 'account/login/start',
-        id: 2,
-        params: { type: 'chatgpt' }
-      })
-      return
-    }
-    if (message['id'] === 2) {
-      const error = message['error']
-      const result = message['result'] as Record<string, unknown> | undefined
-      if (error || !isTrustedOpenAiLoginUrl(result?.['authUrl']) ||
-          typeof result['loginId'] !== 'string') {
-        void this.stopAndFinish(session, 'error', 'Codex app-server 未返回有效的登录地址。')
-        return
-      }
-      session.loginId = result['loginId']
-      session.verificationUrl = result['authUrl']
-      session.message = '请在浏览器中打开登录地址并完成 OpenAI 官方登录。'
-      return
-    }
-    if (message['method'] !== 'account/login/completed') return
-    const params = message['params'] as Record<string, unknown> | undefined
-    if (session.loginId && params?.['loginId'] !== session.loginId) return
-    if (params?.['success'] !== true) {
-      void this.stopAndFinish(session, 'error', 'OpenAI 官方登录未完成。')
-      return
-    }
-    void this.importCompletedLogin(session)
   }
 
   private async importCompletedLogin(session: LoginSession): Promise<void> {
     if (session.finalizing || this.#session?.id !== session.id) return
     session.finalizing = true
     try {
+      if (!session.verificationUrl || !session.userCode) {
+        throw new Error('Codex device-auth 未返回有效的官方登录地址或一次性代码。')
+      }
       for (let attempt = 0; attempt < 30 && !fs.existsSync(session.authFile); attempt += 1) {
         await new Promise(resolve => setTimeout(resolve, 100))
       }
@@ -301,19 +269,7 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
     }
   }
 
-  private write(session: LoginSession, message: Record<string, unknown>): void {
-    if (!session.child?.stdin.writable) return
-    session.child.stdin.write(`${JSON.stringify(message)}\n`)
-  }
-
   private cancelChild(session: LoginSession): void {
-    if (session.loginId) {
-      this.write(session, {
-        method: 'account/login/cancel',
-        id: 3,
-        params: { loginId: session.loginId }
-      })
-    }
     try { session.child?.kill() } catch {}
   }
 

@@ -10,6 +10,7 @@ const ROUTES = new Set<ManagementRoute>([
   'organization',
   'invitations',
   'credits',
+  'audit',
   'usage',
   'providers',
   'diagnostics'
@@ -34,7 +35,36 @@ export function managementBootstrapFromEvent(
   ) {
     return null
   }
-  return value as ManagementBootstrapMessage
+  return {
+    ...value,
+    surface: value.surface === 'embedded' ? 'embedded' : 'browser'
+  } as ManagementBootstrapMessage
+}
+
+export function browserManagementBootstrapFromHash(
+  rawHash: string
+): ManagementBootstrapMessage | null {
+  if (!rawHash.startsWith('#browser?')) return null
+  const values = new URLSearchParams(rawHash.slice('#browser?'.length))
+  if ([...values.keys()].some(key => key !== 'ticket' && key !== 'route')) return null
+  const ticket = values.get('ticket')
+  const route = values.get('route')
+  if (
+    !ticket ||
+    ticket.length < 16 ||
+    !route ||
+    !ROUTES.has(route as ManagementRoute)
+  ) {
+    return null
+  }
+  return {
+    type: 'ai-editor-management-bootstrap',
+    version: 1,
+    surface: 'browser',
+    route: route as ManagementRoute,
+    ticket,
+    expiresIn: 60
+  }
 }
 
 export function currentCodexAuthFromEvent(

@@ -47,6 +47,7 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "@openai/codex": "0.144.6",
     "undici": "^8.7.0"
   },
   "devDependencies": {

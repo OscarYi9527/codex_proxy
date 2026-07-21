@@ -4,7 +4,7 @@ import path from 'node:path'
 import { ProcessChatgptLoginService } from '../../src/providers/chatgpt-login-service.js'
 import { SequenceIdSource } from '../../src/common/ids.js'
 
-describe('isolated Codex app-server login adapter (T086)', () => {
+describe('isolated Codex device-auth login adapter (T086)', () => {
   let root: string
   let previousCodexCliJs: string | undefined
   let previousFakeAuthUrl: string | undefined
@@ -17,7 +17,6 @@ describe('isolated Codex app-server login adapter (T086)', () => {
     fs.writeFileSync(fakeCli, `
       import fs from 'node:fs'
       import path from 'node:path'
-      import readline from 'node:readline'
       if (process.argv.includes('--version')) {
         console.log('codex-cli 99.0.0-test')
         process.exit(0)
@@ -26,13 +25,10 @@ describe('isolated Codex app-server login adapter (T086)', () => {
         console.log('app-server test help')
         process.exit(0)
       }
-      const lines = readline.createInterface({ input: process.stdin })
-      lines.on('line', line => {
-        const message = JSON.parse(line)
-        if (message.id === 1) {
-          console.log(JSON.stringify({ id: 1, result: {} }))
-        }
-        if (message.id === 2) {
+      if (process.argv.includes('--device-auth')) {
+        console.log(process.env.FAKE_CODEX_AUTH_URL || 'https://auth.openai.com/codex/device')
+        console.log('ABCD-EFGHI')
+        setTimeout(() => {
           fs.writeFileSync(path.join(process.env.CODEX_HOME, 'auth.json'), JSON.stringify({
             tokens: {
               access_token: 'isolated-access-secret',
@@ -40,19 +36,9 @@ describe('isolated Codex app-server login adapter (T086)', () => {
               account_id: 'isolated-account'
             }
           }))
-          console.log(JSON.stringify({
-            id: 2,
-            result: {
-              loginId: 'login_test',
-              authUrl: process.env.FAKE_CODEX_AUTH_URL || 'https://auth.openai.com/authorize'
-            }
-          }))
-          setTimeout(() => console.log(JSON.stringify({
-            method: 'account/login/completed',
-            params: { loginId: 'login_test', success: true }
-          })), 20)
-        }
-      })
+          process.exit(0)
+        }, 20)
+      }
     `, { encoding: 'utf8', mode: 0o700 })
     process.env['CODEX_CLI_JS'] = fakeCli
   })
@@ -91,7 +77,8 @@ describe('isolated Codex app-server login adapter (T086)', () => {
     }
     expect(service.status('provider_test')).toMatchObject({
       status: 'success',
-      verificationUrl: 'https://auth.openai.com/authorize'
+      verificationUrl: 'https://auth.openai.com/codex/device',
+      userCode: 'ABCD-EFGHI'
     })
     expect(imported).toContain('isolated-access-secret')
     expect(fs.existsSync(path.join(root, '.oauth-login'))).toBe(true)

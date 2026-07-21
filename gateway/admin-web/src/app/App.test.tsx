@@ -2,7 +2,11 @@ import { jest } from '@jest/globals'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { App } from './App'
 import type { ManagementApiClient } from './api-client'
-import type { AccountRole, ManagementRoute } from './types'
+import type {
+  AccountRole,
+  ManagementRoute,
+  ProviderListResponse
+} from './types'
 
 const account = {
   account: {
@@ -337,13 +341,18 @@ function clientFor(role: AccountRole): ManagementApiClient {
   }
 }
 
-function bootstrap(route: ManagementRoute = 'account', origin = window.location.origin) {
+function bootstrap(
+  route: ManagementRoute = 'account',
+  origin = window.location.origin,
+  surface?: 'embedded' | 'browser'
+) {
   window.dispatchEvent(new MessageEvent('message', {
     source: window,
     origin,
     data: {
       type: 'ai-editor-management-bootstrap',
       version: 1,
+      ...(surface ? { surface } : {}),
       route,
       ticket: 'one-time-management-ticket',
       expiresIn: 60
@@ -381,6 +390,115 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
       .toBe(seesAudit)
     expect(Boolean(screen.queryByRole('button', { name: 'Provider 与模型' })))
       .toBe(seesProviders)
+  })
+
+  it('renders the compact embedded account panel and repairs an unreadable account label', async () => {
+    const api = clientFor('level1')
+    api.providers = jest.fn(async (): Promise<ProviderListResponse> => ({
+      warning: null,
+      accountPool: {
+        strategy: 'headroom' as const,
+        accounts: [],
+        queueDepth: 0,
+        recentRouteDecisions: []
+      },
+      providers: [{
+        id: 'provider_chatgpt',
+        kind: 'chatgpt',
+        displayName: 'ChatGPT 订阅池',
+        status: 'active',
+        config: {},
+        version: 1,
+        updatedAt: '2026-07-21T00:00:00.000Z',
+        plaintextWarning: null,
+        credentials: [{
+          id: 'credential_chatgpt',
+          maskedPreview: '***',
+          storageFormat: 'envelope-v1',
+          updatedAt: '2026-07-21T00:00:00.000Z',
+          lastUsedAt: null,
+          label: 'ChatGPT ???',
+          accountIdPreview: 'b2cc85…8693',
+          planType: 'ChatGPT 订阅（试验通道）',
+          status: 'auth_error',
+          routing: {
+            enabled: true,
+            weight: 1,
+            lowQuotaThreshold: 10,
+            dailyRequestLimit: 0,
+            dailyTokenLimit: 0,
+            reservedModels: []
+          },
+          quota: {
+            source: 'provider',
+            primary: { usedPercent: 20, remainingPercent: 80, resetsAt: null, windowMinutes: 300 },
+            secondary: { usedPercent: 30, remainingPercent: 70, resetsAt: null, windowMinutes: 10080 },
+            updatedAt: '2026-07-21T00:00:00.000Z',
+            syncStatus: 'ready',
+            syncError: null
+          },
+          runtime: {
+            activeRequests: 0,
+            concurrencyLimit: 1,
+            cooldownUntil: null,
+            modelCooldowns: 0
+          },
+          health: {
+            requests: 0,
+            successRate: null,
+            p95LatencyMs: 0,
+            rateLimited: 0,
+            lastRequestAt: null,
+            lastErrorType: 'token_refresh',
+            lastErrorMessage: null
+          }
+        }]
+      }]
+    }))
+
+    render(<App client={api} />)
+    bootstrap('providers', window.location.origin, 'embedded')
+
+    expect(await screen.findByRole('heading', { name: '快速管理' })).toBeInTheDocument()
+    expect(screen.getByText('ChatGPT 订阅池')).toBeInTheDocument()
+    expect(document.body.textContent).not.toContain('ChatGPT ???')
+    expect(screen.getByText('短周期')).toHaveTextContent('80%')
+    expect(screen.getByRole('link', { name: '在浏览器打开完整管理页面' }))
+      .toHaveAttribute(
+        'href',
+        'ai-editor-code://open-full-management?route=providers'
+      )
+
+    fireEvent.click(screen.getByRole('button', { name: '关闭路由' }))
+    await waitFor(() => {
+      expect(api.updateProviderCredentialRouting).toHaveBeenCalledWith(
+        'provider_chatgpt',
+        'credential_chatgpt',
+        {
+          label: 'ChatGPT 订阅池',
+          routingEnabled: false
+        }
+      )
+    })
+  })
+
+  it('exchanges a fragment-only browser ticket and renders the full management page', async () => {
+    window.history.replaceState(
+      null,
+      '',
+      '/#browser?ticket=browser-one-time-ticket&route=providers'
+    )
+    try {
+      render(<App client={clientFor('level1')} />)
+      expect(await screen.findByRole('navigation', { name: '管理导航' }))
+        .toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Provider 与模型' }))
+        .toHaveAttribute('aria-current', 'page')
+      expect(window.location.hash).toBe('')
+      expect(document.body.textContent).not.toContain('browser-one-time-ticket')
+    } finally {
+      window.history.replaceState(null, '', '/')
+    }
   })
 
   it('opens only the password page before loading privileged Level 1 data', async () => {

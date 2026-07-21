@@ -15,6 +15,7 @@ export type ManagementRoute =
 export interface ManagementBootstrapMessage {
   readonly type: 'ai-editor-management-bootstrap'
   readonly version: 1
+  readonly surface: 'embedded' | 'browser'
   readonly route: ManagementRoute
   readonly ticket: string
   readonly expiresIn: number
@@ -364,6 +365,7 @@ export interface ChatgptLoginStatus {
   readonly message?: string
   readonly startedAt?: string
   readonly verificationUrl?: string | null
+  readonly userCode?: string | null
   readonly codexSource?: string | null
   readonly codexVersion?: string | null
 }

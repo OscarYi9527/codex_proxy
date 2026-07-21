@@ -337,6 +337,41 @@ describe('Level-1 Provider administration page (T083/T088)', () => {
     click.mockRestore()
   })
 
+  it('uses the localized Provider name when a stored credential label is unreadable', () => {
+    const api = client()
+    const credential = {
+      ...providers.providers[0].credentials[0],
+      label: 'ChatGPT ???',
+      routing: {
+        enabled: true,
+        weight: 1,
+        lowQuotaThreshold: 10,
+        dailyRequestLimit: 0,
+        dailyTokenLimit: 0,
+        reservedModels: []
+      }
+    }
+    render(
+      <ProvidersPage
+        client={api}
+        providers={{
+          ...providers,
+          providers: [{
+            ...providers.providers[0],
+            kind: 'chatgpt',
+            displayName: 'ChatGPT 订阅池',
+            credentials: [credential]
+          }]
+        }}
+        models={models}
+        onRefresh={async () => undefined}
+      />
+    )
+
+    expect(screen.getAllByText('ChatGPT 订阅池').length).toBeGreaterThan(0)
+    expect(document.body.textContent).not.toContain('ChatGPT ???')
+  })
+
   it('renders real quota/health and persists the existing Proxy account policy', async () => {
     const api = client()
     const account = {

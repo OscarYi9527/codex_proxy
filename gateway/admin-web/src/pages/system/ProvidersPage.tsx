@@ -56,6 +56,17 @@ function statusLabel(status: string, routingEnabled: boolean): {
   return { label: status === 'unknown' ? '等待检测' : status, tone: 'warning' }
 }
 
+function credentialLabel(
+  provider: ProviderSummary,
+  credential: ProviderCredentialSummary
+): string {
+  const value = credential.label?.trim() || ''
+  if (value && !value.includes('\uFFFD') && !/\?{2,}/.test(value)) {
+    return value
+  }
+  return provider.displayName?.trim() || `${providerKindLabels[provider.kind]}账号`
+}
+
 function QuotaWindow({
   title,
   value
@@ -103,7 +114,7 @@ function CredentialCard({
     if (!routing) return
     const values = new FormData(event.currentTarget)
     onRun(() => client.updateProviderCredentialRouting(provider.id, credential.id, {
-      label: String(values.get('label') || credential.label || provider.displayName),
+      label: String(values.get('label') || credentialLabel(provider, credential)),
       routingEnabled: values.get('routingEnabled') === 'on',
       routingWeight: Number(values.get('routingWeight') || 1),
       lowQuotaThreshold: Number(values.get('lowQuotaThreshold') || 0),
@@ -115,7 +126,7 @@ function CredentialCard({
         .filter(Boolean)
     }))
   }
-  const label = credential.label || `${provider.displayName} 凭据`
+  const label = credentialLabel(provider, credential)
   const initials = Array.from(label.trim()).slice(0, 2).join('').toUpperCase() || 'AI'
 
   return (
@@ -864,6 +875,11 @@ export function ProvidersPage({
                   <a href={loginStatus.verificationUrl} target="_blank" rel="noreferrer">
                     在系统浏览器中打开 OpenAI 登录
                   </a>
+                )}
+                {loginStatus.userCode && (
+                  <span className="device-auth-code">
+                    一次性代码 <code>{loginStatus.userCode}</code>
+                  </span>
                 )}
               </div>
             )}

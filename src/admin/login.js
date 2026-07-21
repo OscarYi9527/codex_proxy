@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { proxyConfig } from '../config.js'
 import { addChatgptAccount, normalizeAccountPoolTier, parseAuthJson } from '../chatgpt-accounts.js'
 import { readJson, sendJson } from '../server-utils.js'
@@ -17,6 +18,19 @@ export function getCodexAuthFile() {
 function resolveCodexJsPath() {
   const appData = process.env.APPDATA || ''
   return process.env.CODEX_CLI_JS || path.join(appData, 'npm', 'node_modules', '@openai', 'codex', 'bin', 'codex.js')
+}
+
+function resolveBundledCodexJsPath() {
+  return path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '..',
+    '..',
+    'node_modules',
+    '@openai',
+    'codex',
+    'bin',
+    'codex.js'
+  )
 }
 
 function vscodeCodexCandidates() {
@@ -75,6 +89,14 @@ function codexLaunchCandidates() {
       command: process.execPath,
       argsPrefix: [codexJs],
       source: process.env.CODEX_CLI_JS ? 'CODEX_CLI_JS' : '全局 npm Codex CLI'
+    })
+  }
+  const bundledCodexJs = resolveBundledCodexJsPath()
+  if (fs.existsSync(bundledCodexJs)) {
+    add({
+      command: process.execPath,
+      argsPrefix: [bundledCodexJs],
+      source: '随 Proxy 安装的 Codex CLI'
     })
   }
 
@@ -297,7 +319,7 @@ export function parseDeviceAuthOutput(output) {
   const urls = [...text.matchAll(/https:\/\/[^\s<>"']+/gi)]
     .map(match => match[0].replace(/[\u0000-\u001f\u007f]/g, '').replace(/[.,;:)]+$/, ''))
   const url = urls.find(value => /device|verify|auth/i.test(value)) || urls.at(-1) || null
-  const userCode = text.match(/\b[A-Z0-9]{4}(?:-[A-Z0-9]{4})+\b/)?.[0] || null
+  const userCode = text.match(/\b[A-Z0-9]{4,8}(?:-[A-Z0-9]{4,8})+\b/)?.[0] || null
   return { verificationUrl: url, userCode }
 }
 

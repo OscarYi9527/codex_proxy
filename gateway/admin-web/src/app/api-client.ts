@@ -101,13 +101,13 @@ export interface ManagementApiClient {
     providerId: string,
     credentialId: string,
     input: {
-      label: string
-      routingEnabled: boolean
-      routingWeight: number
-      lowQuotaThreshold: number
-      dailyRequestLimit: number
-      dailyTokenLimit: number
-      reservedModels: readonly string[]
+      label?: string
+      routingEnabled?: boolean
+      routingWeight?: number
+      lowQuotaThreshold?: number
+      dailyRequestLimit?: number
+      dailyTokenLimit?: number
+      reservedModels?: readonly string[]
     }
   ): Promise<void>
   refreshProviderCredentialUsage(providerId: string, credentialId: string): Promise<void>

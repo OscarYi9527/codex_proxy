@@ -80,9 +80,10 @@ socket 解耦，给后续 T061+ 结算 hook 保留完成或对账机会。
   保留任务未完成。
 - Gateway Provider 凭据目前只能以受限的 `plaintext-v1` 用于回环开发。完成
   `envelope-v1`、密钥轮换和迁移前，不具备 production 凭据存储条件。
-- Gateway/Edge 开发启动必须显式覆盖父进程可能继承的
-  `NODE_TLS_REJECT_UNAUTHORIZED=0`；详细优先级和验收标准见
-  `docs/NEXT_DEVELOPMENT_ROADMAP.md`。
+
+Gateway/Edge 配置加载对 `NODE_TLS_REJECT_UNAUTHORIZED=0` fail-closed；隔离开发脚本为
+两个子进程显式设置安全值，发布门禁也拒绝在禁用 TLS 校验的 Shell 中运行。自定义 CA
+只能通过系统信任或 `NODE_EXTRA_CA_CERTS` 接入。
 
 ## 组件
 

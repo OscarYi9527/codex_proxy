@@ -266,4 +266,20 @@ describe('Gateway fixed development configuration', () => {
       AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: 'http://gateway.example.test'
     }, { repositoryRoot })).toThrow(/HTTPS origin/)
   })
+
+  it('fails closed when Node TLS certificate verification is disabled', () => {
+    expect(() => loadGatewayConfig({
+      NODE_ENV: 'production',
+      NODE_TLS_REJECT_UNAUTHORIZED: '0'
+    }, { repositoryRoot })).toThrow(/TLS certificate verification is disabled/)
+    expect(() => loadGatewayConfig({
+      NODE_ENV: 'development',
+      NODE_TLS_REJECT_UNAUTHORIZED: '0'
+    }, { repositoryRoot })).toThrow(/NODE_EXTRA_CA_CERTS/)
+    expect(() => loadGatewayConfig({
+      NODE_ENV: 'test',
+      NODE_TLS_REJECT_UNAUTHORIZED: '1',
+      NODE_EXTRA_CA_CERTS: path.join(repositoryRoot, 'development-ca.pem')
+    }, { repositoryRoot })).not.toThrow()
+  })
 })

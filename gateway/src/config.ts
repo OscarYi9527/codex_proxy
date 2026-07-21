@@ -66,6 +66,14 @@ const allowedMockStates = new Set<MockAccountState>([
   'password_change_required'
 ])
 
+function assertTlsVerificationEnabled(env: NodeJS.ProcessEnv): void {
+  if (env.NODE_TLS_REJECT_UNAUTHORIZED !== '0') return
+  throw new Error(
+    'TLS certificate verification is disabled by NODE_TLS_REJECT_UNAUTHORIZED=0. ' +
+    'Remove this variable before starting Gateway; use NODE_EXTRA_CA_CERTS for a trusted custom CA.'
+  )
+}
+
 function parsePort(
   value: string | undefined,
   fallback: number,
@@ -306,6 +314,7 @@ export function loadGatewayConfig(
   if (!['development', 'test', 'preview', 'production'].includes(environment)) {
     throw new Error(`Unsupported Gateway environment: ${environment}`)
   }
+  assertTlsVerificationEnabled(env)
   const dataRoot = ensureIsolatedDataRoot(
     env.AI_EDITOR_GATEWAY_DATA_ROOT || path.join(repositoryRoot, '.ai-editor-dev', 'gateway'),
     repositoryRoot,

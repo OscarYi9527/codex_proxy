@@ -66,4 +66,20 @@ describe('Proxy standalone/edge/gateway/provider-worker modes', () => {
       AI_EDITOR_GATEWAY_ORIGIN: 'https://gateway.ai-editor.example'
     }, { repositoryRoot }), /Mock authentication is forbidden/)
   })
+
+  it('fails closed when Edge inherits disabled TLS certificate verification', () => {
+    const repositoryRoot = path.resolve('F:/isolated-repository')
+    assert.throws(() => loadEdgeConfig({
+      NODE_ENV: 'production',
+      NODE_TLS_REJECT_UNAUTHORIZED: '0'
+    }, { repositoryRoot }), /TLS certificate verification is disabled/)
+    assert.throws(() => loadEdgeConfig({
+      NODE_TLS_REJECT_UNAUTHORIZED: '0'
+    }, { repositoryRoot }), /NODE_EXTRA_CA_CERTS/)
+    assert.doesNotThrow(() => loadEdgeConfig({
+      NODE_TLS_REJECT_UNAUTHORIZED: '1',
+      NODE_EXTRA_CA_CERTS: path.join(repositoryRoot, 'development-ca.pem'),
+      AI_EDITOR_EDGE_LOCAL_NONCE: 'test-local-nonce-at-least-32-bytes'
+    }, { repositoryRoot }))
+  })
 })

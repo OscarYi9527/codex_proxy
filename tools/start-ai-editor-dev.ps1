@@ -164,6 +164,7 @@ try {
         Initialize-AiEditorDataRoot -DataRoot $gatewayRoot
         $gatewayEnvironment = @{
             NODE_ENV = 'development'
+            NODE_TLS_REJECT_UNAUTHORIZED = '1'
             AI_EDITOR_GATEWAY_HOST = '127.0.0.1'
             AI_EDITOR_GATEWAY_PORT = $GatewayPort
             AI_EDITOR_GATEWAY_DATA_ROOT = $gatewayRoot
@@ -213,6 +214,7 @@ try {
             -Arguments @((Join-Path $repo 'src\launcher.js'), '--mode', 'edge') `
             -Environment @{
                 NODE_ENV = $edgeNodeEnvironment
+                NODE_TLS_REJECT_UNAUTHORIZED = '1'
                 CODEX_PROXY_MODE = 'edge'
                 AI_EDITOR_EDGE_HOST = '127.0.0.1'
                 AI_EDITOR_EDGE_PORT = $EdgePort

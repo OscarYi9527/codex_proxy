@@ -970,6 +970,7 @@ VS Code 兼容层会把 `chatgpt.cliExecutable` 指向 `codex-vscode-launcher.ex
 - [架构说明](ARCHITECTURE.md)
 - [安全说明](SECURITY.md)
 - [后续计划](TODO.md)
+- [开发执行计划表](docs/DEVELOPMENT_EXECUTION_PLAN.md)
 - [下一阶段开发需求深挖与路线图](docs/NEXT_DEVELOPMENT_ROADMAP.md)
 - [Oscar 第一轮 Gateway/Edge Mock 联调交接](docs/AI_EDITOR_GATEWAY_OSCAR_HANDOFF.md)
 - [Oscar 真实认证与 Responses 联调交接](docs/AI_EDITOR_GATEWAY_REAL_AUTH_RESPONSES_HANDOFF.md)
@@ -984,5 +985,6 @@ VS Code 兼容层会把 `chatgpt.cliExecutable` 指向 `codex-vscode-launcher.ex
 - 不要把 `/control` 接口暴露到不可信网络。
 - 只使用自己拥有且获准使用的账号；本项目不提供设备指纹伪造、验证码代收或平台
   风控规避能力。
-- 启动器强制开启 TLS 证书校验；如本地代理使用自定义 CA，应配置受信任 CA，而不是
-  全局关闭证书校验。
+- Gateway/Edge 启动器显式开启 TLS 证书校验，配置加载和发布检查遇到
+  `NODE_TLS_REJECT_UNAUTHORIZED=0` 会 fail-closed；如本地代理使用自定义 CA，应使用
+  `NODE_EXTRA_CA_CERTS`，而不是全局关闭证书校验。

@@ -36,6 +36,13 @@ const runtime = readJson('runtime-files.json')
 const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8')
 const changelog = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8')
 
+if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') {
+  fail(
+    'NODE_TLS_REJECT_UNAUTHORIZED=0 disables TLS certificate verification. ' +
+    'Clear it before release checks; use NODE_EXTRA_CA_CERTS for a trusted custom CA.'
+  )
+}
+
 if (pkg.version !== lock.version || pkg.version !== lock.packages?.['']?.version) {
   fail(`package versions differ: package=${pkg.version}, lock=${lock.version}, lock root=${lock.packages?.['']?.version}`)
 }

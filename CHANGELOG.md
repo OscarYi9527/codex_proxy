@@ -27,6 +27,8 @@
 - 新增数据库 Relay 配置驱动真实模型目录和 SSE Responses 的非 Mock 集成测试。
 - 新增下一阶段开发需求深挖文档，基于代码证据拆分 standalone 大号池任务化、Gateway
   凭据加密、组织/RBAC、Turn 风险、幂等结算、中央账号池和真实联合验收 N001–N024。
+- 新增统一开发执行计划表，记录 N001–N024 的优先级、状态、依赖、里程碑、验收证据、
+  仓库协作事项和明确延期范围。
 - 新增 ChatGPT 账号文件快捷导入，兼容 auth.json、sub2/CPA JSON 和完整凭据 TXT；
   批量导入默认跳过重复账号并保持“仅保存”状态。
 - 新增缺少 ChatGPT Refresh Token 时的批量官方登录队列：本地解析 CPA/sub2/TXT、
@@ -66,6 +68,9 @@
 - 真实开发启动会先构建管理 React 页面，再前台执行一次性 bootstrap。
 - Gateway 的 `plaintext-v1` 凭据仅允许回环开发；production 或非回环环境存在明文凭据时
   拒绝启动，API 和页面只展示掩码及持续安全警告。
+- Gateway/Edge 配置加载对 `NODE_TLS_REJECT_UNAUTHORIZED=0` fail-closed，隔离开发脚本
+  显式对子进程启用 TLS 校验，发布门禁拒绝不安全 Shell；自定义 CA 仅通过
+  `NODE_EXTRA_CA_CERTS` 接入。
 
 ## [2.4.1] - 2026-07-15
 

@@ -38,10 +38,17 @@ function safeHealthEvent(event) {
     task_id: source.task_id ? String(source.task_id) : null,
     state: String(source.state || 'unknown'),
     source: String(source.source || 'account_check'),
+    probe_scope: source.probe_scope ? String(source.probe_scope).slice(0, 160) : null,
+    confidence: source.confidence ? String(source.confidence).slice(0, 20) : null,
+    disposition: source.disposition ? String(source.disposition).slice(0, 40) : null,
+    first_seen_at: source.first_seen_at ? String(source.first_seen_at) : null,
+    last_seen_at: source.last_seen_at ? String(source.last_seen_at) : null,
+    consecutive_failures: Math.max(0, Math.floor(Number(source.consecutive_failures) || 0)),
     checked_at: String(source.checked_at || new Date().toISOString()),
     http_status: Number.isFinite(Number(source.http_status)) ? Number(source.http_status) : null,
     error_code: source.error_code ? String(source.error_code).slice(0, 120) : null,
-    retry_at: source.retry_at ? String(source.retry_at) : null
+    retry_at: source.retry_at ? String(source.retry_at) : null,
+    recovered_from: source.recovered_from ? String(source.recovered_from).slice(0, 80) : null
   }
 }
 function readHealthEvents(filePath) {
@@ -52,6 +59,34 @@ function readHealthEvents(filePath) {
     if (error.code !== 'ENOENT') throw error
     return []
   }
+}
+
+export function appendAccountHealthEvents(events, {
+  filePath = ACCOUNT_HEALTH_EVENTS_FILE,
+  writeJson = atomicWriteJson,
+  maxHealthEvents = 5000
+} = {}) {
+  if (!Array.isArray(events)) throw new Error('Health events must be an array')
+  if (!events.length) return { appended: 0 }
+  const existing = readHealthEvents(filePath)
+  writeJson(filePath, {
+    schema_version: 1,
+    events: [...existing, ...events.map(safeHealthEvent)].slice(-maxHealthEvents)
+  })
+  return { appended: events.length }
+}
+
+export function listAccountHealthEvents(accountId, {
+  filePath = ACCOUNT_HEALTH_EVENTS_FILE,
+  limit = 50
+} = {}) {
+  const normalizedId = String(accountId || '')
+  const normalizedLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 50)))
+  return readHealthEvents(filePath)
+    .filter(event => event.account_id === normalizedId)
+    .slice(-normalizedLimit)
+    .reverse()
+    .map(event => structuredClone(event))
 }
 
 export class JsonAccountStore {
@@ -125,10 +160,10 @@ export class JsonAccountStore {
     const events = this.pendingHealthEvents.slice()
     if (updates.length) this.patchManyImpl(updates)
     if (events.length) {
-      const existing = readHealthEvents(this.healthEventsFile)
-      this.writeJson(this.healthEventsFile, {
-        schema_version: 1,
-        events: [...existing, ...events].slice(-this.maxHealthEvents)
+      appendAccountHealthEvents(events, {
+        filePath: this.healthEventsFile,
+        writeJson: this.writeJson,
+        maxHealthEvents: this.maxHealthEvents
       })
     }
     this.pendingPatches.clear()

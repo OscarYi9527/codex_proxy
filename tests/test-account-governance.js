@@ -7,7 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { resolveCodexModel, isChatGptSubModel, isOpenAIApiModel, isRelayModel, parseRelayModel, buildModelsResponse, getThreadId } from '../src/models.js'
 import { recordUsage, recordAccountOutcome, recordOperationalEvent, getStats, resetStats, saveStats, statsDayKey } from '../src/stats.js'
-import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurrencyLimit, accountPolicyState, accountPoolTierState, accountRemainingPercent, accountUsageIsFresh, calculateUsageForecast, checkChatgptAccountStatus, classifyAccountCheckFailure, consumeAccountResetCredit, cooldownMsFromResponseText, enforceDisposableAccountLifecycle, ensureFreshToken, extractResetCredits, extractUsageFromBody, extractUsageFromHeaders, mergeAccountUsageWindows, normalizeAccountPoolTier, normalizeAccountRoutingStrategy, noteAccountAdaptiveOutcome, noteAccountSuccess, pickActiveAccount, refreshAccountQuotaSnapshot, refreshAccountResetCredits, refreshAccountUsage, releaseAccountRequest, renewAccountRequestLease, reserveAccountRequest, resetAccountRequestCounts, resetAccountStickiness } from '../src/chatgpt-accounts.js'
+import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurrencyLimit, accountPolicyState, accountPoolTierState, accountRemainingPercent, accountSyncStates, accountUsageIsFresh, advanceAccountHealthState, calculateUsageForecast, checkChatgptAccountStatus, classifyAccountCheckFailure, classifyAccountSyncFailure, consumeAccountResetCredit, cooldownMsFromResponseText, enforceDisposableAccountLifecycle, ensureFreshToken, extractResetCredits, extractUsageFromBody, extractUsageFromHeaders, mergeAccountUsageWindows, normalizeAccountPoolTier, normalizeAccountRoutingStrategy, noteAccountAdaptiveOutcome, noteAccountSuccess, pickActiveAccount, refreshAccountQuotaSnapshot, refreshAccountResetCredits, refreshAccountUsage, releaseAccountRequest, renewAccountRequestLease, reserveAccountRequest, resetAccountRequestCounts, resetAccountStickiness } from '../src/chatgpt-accounts.js'
 import { proxyConfig, atomicWriteJson, configForSettingsSnapshot, mergeAccountBackup, mergeSettingsSnapshot, orderChatgptAccounts, renameChatgptAccountInList } from '../src/config.js'
 import { assertCircuitAvailable, getCircuitStates, recordCircuitResult, resetCircuits } from '../src/circuit-breaker.js'
 import { fetchWithRetry, proxyMetaHeaders, retryAfterMs } from '../src/server-utils.js'
@@ -355,6 +355,119 @@ describe('Codex 额度重置', () => {
 })
 
 describe('ChatGPT 账号状态检查', () => {
+  it('连续临时故障达到阈值才隔离，一次成功立即恢复', () => {
+    const temporary = checkedAt => ({
+      state: 'temporary_unavailable',
+      label: '暂时无法连接',
+      severity: 'warning',
+      retryable: true,
+      reason: 'network timeout',
+      checked_at: checkedAt,
+      http_status: 503,
+      error_code: 'UPSTREAM_TIMEOUT',
+      usage_synced: false,
+      reset_credits_synced: false,
+      source: 'status_check'
+    })
+    const first = advanceAccountHealthState(
+      null,
+      temporary('2026-07-21T00:00:00.000Z'),
+      { now: Date.parse('2026-07-21T00:00:00.000Z') }
+    )
+    const second = advanceAccountHealthState(
+      first,
+      temporary('2026-07-21T00:01:00.000Z'),
+      { now: Date.parse('2026-07-21T00:01:00.000Z') }
+    )
+    const third = advanceAccountHealthState(
+      second,
+      temporary('2026-07-21T00:02:00.000Z'),
+      { now: Date.parse('2026-07-21T00:02:00.000Z') }
+    )
+    assert.strictEqual(first.disposition, 'observe')
+    assert.strictEqual(second.disposition, 'observe')
+    assert.strictEqual(third.disposition, 'quarantined')
+    assert.strictEqual(third.consecutive_failures, 3)
+    assert.strictEqual(third.confidence, 'low')
+    assert.ok(Date.parse(third.retry_at) > Date.parse(third.checked_at))
+
+    const recovered = advanceAccountHealthState(third, {
+      ...temporary('2026-07-21T00:03:00.000Z'),
+      state: 'healthy',
+      label: '基础检查正常',
+      severity: 'healthy',
+      retryable: false,
+      usage_synced: true,
+      reset_credits_synced: true
+    }, { now: Date.parse('2026-07-21T00:03:00.000Z') })
+    assert.strictEqual(recovered.disposition, 'recovered')
+    assert.strictEqual(recovered.recovered_from, 'temporary_unavailable')
+    assert.strictEqual(recovered.consecutive_failures, 0)
+  })
+
+  it('明确封禁为高置信永久停用，普通 403 只进入短期复核', () => {
+    const base = {
+      label: 'failure',
+      severity: 'critical',
+      retryable: false,
+      reason: 'failure',
+      checked_at: '2026-07-21T00:00:00.000Z',
+      usage_synced: false,
+      reset_credits_synced: false,
+      source: 'model_request'
+    }
+    const banned = advanceAccountHealthState(null, {
+      ...base,
+      state: 'banned',
+      http_status: 403,
+      error_code: 'account_deactivated'
+    })
+    const permission = advanceAccountHealthState(null, {
+      ...base,
+      state: 'permission_denied',
+      http_status: 403,
+      error_code: 'permission_denied'
+    })
+    assert.strictEqual(banned.confidence, 'high')
+    assert.strictEqual(banned.disposition, 'disabled')
+    assert.strictEqual(permission.confidence, 'medium')
+    assert.strictEqual(permission.disposition, 'permission_review')
+    assert.ok(permission.retry_at)
+  })
+
+  it('用量与重置次数使用 synced/stale/unsupported/failed 四态', () => {
+    const now = Date.parse('2026-07-21T12:00:00.000Z')
+    assert.deepStrictEqual(accountSyncStates({
+      usage_status: 'synced',
+      usage_updated_at: '2026-07-21T11:50:00.000Z',
+      reset_credit_status: 'synced',
+      reset_credit_updated_at: '2026-07-21T06:00:00.000Z'
+    }, now), {
+      usage: 'synced',
+      reset_credit: 'synced',
+      usage_updated_at: '2026-07-21T11:50:00.000Z',
+      reset_credit_updated_at: '2026-07-21T06:00:00.000Z'
+    })
+    assert.strictEqual(accountSyncStates({
+      usage_status: 'synced',
+      usage_updated_at: '2026-07-21T10:00:00.000Z'
+    }, now).usage, 'stale')
+    assert.strictEqual(classifyAccountSyncFailure({ status: 404 }, {
+      endpoint: 'reset_credit'
+    }).status, 'unsupported')
+    assert.strictEqual(classifyAccountSyncFailure({
+      status: 403,
+      upstreamCode: 'feature_not_supported'
+    }, { endpoint: 'reset_credit' }).status, 'unsupported')
+    assert.strictEqual(classifyAccountSyncFailure({
+      status: 403,
+      upstreamCode: 'permission_denied'
+    }, { endpoint: 'reset_credit' }).status, 'failed')
+    assert.strictEqual(classifyAccountSyncFailure({ status: 503 }, {
+      endpoint: 'usage'
+    }).status, 'failed')
+  })
+
   it('只在上游明确停用账号时判断疑似封禁，并区分额度与临时网络故障', () => {
     const account = {
       credential_mode: 'refreshable',
@@ -420,6 +533,109 @@ describe('ChatGPT 账号状态检查', () => {
       assert.strictEqual(check.reset_credits_synced, true)
       assert.strictEqual(saved.health_check.state, 'quota_exhausted')
       assert.strictEqual(saved.reset_credits.available_count, 1)
+    } finally {
+      proxyConfig.chatgptAccounts = originalAccounts
+      proxyConfig.chatgptResponsesUrl = originalUrl
+    }
+  })
+
+  it('重置次数端点 404 标记为 unsupported 且不伪造零次数', async () => {
+    const originalAccounts = proxyConfig.chatgptAccounts
+    const originalUrl = proxyConfig.chatgptResponsesUrl
+    const account = {
+      id: 'status-check-reset-unsupported',
+      account_id: 'upstream-reset-unsupported',
+      access_token: 'access',
+      refresh_token: 'refresh',
+      expires_at: Date.now() + 60_000,
+      credential_mode: 'refreshable',
+      credential_compatibility: 'codex_subscription',
+      status: 'active',
+      routing_enabled: true
+    }
+    proxyConfig.chatgptAccounts = [account]
+    proxyConfig.chatgptResponsesUrl = 'https://chatgpt.com/backend-api/codex/responses'
+    const mockFetch = async url => {
+      if (String(url).endsWith('/backend-api/wham/usage')) {
+        return new Response(JSON.stringify({
+          rate_limit: {
+            primary_window: { used_percent: 25, limit_window_seconds: 18_000 }
+          }
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({
+        error: { code: 'feature_not_supported' }
+      }), { status: 404, headers: { 'content-type': 'application/json' } })
+    }
+
+    try {
+      const snapshot = await refreshAccountQuotaSnapshot(account, mockFetch)
+      const saved = proxyConfig.chatgptAccounts[0]
+      assert.strictEqual(snapshot.usage_status, 'synced')
+      assert.strictEqual(snapshot.reset_credit_status, 'unsupported')
+      assert.strictEqual(snapshot.reset_credits_synced, false)
+      assert.strictEqual(saved.reset_credit_status, 'unsupported')
+      assert.strictEqual(saved.reset_credits, undefined)
+      assert.match(saved.reset_credit_error, /不受当前套餐支持/)
+    } finally {
+      proxyConfig.chatgptAccounts = originalAccounts
+      proxyConfig.chatgptResponsesUrl = originalUrl
+    }
+  })
+
+  it('连续三次网络故障才暂停调度，随后成功检查会恢复', async () => {
+    const originalAccounts = proxyConfig.chatgptAccounts
+    const originalUrl = proxyConfig.chatgptResponsesUrl
+    const account = {
+      id: 'status-check-transient-recovery',
+      account_id: 'upstream-transient-recovery',
+      access_token: 'access',
+      refresh_token: 'refresh',
+      expires_at: Date.now() + 60_000,
+      credential_mode: 'refreshable',
+      credential_compatibility: 'codex_subscription',
+      status: 'active',
+      routing_enabled: true
+    }
+    proxyConfig.chatgptAccounts = [account]
+    proxyConfig.chatgptResponsesUrl = 'https://chatgpt.com/backend-api/codex/responses'
+    const failingFetch = async () => new Response(JSON.stringify({
+      error: { code: 'upstream_unavailable' }
+    }), { status: 503, headers: { 'content-type': 'application/json' } })
+    const healthyFetch = async url => {
+      if (String(url).endsWith('/backend-api/wham/usage')) {
+        return new Response(JSON.stringify({
+          rate_limit: {
+            primary_window: { used_percent: 10, limit_window_seconds: 18_000 }
+          }
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({
+        reset_credits: { available_count: 1, credits: [] }
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+
+    try {
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const check = await checkChatgptAccountStatus(
+          proxyConfig.chatgptAccounts[0],
+          failingFetch
+        )
+        assert.strictEqual(check.consecutive_failures, attempt)
+        assert.strictEqual(
+          proxyConfig.chatgptAccounts[0].status,
+          attempt < 3 ? 'active' : 'cooldown'
+        )
+      }
+      const recovered = await checkChatgptAccountStatus(
+        proxyConfig.chatgptAccounts[0],
+        healthyFetch
+      )
+      assert.strictEqual(recovered.state, 'healthy')
+      assert.strictEqual(recovered.disposition, 'recovered')
+      assert.strictEqual(recovered.recovered_from, 'temporary_unavailable')
+      assert.strictEqual(proxyConfig.chatgptAccounts[0].status, 'active')
+      assert.strictEqual(proxyConfig.chatgptAccounts[0].cooldown_until, null)
     } finally {
       proxyConfig.chatgptAccounts = originalAccounts
       proxyConfig.chatgptResponsesUrl = originalUrl

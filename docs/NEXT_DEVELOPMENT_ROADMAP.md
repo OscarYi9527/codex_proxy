@@ -108,6 +108,10 @@ POST   /admin/api/chatgpt-accounts/check-tasks/:taskId/resume
 - 429 按 Retry-After 冷却；额度为 0 按额度窗口恢复时间处理。
 - 自动处置不物理删除账号；所有恢复、隔离和弃号操作写安全审计。
 
+状态：**已完成**。健康事件 sidecar 和查询 API 已保存首次/最近发生时间、连续失败、
+置信度、探测范围和处置；临时故障连续 3 次进入指数冷却，一次成功恢复，普通 403
+进入短期权限复核。
+
 ### N004：额度与重置次数同步语义
 
 分别持久化：
@@ -118,6 +122,9 @@ POST   /admin/api/chatgpt-accounts/check-tasks/:taskId/resume
 
 重置次数端点不是所有套餐都支持，`404/特定 403` 应标记为“不支持”，不能长期显示成
 账号故障。当前账号 5 分钟只刷新 usage；全池低频任务按独立周期刷新 reset-credit。
+
+状态：**已完成**。两个端点均使用 `synced/stale/unsupported/failed`，当前账号 5 分钟
+仅刷新 usage；全池 reset-credit 独立约 6 小时刷新、12 小时判定陈旧。
 
 ### N005：批量管理和通知
 

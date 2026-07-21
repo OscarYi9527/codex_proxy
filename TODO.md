@@ -122,8 +122,8 @@
 
 - [x] N001：把同步全账号状态检查改为可查询进度、可取消和可恢复的后台任务。
 - [x] N002：引入批量账号持久化，避免每个账号状态字段都重写并热重载整份敏感配置。
-- [ ] N003：保存健康事件、连续失败和置信度；网络/5xx 不得误判封号。
-- [ ] N004：区分用量/重置次数的 synced、stale、unsupported、failed 状态。
+- [x] N003：保存健康事件、连续失败和置信度；网络/5xx 不得误判封号。
+- [x] N004：区分用量/重置次数的 synced、stale、unsupported、failed 状态。
 - [x] N006：Gateway/Edge 启动显式强制 TLS 校验；发现
   `NODE_TLS_REJECT_UNAUTHORIZED=0` 时 fail-closed。
 - [ ] N007：实现 Provider `envelope-v1`、主密钥轮换和 plaintext 安全迁移。

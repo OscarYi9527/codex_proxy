@@ -8,7 +8,7 @@ import { getCodexAuthFile, isLocalAdminRequest, killLocalCodexProcesses } from '
 import { publicProxyConfig } from './shared.js'
 import { parseChatgptAccountImport } from '../account-import.js'
 import { accountCheckTaskManager } from '../account-check-tasks.js'
-import { JsonAccountStore } from '../account-store.js'
+import { JsonAccountStore, listAccountHealthEvents } from '../account-store.js'
 
 async function runBatchedAccountOperation(accounts, operation, {
   batchSize = 20,
@@ -293,7 +293,12 @@ export async function handleChatgptAccountRefreshUsage(req, res, accountId) {
     }
     const snapshot = await refreshAccountQuotaSnapshot(account, chinaFetch(fetch))
     const masked = publicProxyConfig(proxyConfig)
-    if (!snapshot.usage_synced && !snapshot.reset_credits_synced) {
+    if (
+      !snapshot.usage_synced &&
+      !snapshot.reset_credits_synced &&
+      snapshot.usage_status === 'failed' &&
+      snapshot.reset_credit_status === 'failed'
+    ) {
       throw snapshot.usage_error || snapshot.reset_credits_error || new Error('账号额度与重置次数同步失败')
     }
     return sendJson(res, 200, {
@@ -301,6 +306,10 @@ export async function handleChatgptAccountRefreshUsage(req, res, accountId) {
       result: {
         usage_synced: snapshot.usage_synced,
         reset_credits_synced: snapshot.reset_credits_synced,
+        usage_status: snapshot.usage_status,
+        reset_credit_status: snapshot.reset_credit_status,
+        has_failures: snapshot.usage_status === 'failed' ||
+          snapshot.reset_credit_status === 'failed',
         warnings: snapshot.warnings
       },
       message: snapshot.warnings.length
@@ -315,16 +324,26 @@ export async function handleChatgptAccountRefreshUsage(req, res, accountId) {
 export async function handleChatgptAccountsRefreshAll(req, res) {
   const accounts = proxyConfig.chatgptAccounts || []
   const errors = []
+  const notices = []
   let usageSynced = 0
   let resetCreditsSynced = 0
+  const usageStatuses = {}
+  const resetCreditStatuses = {}
   try {
     await runBatchedAccountOperation(accounts, async account => {
       try {
         const snapshot = await refreshAccountQuotaSnapshot(account, chinaFetch(fetch))
         if (snapshot.usage_synced) usageSynced++
         if (snapshot.reset_credits_synced) resetCreditsSynced++
+        usageStatuses[snapshot.usage_status] = (usageStatuses[snapshot.usage_status] || 0) + 1
+        resetCreditStatuses[snapshot.reset_credit_status] =
+          (resetCreditStatuses[snapshot.reset_credit_status] || 0) + 1
         if (snapshot.warnings.length) {
-          errors.push(`${account.label || account.id}: ${snapshot.warnings.join('；')}`)
+          const target = snapshot.usage_status === 'failed' ||
+            snapshot.reset_credit_status === 'failed'
+            ? errors
+            : notices
+          target.push(`${account.label || account.id}: ${snapshot.warnings.join('；')}`)
         }
       } catch (error) {
         errors.push(`${account.label || account.id}: ${error.message}`)
@@ -342,10 +361,15 @@ export async function handleChatgptAccountsRefreshAll(req, res) {
       total: accounts.length,
       usage_synced: usageSynced,
       reset_credits_synced: resetCreditsSynced,
+      usage_statuses: usageStatuses,
+      reset_credit_statuses: resetCreditStatuses,
+      notices,
       errors
     },
     message: errors.length
       ? `同步完成：用量 ${usageSynced}/${accounts.length}，重置次数 ${resetCreditsSynced}/${accounts.length}；${errors.slice(0, 3).join('; ')}${errors.length > 3 ? `；另有 ${errors.length - 3} 个账号失败` : ''}`
+      : notices.length
+        ? `同步完成；${notices.slice(0, 3).join('; ')}${notices.length > 3 ? `；另有 ${notices.length - 3} 个账号存在不支持项` : ''}`
       : '全部账号用量和重置次数已同步'
   })
 }
@@ -443,6 +467,23 @@ export function handleChatgptAccountCheckTaskResume(
   }
 }
 
+export function handleChatgptAccountHealthEventsGet(req, res, accountId) {
+  const account = (proxyConfig.chatgptAccounts || []).find(item => item.id === accountId)
+  if (!account) {
+    return sendJson(res, 404, {
+      error: { type: 'not_found_error', message: '账号不存在' }
+    })
+  }
+  const limit = new URL(req.url || '/', 'http://localhost').searchParams.get('limit')
+  return sendJson(res, 200, {
+    account: {
+      id: account.id,
+      label: account.label || account.email || account.account_id || account.id
+    },
+    events: listAccountHealthEvents(account.id, { limit })
+  })
+}
+
 export async function handleChatgptAccountSwitch(req, res, accountId) {
   try {
     if (!isLocalAdminRequest(req)) {
@@ -500,17 +541,26 @@ export async function handleCodexRestart(req, res) {
 }
 
 export async function handleChatgptAccountResetCreditsGet(req, res, accountId) {
+  const account = (proxyConfig.chatgptAccounts || []).find(a => a.id === accountId)
+  if (!account) {
+    return sendJson(res, 404, { error: { type: 'not_found_error', message: '账号不存在' } })
+  }
   try {
-    const account = (proxyConfig.chatgptAccounts || []).find(a => a.id === accountId)
-    if (!account) {
-      return sendJson(res, 404, { error: { type: 'not_found_error', message: '账号不存在' } })
-    }
     await refreshAccountResetCredits(account, chinaFetch(fetch))
     return sendJson(res, 200, {
       config: publicProxyConfig(proxyConfig),
+      result: { status: 'synced' },
       message: 'Codex 重置次数已查询'
     })
   } catch (error) {
+    const latest = (proxyConfig.chatgptAccounts || []).find(a => a.id === accountId) || account
+    if (latest.reset_credit_status === 'unsupported') {
+      return sendJson(res, 200, {
+        config: publicProxyConfig(proxyConfig),
+        result: { status: 'unsupported' },
+        message: latest.reset_credit_error || '当前套餐不支持 Codex 重置次数'
+      })
+    }
     return sendJson(res, 502, { error: { type: 'server_error', message: error.message } })
   }
 }
@@ -518,12 +568,20 @@ export async function handleChatgptAccountResetCreditsGet(req, res, accountId) {
 export async function handleChatgptAccountsRefreshResetCreditsAll(req, res) {
   const accounts = proxyConfig.chatgptAccounts || []
   const errors = []
+  const notices = []
+  const statuses = {}
   try {
     await runBatchedAccountOperation(accounts, async account => {
       try {
         await refreshAccountResetCredits(account, chinaFetch(fetch))
       } catch (error) {
-        errors.push(`${account.label || account.id}: ${error.message}`)
+        const latest = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || account
+        const target = latest.reset_credit_status === 'unsupported' ? notices : errors
+        target.push(`${account.label || account.id}: ${latest.reset_credit_error || error.message}`)
+      } finally {
+        const latest = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || account
+        const status = latest.reset_credit_status || 'stale'
+        statuses[status] = (statuses[status] || 0) + 1
       }
     })
   } catch (error) {
@@ -533,7 +591,12 @@ export async function handleChatgptAccountsRefreshResetCreditsAll(req, res) {
   }
   return sendJson(res, 200, {
     config: publicProxyConfig(proxyConfig),
-    message: errors.length ? `查询完成，部分账号失败：${errors.join('; ')}` : '全部账号的 Codex 重置次数已查询'
+    result: { total: accounts.length, statuses, notices, errors },
+    message: errors.length
+      ? `查询完成，部分账号失败：${errors.join('; ')}`
+      : notices.length
+        ? `查询完成；${notices.join('; ')}`
+        : '全部账号的 Codex 重置次数已查询'
   })
 }
 

@@ -62,10 +62,9 @@ socket 解耦，给后续 T061+ 结算 hook 保留完成或对账机会。
 
 ### 当前架构缺口
 
-- standalone 已将全账号检查迁入持久化后台任务，支持进度、取消、超时隔离和重启恢复；
-  `JsonAccountStore` 通过 AsyncLocalStorage 捕获现有账号更新，每 20 个账号合并 patch，
-  每批最多重写一次加密配置，并把脱敏健康事件写入独立 sidecar。N003 仍需在此基础上
-  补齐连续失败、置信度和完整恢复状态机。
+- standalone 已完成 N001–N004：全账号检查使用持久化后台任务和批量 patch，健康状态机
+  保存连续失败/置信度/恢复证据，用量与重置次数使用独立四态和刷新周期。后续 N005 仍需
+  补齐导入批次、负责人、到期、批量归档和通知策略。
 - Gateway 的积分、风险和审计表已经迁移，但 `RequestPreflight` 尚未预留 Turn 风险，
   `ResponsesGateway` 尚未结算或对账，`AccountService` 的积分仍是固定零值。
 - 组织和邀请码 React 页面仍为占位；跨组织 repository 约束、最后 Level-1 保护和正文
@@ -295,6 +294,7 @@ flowchart TD
 | `GET` | `/admin/api/chatgpt-accounts/check-tasks[/:id]` | 最近任务或指定任务进度/结果 |
 | `POST` | `/admin/api/chatgpt-accounts/check-tasks/:id/cancel` | 协作式取消任务 |
 | `POST` | `/admin/api/chatgpt-accounts/check-tasks/:id/resume` | 从最后批次恢复任务 |
+| `GET` | `/admin/api/chatgpt-accounts/:id/health-events` | 脱敏健康状态机历史 |
 | `GET` | `/admin/api/config-snapshots` | 配置快照列表 |
 | `POST` | `/admin/api/config-rollback` | 回滚快照 |
 | `GET` | `/admin/api/account-backups` | 加密账号备份列表 |

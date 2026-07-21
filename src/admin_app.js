@@ -337,9 +337,11 @@ function formatDuration(seconds){
 }
 function usageWindowHtml(win,account){
   if(!win||win.used_percent==null){
-    if(account?.usage_sync_status==='refreshing'||account?.usage_sync_status==='pending')return '<span class="status warn"><i></i>正在获取额度…</span>'
-    if(account?.usage_sync_status==='error')return `<span class="cell-sub" title="${esc(account.usage_sync_error||'请稍后重试')}">首次同步失败 · 可点刷新重试</span>`
-    if(account?.usage_sync_status==='synced'&&(account?.usage?.primary||account?.usage?.secondary))return '<span class="cell-sub">官方当前未提供此额度窗口</span>'
+    const status=account?.usage_status||(account?.usage_sync_status==='error'?'failed':account?.usage_sync_status)||'stale'
+    if(status==='unsupported')return '<span class="cell-sub">当前套餐不支持用量端点</span>'
+    if(status==='failed')return `<span class="cell-sub" title="${esc(account.usage_error||account.usage_sync_error||'请稍后重试')}">同步失败 · 可点刷新重试</span>`
+    if(status==='stale')return '<span class="cell-sub">额度数据陈旧 · 等待同步</span>'
+    if(status==='synced'&&(account?.usage?.primary||account?.usage?.secondary))return '<span class="cell-sub">官方当前未提供此额度窗口</span>'
     return '<span class="cell-sub">等待首次额度同步</span>'
   }
   const used=Math.max(0,Math.min(100,Number(win.used_percent)||0))
@@ -925,7 +927,7 @@ async function refreshAllUsage(){
 }
 async function refreshAccountUsageOne(id){
   toast('正在同步账号用量和重置次数…')
-  try{const r=await fetch(API+'/chatgpt-accounts/'+encodeURIComponent(id)+'/refresh-usage',{method:'POST'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'同步失败');cfg=d.config;render();toast(d.message||'账号用量和重置次数已同步',d.result?.warnings?.length?'error':'success')}catch(e){toast(e.message,'error')}
+  try{const r=await fetch(API+'/chatgpt-accounts/'+encodeURIComponent(id)+'/refresh-usage',{method:'POST'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'同步失败');cfg=d.config;render();toast(d.message||'账号用量和重置次数已同步',d.result?.has_failures?'error':'success')}catch(e){toast(e.message,'error')}
 }
 async function refreshAccountResetCreditsOne(id){
   toast('正在查询 Codex 重置次数…')
@@ -933,7 +935,7 @@ async function refreshAccountResetCreditsOne(id){
 }
 async function refreshAllResetCredits(){
   toast('正在查询全部账号的 Codex 重置次数…')
-  try{const r=await fetch(API+'/chatgpt-accounts/refresh-reset-credits-all',{method:'POST'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'查询失败');cfg=d.config;render();toast(d.message||'查询完成')}catch(e){toast(e.message,'error')}
+  try{const r=await fetch(API+'/chatgpt-accounts/refresh-reset-credits-all',{method:'POST'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'查询失败');cfg=d.config;render();toast(d.message||'查询完成',d.result?.errors?.length?'error':'success')}catch(e){toast(e.message,'error')}
 }
 function openResetQuota(id){
   const account=(cfg.chatgptAccounts||[]).find(item=>item.id===id)

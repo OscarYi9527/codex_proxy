@@ -75,6 +75,32 @@ describe('后台账号检查任务', () => {
     }).concurrency, 4)
   })
 
+  it('套餐不支持重置次数不会被计为账号故障', async () => {
+    const accounts = [{ id: 'unsupported-reset-account' }]
+    const fixture = temporaryManager({
+      getAccounts: () => accounts,
+      createStore: () => ({
+        captureAccount() {},
+        appendHealthEvents() {},
+        async flush() {}
+      }),
+      checkAccount: async account => ({
+        ...healthyResult(account),
+        reset_credits_synced: false,
+        reset_credit_status: 'unsupported'
+      })
+    })
+    try {
+      const started = fixture.manager.start()
+      const completed = await fixture.manager.wait(started.task.id)
+      assert.strictEqual(completed.status, 'completed')
+      assert.strictEqual(completed.healthy, 1)
+      assert.strictEqual(completed.issues, 0)
+    } finally {
+      fs.rmSync(fixture.directory, { recursive: true, force: true })
+    }
+  })
+
   it('管理 API 提供创建、列表、进度、取消和恢复合同', async () => {
     const task = {
       id: 'api-task',

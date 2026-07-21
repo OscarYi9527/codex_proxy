@@ -1,5 +1,5 @@
 import { proxyConfig } from './config.js'
-import { accountActiveRequestCount, accountConcurrencyLimit, accountCredentialLifecycle, accountPolicyState, accountPoolTierState, accountRemainingPercent } from './chatgpt-accounts.js'
+import { accountActiveRequestCount, accountConcurrencyLimit, accountCredentialLifecycle, accountPolicyState, accountPoolTierState, accountRemainingPercent, accountSyncStates } from './chatgpt-accounts.js'
 import { getCircuitStates } from './circuit-breaker.js'
 import { getHttpErrorGuide } from './error-guide.js'
 import { getProviderHealth } from './provider-health.js'
@@ -51,12 +51,19 @@ export function accountPoolDiagnosis({ model = null, now = Date.now() } = {}) {
     health_quota_exhausted: 0,
     health_permission_denied: 0,
     health_unknown_error: 0,
+    usage_stale: 0,
+    usage_unsupported: 0,
+    usage_failed: 0,
+    reset_credit_stale: 0,
+    reset_credit_unsupported: 0,
+    reset_credit_failed: 0,
     reset_credits_sync_error: 0
   }
   let earliestRecoveryAt = null
   for (const account of accounts) {
     const credential = accountCredentialLifecycle(account, now)
     const poolTier = accountPoolTierState(account, now)
+    const syncStates = accountSyncStates(account, now)
     const healthState = String(account.health_check?.state || '')
     if (healthState && healthState !== 'checking') counts.health_checked++
     if (healthState === 'healthy') counts.health_healthy++
@@ -65,7 +72,15 @@ export function accountPoolDiagnosis({ model = null, now = Date.now() } = {}) {
     if (healthState === 'quota_exhausted') counts.health_quota_exhausted++
     if (healthState === 'permission_denied') counts.health_permission_denied++
     if (healthState === 'unknown_error') counts.health_unknown_error++
-    if (account.reset_credits_error) counts.reset_credits_sync_error++
+    if (syncStates.usage === 'stale') counts.usage_stale++
+    if (syncStates.usage === 'unsupported') counts.usage_unsupported++
+    if (syncStates.usage === 'failed') counts.usage_failed++
+    if (syncStates.reset_credit === 'stale') counts.reset_credit_stale++
+    if (syncStates.reset_credit === 'unsupported') counts.reset_credit_unsupported++
+    if (syncStates.reset_credit === 'failed') {
+      counts.reset_credit_failed++
+      counts.reset_credits_sync_error++
+    }
     if (credential.temporary) counts.temporary++
     if (!credential.compatible) counts.incompatible++
     if (credential.expiring_soon) counts.expiring_soon++

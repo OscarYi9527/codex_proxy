@@ -42,10 +42,11 @@ function renderAccounts(){
     const routeEnabled=a.routing_enabled!==false
     const credential=credentialOf(a)
     const pool=poolOf(a)
+    const usageStatus=a.usage_status||(a.usage_sync_status==='error'?'failed':a.usage_sync_status)||'stale'
     const canEnableRoute=credential.compatible&&!credential.expired&&!pool.discarded
     const remaining=remainingOf(a)
     const accountReserve=pool.disposable?0:Number(a.low_quota_threshold??threshold),atReserve=remaining!=null&&remaining<=accountReserve
-    const usageStale=!a.usage_updated_at||(Date.now()-new Date(a.usage_updated_at).getTime()>30*60*1000)
+    const usageStale=usageStatus==='stale'||!a.usage_updated_at||(Date.now()-new Date(a.usage_updated_at).getTime()>30*60*1000)
     const modelCooldownCount=Object.values(a.model_cooldowns||{}).filter(until=>Number(until)>Date.now()).length
     const health=(statsData.accounts||{})[a.id]||{}
     const runtime=(diagnosticsData.accounts||[]).find(item=>item.id===a.id)||{}
@@ -64,11 +65,16 @@ function renderAccounts(){
     const routeLabel=pool.discarded?'已弃号':checkedRouteLabel||(!credential.compatible?'凭据不兼容':credential.expired?'令牌到期':!routeEnabled?'仅保存':a.status==='cooldown'?'冷却中':a.status==='auth_error'?'登录失效':pool.exhausted?'等待周额度重置':atReserve?'额度保护':'参与路由')
     const routeTone=pool.discarded||checkedCritical||!credential.compatible||credential.expired||!routeEnabled||a.status==='auth_error'?'off':checkedWarning||pool.exhausted||a.status==='cooldown'||atReserve||credential.expiringSoon?'warn':'ok'
     const reset=a.reset_credits
+    const resetStatus=a.reset_credit_status||(reset?.updated_at?'synced':'stale')
     const resetCount=reset?Number(reset.available_count||0):null
     const resetExpiry=(reset?.expires_at||[])[0]
-    const resetDisabled=resetCount==null||resetCount<=0
-    const resetDetail=a.reset_credits_error
-      ? `查询失败：${esc(a.reset_credits_error)}`
+    const resetDisabled=resetStatus==='unsupported'||resetCount==null||resetCount<=0
+    const resetDetail=resetStatus==='unsupported'
+      ? '当前套餐不支持重置次数端点'
+      : resetStatus==='failed'
+        ? `查询失败：${esc(a.reset_credit_error||a.reset_credits_error||'请稍后重试')}`
+      : resetStatus==='stale'
+        ? '重置次数数据已陈旧，建议重新查询'
       : resetExpiry
         ? `最近到期：${esc(beijingTime(resetExpiry))}`
         : reset
@@ -96,7 +102,7 @@ function renderAccounts(){
         <section class="account-card-section quota-section">
           <div class="account-section-head"><div><span>额度状态</span><small>${usageStale?'数据可能已过期':'最近数据有效'}</small></div><button class="account-link" title="同步用量和重置次数" onclick="refreshAccountUsageOne('${esc(a.id)}')">${svg('refresh')}同步额度/次数</button></div>
           <div class="account-quota-grid">
-            <div class="account-quota-tile"><div class="account-tile-label"><span>5 小时</span><small>${!a.usage?.primary&&a.usage_sync_status==='synced'?'当前暂停':'短周期'}</small></div>${usageWindowHtml(a.usage&&a.usage.primary,a)}${usageForecastHtml(a.usage_forecast&&a.usage_forecast.primary)}</div>
+            <div class="account-quota-tile"><div class="account-tile-label"><span>5 小时</span><small>${!a.usage?.primary&&usageStatus==='synced'?'当前暂停':'短周期'}</small></div>${usageWindowHtml(a.usage&&a.usage.primary,a)}${usageForecastHtml(a.usage_forecast&&a.usage_forecast.primary)}</div>
             <div class="account-quota-tile"><div class="account-tile-label"><span>1 周</span><small>长周期</small></div>${usageWindowHtml(a.usage&&a.usage.secondary,a)}${usageForecastHtml(a.usage_forecast&&a.usage_forecast.secondary)}</div>
           </div>
         </section>
@@ -120,7 +126,7 @@ function renderAccounts(){
           ${a.cooldown_until?`<div class="account-alert">预计恢复：${esc(beijingTime(a.cooldown_until))}</div>`:''}
           ${credential.temporary?`<div class="account-alert ${credential.expired||!credential.compatible?'error':''}">${!credential.compatible?'该 Token 由非 Codex OAuth 客户端签发，缺少订阅 Responses 权限，不能直接使用；请通过批量官方登录升级。':`临时令牌${credential.expired?'已经到期':`剩余 ${esc(credential.countdown)}`} · ${credential.expires_at?`北京时间 ${esc(beijingTime(credential.expires_at))}`:'到期时间未知'} · 不可自动续约`}</div>`:''}
           ${pool.discarded?`<div class="account-alert error">日抛账号在额度归零后连续 7 天未恢复，已于 ${esc(beijingTime(pool.discarded_at||Date.now()))} 自动停用；如需恢复，请先改为稳定池。</div>`:pool.exhausted?`<div class="account-alert">日抛账号额度已归零，等待重置；若 ${esc(pool.countdown||'当前')} 后仍未恢复将自动弃号。</div>`:''}
-          ${check?`<div class="account-alert ${checkedCritical?'error':''}"><b>${check.source==='model_request'?'实际请求状态':'状态检查'}：${esc(check.label||check.state)}</b> · ${esc(check.reason||'没有返回具体原因')}${check.checked_at?`<br><small>${esc(beijingTime(check.checked_at))}${check.http_status?` · HTTP ${Number(check.http_status)}`:''} · ${check.source==='model_request'?'来自实际模型请求':check.reset_credits_synced?'重置次数已同步':'重置次数未同步'}</small>`:''}</div>`:''}
+          ${check?`<div class="account-alert ${checkedCritical?'error':''}"><b>${check.source==='model_request'?'实际请求状态':'状态检查'}：${esc(check.label||check.state)}</b> · ${esc(check.reason||'没有返回具体原因')}${check.checked_at?`<br><small>${esc(beijingTime(check.checked_at))}${check.http_status?` · HTTP ${Number(check.http_status)}`:''} · 置信度 ${esc(check.confidence||'未知')} · 连续失败 ${Number(check.consecutive_failures||0)}${check.disposition?` · ${esc(check.disposition)}`:''}${check.recovered_from?` · 已从 ${esc(check.recovered_from)} 恢复`:''} · ${check.source==='model_request'?'来自实际模型请求':check.reset_credits_synced?'重置次数已同步':check.reset_credit_status==='unsupported'?'重置次数不受支持':'重置次数未同步'}</small>`:''}</div>`:''}
           ${health.last_error_type?`<div class="account-alert error" title="${esc(health.last_error_message||health.last_error_type)}">最近错误：${esc(health.last_error_type)}${health.last_status?` · HTTP ${health.last_status}`:''}</div>`:''}
         </section>
       </div>
@@ -128,8 +134,8 @@ function renderAccounts(){
         <div class="account-reset-icon">${svg('refresh')}</div>
         <div class="account-reset-copy">
           <span>Codex 额度重置 · <b class="reset-risk-label" style="color:var(--red);font-weight:800">高风险 / 不可撤销</b></span>
-          <strong>${resetCount==null?'待查询':`${resetCount} 次可用`}</strong>
-          <small>${resetDetail}${reset?.updated_at?` · 查询于 ${esc(beijingTime(reset.updated_at))}`:''}</small>
+          <strong>${resetStatus==='unsupported'?'不支持':resetCount==null?'待查询':`${resetCount} 次可用`}</strong>
+          <small>${resetDetail}${a.reset_credit_updated_at||reset?.updated_at?` · 查询于 ${esc(beijingTime(a.reset_credit_updated_at||reset.updated_at))}`:''}</small>
         </div>
         <div class="account-reset-actions">
           <button class="btn btn-sm" onclick="refreshAccountResetCreditsOne('${esc(a.id)}')">${svg('pulse')}查询次数</button>
@@ -154,6 +160,7 @@ function renderAccounts(){
     const routeEnabled=a.routing_enabled!==false
     const credential=credentialOf(a)
     const pool=poolOf(a)
+    const usageStatus=a.usage_status||(a.usage_sync_status==='error'?'failed':a.usage_sync_status)||'stale'
     const canEnableRoute=credential.compatible&&!credential.expired&&!pool.discarded
     const remaining=remainingOf(a)
     const accountReserve=pool.disposable?0:Number(a.low_quota_threshold??threshold),atReserve=remaining!=null&&remaining<=accountReserve
@@ -175,7 +182,7 @@ function renderAccounts(){
     }
     const quotaBar=(name,window)=>{
       if(!window||window.used_percent==null){
-        const unavailable=a.usage_sync_status==='synced'&&(a.usage?.primary||a.usage?.secondary)
+        const unavailable=usageStatus==='synced'&&(a.usage?.primary||a.usage?.secondary)
         return `<div class="compact-quota is-empty"><span><b>${name}</b><em>${unavailable?'未提供':'待同步'}</em></span><i></i><small>${unavailable?'官方当前未提供此窗口':quotaResetText(window)}</small></div>`
       }
       const value=Math.max(0,Math.min(100,window.remaining_percent==null?100-Number(window.used_percent):Number(window.remaining_percent)))

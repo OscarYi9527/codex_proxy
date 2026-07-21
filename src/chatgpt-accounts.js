@@ -15,6 +15,7 @@ import {
 import { id } from './server-utils.js'
 import { chinaFetch, withChinaDispatcher } from './china-fetch.js'
 import { getStats, statsDayKey } from './stats.js'
+import { appendAccountHealthEvents } from './account-store.js'
 
 export const CHATGPT_CODEX_OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 const OAUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token'
@@ -27,6 +28,8 @@ const MAX_REASONABLE_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000
 const GLOBAL_USAGE_REFRESH_MS = 30 * 60 * 1000
 const ACTIVE_USAGE_REFRESH_MS = 5 * 60 * 1000
 const USAGE_FRESH_MS = 30 * 60 * 1000
+const RESET_CREDITS_REFRESH_MS = 6 * 60 * 60 * 1000
+const RESET_CREDITS_FRESH_MS = 12 * 60 * 60 * 1000
 // Multiple VS Code windows can legitimately overlap a foreground turn and
 // helper requests. Keep a modest cap and queue anything above it.
 const MAX_ACCOUNT_CONCURRENT_REQUESTS = 3
@@ -38,6 +41,8 @@ const ADAPTIVE_MIN_CONCURRENCY = 1
 const ADAPTIVE_MAX_CONCURRENCY = MAX_ACCOUNT_CONCURRENT_REQUESTS
 const ADAPTIVE_SUCCESS_STEP = 8
 const DISPOSABLE_RESET_GRACE_MS = 7 * 24 * 60 * 60 * 1000
+const TRANSIENT_HEALTH_QUARANTINE_FAILURES = 3
+const TRANSIENT_HEALTH_QUARANTINE_BASE_MS = 5 * 60 * 1000
 const stickyAccounts = new Map()
 const accountRequestLeases = new Map()
 const adaptiveConcurrency = new Map()
@@ -48,14 +53,24 @@ const resetCreditsRefreshInFlight = new Map()
 const accountStatusCheckInFlight = new Map()
 const resetCreditConsumeInFlight = new Set()
 const accountPersistenceScope = new AsyncLocalStorage()
+const pendingHealthEvent = Symbol('pendingHealthEvent')
 
 function persistAccount(account) {
   const store = accountPersistenceScope.getStore()
   if (store) {
     store.captureAccount(account)
+    if (account[pendingHealthEvent]) {
+      recordAccountHealthEvent(account, account[pendingHealthEvent])
+      delete account[pendingHealthEvent]
+    }
     return proxyConfig
   }
-  return persistAccountImmediately(account)
+  const result = persistAccountImmediately(account)
+  if (account[pendingHealthEvent]) {
+    recordAccountHealthEvent(account, account[pendingHealthEvent])
+    delete account[pendingHealthEvent]
+  }
+  return result
 }
 
 export function withAccountStore(store, callback) {
@@ -64,6 +79,20 @@ export function withAccountStore(store, callback) {
   }
   if (typeof callback !== 'function') throw new Error('Account store callback is required')
   return accountPersistenceScope.run(store, callback)
+}
+
+function recordAccountHealthEvent(account, health) {
+  const event = {
+    id: `${account.id}:${health.checked_at}:${health.state}`,
+    account_id: account.id,
+    ...health
+  }
+  const store = accountPersistenceScope.getStore()
+  if (store && typeof store.appendHealthEvents === 'function') {
+    store.appendHealthEvents([event])
+  } else {
+    appendAccountHealthEvents([event])
+  }
 }
 let roundRobinCursor = 0
 
@@ -208,8 +237,16 @@ export function addChatgptAccount(raw, label, {
         }
       : null,
     health_check: null,
-    usage_sync_status: existing?.usage_updated_at ? 'synced' : 'pending',
+    usage_status: existing?.usage_status || (existing?.usage_updated_at ? 'synced' : 'stale'),
+    usage_error: null,
+    usage_sync_status: existing?.usage_updated_at ? 'synced' : 'stale',
     usage_sync_error: null,
+    reset_credit_status: existing?.reset_credit_status ||
+      (existing?.reset_credit_updated_at || existing?.reset_credits?.updated_at ? 'synced' : 'stale'),
+    reset_credit_updated_at: existing?.reset_credit_updated_at ||
+      existing?.reset_credits?.updated_at ||
+      null,
+    reset_credit_error: null,
     routing_enabled: temporaryIncompatible
       ? false
       : (routingEnabled ?? existing?.routing_enabled ?? true),
@@ -320,6 +357,15 @@ export function enforceDisposableAccountLifecycle(account, now = Date.now()) {
     account.routing_enabled = false
     account.status = 'discarded'
     account.auth_error = null
+    account.health_check = advanceAccountHealthState(
+      account.health_check,
+      accountCheckResult('discarded', {
+        checkedAt: new Date(now).toISOString(),
+        source: 'account_lifecycle'
+      }),
+      { now }
+    )
+    account[pendingHealthEvent] = account.health_check
     changed = true
   }
   return changed
@@ -328,6 +374,59 @@ export function enforceDisposableAccountLifecycle(account, now = Date.now()) {
 export function accountUsageIsFresh(account, now = Date.now()) {
   const updatedAt = Date.parse(account?.usage_updated_at || '')
   return Number.isFinite(updatedAt) && now - updatedAt <= USAGE_FRESH_MS
+}
+
+export function classifyAccountSyncFailure(error, {
+  endpoint = 'usage'
+} = {}) {
+  const status = Number(error?.status) || null
+  const searchable = [
+    error?.upstreamCode,
+    error?.upstreamMessage,
+    error?.message
+  ].filter(Boolean).join(' ')
+  const unsupported = status === 404 || (
+    status === 403 &&
+    /not[_ -]?(?:supported|eligible|available)|unsupported|feature[_ -]?(?:disabled|unavailable)|not entitled/i.test(searchable)
+  )
+  return {
+    status: unsupported ? 'unsupported' : 'failed',
+    error: unsupported
+      ? `${endpoint === 'reset_credit' ? '重置次数' : '用量'}端点不受当前套餐支持`
+      : String(error?.message || error).slice(0, 300)
+  }
+}
+
+export function accountSyncStates(account, now = Date.now()) {
+  const effective = (stored, updatedAt, freshMs) => {
+    const legacy = stored === 'error'
+      ? 'failed'
+      : (['pending', 'refreshing'].includes(stored) ? 'stale' : stored)
+    const normalized = ['synced', 'stale', 'unsupported', 'failed'].includes(legacy)
+      ? legacy
+      : (updatedAt ? 'synced' : 'stale')
+    if (normalized !== 'synced') return normalized
+    const updated = Date.parse(updatedAt || '')
+    return Number.isFinite(updated) && now - updated <= freshMs ? 'synced' : 'stale'
+  }
+  const usageUpdatedAt = account?.usage_updated_at || null
+  const resetUpdatedAt = account?.reset_credit_updated_at ||
+    account?.reset_credits?.updated_at ||
+    null
+  return {
+    usage: effective(
+      account?.usage_status || account?.usage_sync_status,
+      usageUpdatedAt,
+      USAGE_FRESH_MS
+    ),
+    reset_credit: effective(
+      account?.reset_credit_status,
+      resetUpdatedAt,
+      RESET_CREDITS_FRESH_MS
+    ),
+    usage_updated_at: usageUpdatedAt,
+    reset_credit_updated_at: resetUpdatedAt
+  }
 }
 
 export function accountPolicyState(account, {
@@ -461,6 +560,7 @@ function accountCheckResult(state, {
   errorCode = null,
   usageSynced = false,
   resetCreditsSynced = false,
+  resetCreditStatus = null,
   remainingPercent = null,
   source = 'status_check'
 } = {}) {
@@ -476,6 +576,9 @@ function accountCheckResult(state, {
     error_code: errorCode ? String(errorCode).slice(0, 80) : null,
     usage_synced: usageSynced === true,
     reset_credits_synced: resetCreditsSynced === true,
+    reset_credit_status: ['synced', 'stale', 'unsupported', 'failed'].includes(resetCreditStatus)
+      ? resetCreditStatus
+      : (resetCreditsSynced === true ? 'synced' : 'failed'),
     remaining_percent: remainingPercent == null
       ? null
       : (Number.isFinite(Number(remainingPercent)) ? Number(remainingPercent) : null),
@@ -540,6 +643,84 @@ export function classifyAccountCheckFailure(error, account = null) {
     return accountCheckResult('temporary_unavailable', common)
   }
   return accountCheckResult('unknown_error', common)
+}
+
+const TRANSIENT_HEALTH_STATES = new Set(['temporary_unavailable', 'unknown_error'])
+const TERMINAL_HEALTH_STATES = new Set([
+  'banned',
+  'auth_invalid',
+  'token_expired',
+  'incompatible'
+])
+const SUCCESSFUL_PROBE_STATES = new Set(['healthy', 'quota_low', 'quota_exhausted'])
+
+function healthConfidence(result) {
+  if (result.state === 'banned') return 'high'
+  if (['auth_invalid', 'token_expired', 'incompatible'].includes(result.state)) return 'high'
+  if (result.state === 'permission_denied') return 'medium'
+  if (['quota_low', 'quota_exhausted', 'rate_limited', 'healthy'].includes(result.state)) return 'high'
+  return 'low'
+}
+
+export function advanceAccountHealthState(previous, result, {
+  now = Date.now()
+} = {}) {
+  const checkedAt = result.checked_at || new Date(now).toISOString()
+  const previousState = previous?.state === 'checking' ? null : previous?.state
+  const currentTransient = TRANSIENT_HEALTH_STATES.has(result.state)
+  const previousTransient = TRANSIENT_HEALTH_STATES.has(previousState)
+  const successful = SUCCESSFUL_PROBE_STATES.has(result.state)
+  const sameIncident = previousState === result.state ||
+    (currentTransient && previousTransient)
+  const consecutiveFailures = successful
+    ? 0
+    : (sameIncident ? Math.max(0, Number(previous?.consecutive_failures) || 0) : 0) + 1
+  const recoveredFrom = successful && previousState &&
+    !SUCCESSFUL_PROBE_STATES.has(previousState)
+    ? previousState
+    : null
+  let disposition = 'observe'
+  if (result.state === 'healthy') disposition = recoveredFrom ? 'recovered' : 'healthy'
+  else if (result.state === 'quota_low') disposition = 'reserve_blocked'
+  else if (result.state === 'quota_exhausted') disposition = 'waiting_for_reset'
+  else if (result.state === 'rate_limited') disposition = 'cooldown'
+  else if (TERMINAL_HEALTH_STATES.has(result.state)) disposition = 'disabled'
+  else if (result.state === 'permission_denied') disposition = 'permission_review'
+  else if (
+    currentTransient &&
+    consecutiveFailures >= TRANSIENT_HEALTH_QUARANTINE_FAILURES
+  ) disposition = 'quarantined'
+
+  let retryAt = result.retry_at || null
+  if (disposition === 'quarantined' && !retryAt) {
+    const exponent = Math.min(3, consecutiveFailures - TRANSIENT_HEALTH_QUARANTINE_FAILURES)
+    retryAt = new Date(
+      now + TRANSIENT_HEALTH_QUARANTINE_BASE_MS * Math.pow(2, exponent)
+    ).toISOString()
+  }
+  if (disposition === 'permission_review' && !retryAt) {
+    retryAt = new Date(now + 15 * 60 * 1000).toISOString()
+  }
+
+  return {
+    ...result,
+    checked_at: checkedAt,
+    source: result.source || 'status_check',
+    probe_scope: result.probe_scope || (
+      result.source === 'model_request'
+        ? 'model_request'
+        : 'credential_usage_and_reset_credits_without_model_request'
+    ),
+    first_seen_at: sameIncident
+      ? (previous?.first_seen_at || previous?.checked_at || checkedAt)
+      : checkedAt,
+    last_seen_at: checkedAt,
+    consecutive_failures: consecutiveFailures,
+    confidence: healthConfidence(result),
+    disposition,
+    retry_at: retryAt,
+    recovered_from: recoveredFrom
+  }
 }
 
 function adaptiveState(accountId) {
@@ -992,8 +1173,7 @@ export async function markAccountCooldown(accountId, response, { model = null, s
   }, account)
   check.retry_at = new Date(cooldownUntil).toISOString()
   check.source = 'model_request'
-  account.health_check = check
-  persistAccount(account)
+  persistAccountCheck(accountId, check)
 }
 
 export function markAccountAuthFailure(accountId, status, message = null) {
@@ -1005,14 +1185,7 @@ export function markAccountAuthFailure(accountId, status, message = null) {
     message: `ChatGPT account request failed with status ${Number(status) || 0}`
   }, account)
   check.source = 'model_request'
-  account.status = 'auth_error'
-  account.auth_error = {
-    type: check.state === 'banned' ? 'account_banned' : `upstream_${check.state}`,
-    status: Number(status) || null,
-    at: new Date().toISOString()
-  }
-  account.health_check = check
-  persistAccount(account)
+  persistAccountCheck(accountId, check)
 }
 
 function numOrNull(v) {
@@ -1280,12 +1453,20 @@ export async function refreshAccountResetCredits(account, fetchImpl = fetch) {
       const result = await fetchAccountResetCredits(currentAccount, fetchImpl)
       const latestAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || result.account
       latestAccount.reset_credits = publicResetCredits(result.parsed)
+      latestAccount.reset_credit_status = 'synced'
+      latestAccount.reset_credit_updated_at = latestAccount.reset_credits.updated_at
+      latestAccount.reset_credit_last_attempt_at = latestAccount.reset_credits.updated_at
+      latestAccount.reset_credit_error = null
       latestAccount.reset_credits_error = null
       persistAccount(latestAccount)
       return latestAccount.reset_credits
     } catch (error) {
       const latestAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || currentAccount
-      latestAccount.reset_credits_error = String(error?.message || error).slice(0, 300)
+      const failure = classifyAccountSyncFailure(error, { endpoint: 'reset_credit' })
+      latestAccount.reset_credit_status = failure.status
+      latestAccount.reset_credit_last_attempt_at = new Date().toISOString()
+      latestAccount.reset_credit_error = failure.error
+      latestAccount.reset_credits_error = failure.error
       persistAccount(latestAccount)
       throw error
     }
@@ -1374,6 +1555,11 @@ export async function consumeAccountResetCredit(account, {
       available_count: Math.max(0, parsed.available_count - 1),
       credits: parsed.credits.filter(item => item !== candidate)
     }, latestAccount.last_quota_reset_at)
+    latestAccount.reset_credit_status = 'synced'
+    latestAccount.reset_credit_updated_at = latestAccount.last_quota_reset_at
+    latestAccount.reset_credit_last_attempt_at = latestAccount.last_quota_reset_at
+    latestAccount.reset_credit_error = null
+    latestAccount.reset_credits_error = null
     persistAccount(latestAccount)
 
     const refreshWarnings = []
@@ -1433,6 +1619,9 @@ export function applyAccountUsage(accountId, usage) {
     .filter(item => Date.parse(item.at) >= cutoff)
     .slice(-200)
   account.usage_forecast = calculateUsageForecast(account, proxyConfig.chatgptLowQuotaThreshold ?? 10, now)
+  account.usage_status = 'synced'
+  account.usage_error = null
+  account.usage_last_attempt_at = account.usage_updated_at
   account.usage_sync_status = 'synced'
   account.usage_sync_error = null
   persistAccount(account)
@@ -1522,13 +1711,14 @@ async function refreshAccountUsageOnce(account, fetchImpl = fetch) {
 export async function refreshAccountUsage(account, fetchImpl = fetch) {
   if (usageRefreshInFlight.has(account.id)) return usageRefreshInFlight.get(account.id)
   const currentAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || account
-  currentAccount.usage_sync_status = 'refreshing'
-  currentAccount.usage_sync_error = null
-  persistAccount(currentAccount)
   const refreshPromise = refreshAccountUsageOnce(currentAccount, fetchImpl).catch(error => {
     const latestAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || currentAccount
-    latestAccount.usage_sync_status = 'error'
-    latestAccount.usage_sync_error = String(error?.message || error).slice(0, 300)
+    const failure = classifyAccountSyncFailure(error, { endpoint: 'usage' })
+    latestAccount.usage_status = failure.status
+    latestAccount.usage_error = failure.error
+    latestAccount.usage_last_attempt_at = new Date().toISOString()
+    latestAccount.usage_sync_status = failure.status
+    latestAccount.usage_sync_error = failure.error
     persistAccount(latestAccount)
     throw error
   })
@@ -1556,15 +1746,23 @@ export async function refreshAccountQuotaSnapshot(account, fetchImpl = fetch) {
     resetCreditsError = error
   }
 
+  const latestAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || afterUsage
+  const syncStates = accountSyncStates(latestAccount)
   return {
-    account: (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || afterUsage,
+    account: latestAccount,
     usage_synced: !usageError,
     reset_credits_synced: !resetCreditsError,
+    usage_status: syncStates.usage,
+    reset_credit_status: syncStates.reset_credit,
     usage_error: usageError,
     reset_credits_error: resetCreditsError,
     warnings: [
-      usageError ? `用量：${String(usageError?.message || usageError).slice(0, 260)}` : null,
-      resetCreditsError ? `重置次数：${String(resetCreditsError?.message || resetCreditsError).slice(0, 260)}` : null
+      usageError
+        ? `用量${syncStates.usage === 'unsupported' ? '不受支持' : '失败'}：${latestAccount.usage_error || String(usageError?.message || usageError).slice(0, 260)}`
+        : null,
+      resetCreditsError
+        ? `重置次数${syncStates.reset_credit === 'unsupported' ? '不受支持' : '失败'}：${latestAccount.reset_credit_error || String(resetCreditsError?.message || resetCreditsError).slice(0, 260)}`
+        : null
     ].filter(Boolean)
   }
 }
@@ -1575,7 +1773,9 @@ function successfulAccountCheckState(account, snapshot, checkedAt) {
   const poolTier = accountPoolTierState(account)
   const resetWarning = snapshot.reset_credits_synced
     ? null
-    : '账号用量检查成功，但重置次数查询失败；界面会保留上次次数并标明查询错误。'
+    : snapshot.reset_credit_status === 'unsupported'
+      ? '账号用量检查成功，但当前套餐不支持重置次数端点。'
+      : '账号用量检查成功，但重置次数查询失败；界面会保留上次次数并标明查询错误。'
   const reasonWithResetWarning = state => resetWarning
     ? `${ACCOUNT_CHECK_STATE_DETAILS[state].reason} ${resetWarning}`
     : null
@@ -1583,6 +1783,7 @@ function successfulAccountCheckState(account, snapshot, checkedAt) {
     checkedAt,
     usageSynced: true,
     resetCreditsSynced: snapshot.reset_credits_synced,
+    resetCreditStatus: snapshot.reset_credit_status,
     remainingPercent: remaining
   }
 
@@ -1620,7 +1821,11 @@ function successfulAccountCheckState(account, snapshot, checkedAt) {
       reason: '用量接口可以访问，但账号仍保留最近一次模型路由的鉴权失败状态；建议重新官方登录后再检查。'
     })
   }
-  if (account.status === 'cooldown' && Number(account.cooldown_until) > Date.now()) {
+  if (
+    account.status === 'cooldown' &&
+    Number(account.cooldown_until) > Date.now() &&
+    !String(account.last_cooldown_reason || '').startsWith('health_check_')
+  ) {
     return accountCheckResult('rate_limited', common)
   }
   if (remaining != null && remaining <= policy.reserve) {
@@ -1638,27 +1843,52 @@ function successfulAccountCheckState(account, snapshot, checkedAt) {
 function persistAccountCheck(accountId, result) {
   const latestAccount = (proxyConfig.chatgptAccounts || []).find(item => item.id === accountId)
   if (!latestAccount) return result
-  latestAccount.health_check = result
-  if (['banned', 'auth_invalid', 'token_expired', 'incompatible', 'permission_denied'].includes(result.state)) {
+  const previous = latestAccount.health_check || null
+  const health = advanceAccountHealthState(previous, result)
+  latestAccount.health_check = health
+  if (health.disposition === 'disabled') {
     latestAccount.status = 'auth_error'
     latestAccount.auth_error = {
-      type: `health_check_${result.state}`,
-      status: result.http_status,
-      at: result.checked_at
+      type: `health_check_${health.state}`,
+      status: health.http_status,
+      at: health.checked_at
     }
-  } else if (
-    ['quota_exhausted', 'rate_limited'].includes(result.state) &&
-    result.usage_synced !== true
-  ) {
-    const retryAt = Date.parse(result.retry_at || '')
+  } else if (['quarantined', 'permission_review'].includes(health.disposition)) {
+    const retryAt = Date.parse(health.retry_at || '')
     latestAccount.status = 'cooldown'
     latestAccount.cooldown_until = Number.isFinite(retryAt)
       ? retryAt
       : Date.now() + DEFAULT_COOLDOWN_MS
-    latestAccount.last_cooldown_reason = result.state
+    latestAccount.last_cooldown_reason = `health_check_${health.state}`
+  } else if (health.disposition === 'cooldown') {
+    const retryAt = Date.parse(health.retry_at || '')
+    latestAccount.status = 'cooldown'
+    latestAccount.cooldown_until = Number.isFinite(retryAt)
+      ? retryAt
+      : Date.now() + DEFAULT_COOLDOWN_MS
+    latestAccount.last_cooldown_reason = 'rate_limit'
+  } else if (
+    health.disposition === 'waiting_for_reset' &&
+    health.usage_synced !== true
+  ) {
+    const retryAt = Date.parse(health.retry_at || '')
+    latestAccount.status = 'cooldown'
+    latestAccount.cooldown_until = Number.isFinite(retryAt)
+      ? retryAt
+      : Date.now() + DEFAULT_COOLDOWN_MS
+    latestAccount.last_cooldown_reason = 'health_check_quota_exhausted'
+  } else if (
+    ['healthy', 'recovered', 'reserve_blocked', 'waiting_for_reset'].includes(health.disposition) &&
+    latestAccount.status === 'cooldown' &&
+    String(latestAccount.last_cooldown_reason || '').startsWith('health_check_')
+  ) {
+    latestAccount.status = 'active'
+    latestAccount.cooldown_until = null
+    latestAccount.last_cooldown_reason = null
   }
   persistAccount(latestAccount)
-  return result
+  recordAccountHealthEvent(latestAccount, health)
+  return health
 }
 
 export async function checkChatgptAccountStatus(account, fetchImpl = fetch) {
@@ -1679,22 +1909,13 @@ export async function checkChatgptAccountStatus(account, fetchImpl = fetch) {
       return persistAccountCheck(account.id, accountCheckResult('token_expired', { checkedAt }))
     }
 
-    currentAccount.health_check = {
-      state: 'checking',
-      label: '检查中',
-      severity: 'warning',
-      retryable: true,
-      reason: '正在同步账号用量和重置次数。',
-      checked_at: checkedAt
-    }
-    persistAccount(currentAccount)
-
     const latestBeforeRefresh = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || currentAccount
     const snapshot = await refreshAccountQuotaSnapshot(latestBeforeRefresh, fetchImpl)
     if (!snapshot.usage_synced) {
       const result = classifyAccountCheckFailure(snapshot.usage_error, snapshot.account)
       result.checked_at = checkedAt
       result.reset_credits_synced = snapshot.reset_credits_synced
+      result.reset_credit_status = snapshot.reset_credit_status
       if (['quota_exhausted', 'rate_limited'].includes(result.state)) {
         const retryMs = Number(snapshot.usage_error?.retryAfterMs)
         result.retry_at = new Date(
@@ -1725,13 +1946,8 @@ async function refreshAllUsageQuiet() {
     const failure = usageRefreshFailures.get(account.id)
     if (failure?.nextAttemptAt > Date.now()) continue
     try {
-      const snapshot = await refreshAccountQuotaSnapshot(account, chinaFetch(fetch))
-      if (snapshot.usage_error) throw snapshot.usage_error
+      await refreshAccountUsage(account, chinaFetch(fetch))
       usageRefreshFailures.delete(account.id)
-      if (snapshot.reset_credits_error) {
-        console.warn('[codex-proxy] reset-credit refresh failed for %s: %s',
-          account.label || account.id, snapshot.reset_credits_error.message)
-      }
     } catch (error) {
       const failures = Math.min(4, (failure?.failures || 0) + 1)
       usageRefreshFailures.set(account.id, {
@@ -1739,6 +1955,24 @@ async function refreshAllUsageQuiet() {
         nextAttemptAt: Date.now() + GLOBAL_USAGE_REFRESH_MS * Math.pow(2, failures - 1)
       })
       console.error('[codex-proxy] usage refresh failed for %s: %s', account.label || account.id, error.message)
+    }
+    await new Promise(resolve => setTimeout(resolve, 500 + Math.floor(Math.random() * 1000)))
+  }
+}
+
+async function refreshAllResetCreditsQuiet() {
+  for (const account of (proxyConfig.chatgptAccounts || [])) {
+    try {
+      await refreshAccountResetCredits(account, chinaFetch(fetch))
+    } catch (error) {
+      const latest = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || account
+      if (latest.reset_credit_status !== 'unsupported') {
+        console.warn(
+          '[codex-proxy] reset-credit refresh failed for %s: %s',
+          account.label || account.id,
+          error.message
+        )
+      }
     }
     await new Promise(resolve => setTimeout(resolve, 500 + Math.floor(Math.random() * 1000)))
   }
@@ -1778,6 +2012,28 @@ export function repairAccountRuntimeState(now = Date.now()) {
   for (const account of (proxyConfig.chatgptAccounts || [])) {
     let changed = false
     if (enforceDisposableAccountLifecycle(account, now)) changed = true
+    const syncStates = accountSyncStates(account, now)
+    if (account.usage_status !== syncStates.usage) {
+      account.usage_status = syncStates.usage
+      account.usage_sync_status = syncStates.usage
+      changed = true
+    }
+    if (account.usage_error === undefined) {
+      account.usage_error = account.usage_sync_error || null
+      changed = true
+    }
+    if (account.reset_credit_status !== syncStates.reset_credit) {
+      account.reset_credit_status = syncStates.reset_credit
+      changed = true
+    }
+    if (account.reset_credit_updated_at === undefined) {
+      account.reset_credit_updated_at = syncStates.reset_credit_updated_at
+      changed = true
+    }
+    if (account.reset_credit_error === undefined) {
+      account.reset_credit_error = account.reset_credits_error || null
+      changed = true
+    }
     const credential = accountCredentialLifecycle(account, now)
     if (credential.temporary && !credential.compatible) {
       if (account.credential_compatibility !== credential.compatibility) {
@@ -1853,6 +2109,7 @@ export function getAccountRuntimeDiagnostics() {
       cooldown_until: account.cooldown_until || null,
       model_cooldowns: Object.keys(account.model_cooldowns || {}).length,
       usage_forecast: account.usage_forecast || null,
+      sync_states: accountSyncStates(account),
       health_check: account.health_check || null,
       credential: accountCredentialLifecycle(account),
       pool_tier: accountPoolTierState(account)
@@ -1867,5 +2124,6 @@ if (!process.env.NODE_ENV || process.env.NODE_ENV !== 'test') {
   repairAccountRuntimeState()
   setInterval(() => repairAccountRuntimeState(), 60_000).unref()
   scheduleWithJitter(refreshAllUsageQuiet, GLOBAL_USAGE_REFRESH_MS)
+  scheduleWithJitter(refreshAllResetCreditsQuiet, RESET_CREDITS_REFRESH_MS)
   scheduleWithJitter(refreshActiveUsageQuiet, ACTIVE_USAGE_REFRESH_MS)
 }

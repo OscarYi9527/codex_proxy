@@ -112,7 +112,11 @@ function summarize(results) {
   for (const result of results) summary[result.state] = (summary[result.state] || 0) + 1
   const healthy = Number(summary.healthy || 0)
   const issues = results.filter(result =>
-    result.state !== 'healthy' || result.reset_credits_synced !== true
+    result.state !== 'healthy' ||
+    (
+      result.reset_credits_synced !== true &&
+      result.reset_credit_status !== 'unsupported'
+    )
   ).length
   return { summary, healthy, issues }
 }
@@ -407,15 +411,25 @@ export class AccountCheckTaskManager {
           await Promise.all(
             Array.from({ length: Math.min(this.concurrency, candidateIds.length) }, worker)
           )
-          store.appendHealthEvents(batchResults.map(result => ({
+          store.appendHealthEvents(batchResults
+            .filter(result => !result.first_seen_at)
+            .map(result => ({
             id: `${task.id}:${result.id}:${result.checked_at}`,
             account_id: result.id,
             task_id: task.id,
             state: result.state,
+            source: result.source,
+            probe_scope: result.probe_scope,
+            confidence: result.confidence,
+            disposition: result.disposition,
+            first_seen_at: result.first_seen_at,
+            last_seen_at: result.last_seen_at,
+            consecutive_failures: result.consecutive_failures,
             checked_at: result.checked_at,
             http_status: result.http_status,
             error_code: result.error_code,
-            retry_at: result.retry_at
+            retry_at: result.retry_at,
+            recovered_from: result.recovered_from
           })))
         })
         await store.flush()

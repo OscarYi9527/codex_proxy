@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { JsonAccountStore } from '../src/account-store.js'
+import { JsonAccountStore, listAccountHealthEvents } from '../src/account-store.js'
 import { applyAccountUsage, withAccountStore } from '../src/chatgpt-accounts.js'
 import { proxyConfig } from '../src/config.js'
 
@@ -95,6 +95,10 @@ describe('批量账号持久化', () => {
         account_id: 'account-a',
         task_id: 'task-a',
         state: 'healthy',
+        confidence: 'high',
+        disposition: 'recovered',
+        consecutive_failures: 0,
+        recovered_from: 'temporary_unavailable',
         checked_at: '2026-07-21T00:00:00.000Z',
         access_token: 'must-not-be-persisted'
       }])
@@ -103,6 +107,12 @@ describe('批量账号持久化', () => {
       assert.strictEqual(result.health_event_writes, 1)
       assert.strictEqual(saved.events.length, 1)
       assert.strictEqual(saved.events[0].account_id, 'account-a')
+      assert.strictEqual(saved.events[0].confidence, 'high')
+      assert.strictEqual(saved.events[0].disposition, 'recovered')
+      assert.strictEqual(
+        listAccountHealthEvents('account-a', { filePath: healthEventsFile })[0].recovered_from,
+        'temporary_unavailable'
+      )
       assert.ok(!JSON.stringify(saved).includes('must-not-be-persisted'))
     } finally {
       fs.rmSync(directory, { recursive: true, force: true })

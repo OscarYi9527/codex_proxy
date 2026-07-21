@@ -25,7 +25,7 @@ import { saveStats } from './stats.js'
 import { initializeProviderHealth, saveProviderHealth } from './provider-health.js'
 import { listHttpErrorGuides } from './error-guide.js'
 import { executeRoutingPlan, VIRTUAL_MODELS } from './smart-routing.js'
-import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountsImport, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginPreflight, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountsCheckAll, handleChatgptAccountCheckTasksList, handleChatgptAccountCheckTaskGet, handleChatgptAccountCheckTaskCancel, handleChatgptAccountCheckTaskResume, handleChatgptAccountResetCreditsGet, handleChatgptAccountsRefreshResetCreditsAll, handleChatgptAccountResetQuota, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleAutomaticDiagnosisGet, handlePriceCatalogGet, handlePriceCatalogPut, handleCostReportGet, handleRuntimeInfoGet, handleDeployUpdate, handleAccountBackupsGet, handleConfigSnapshotsGet, handleAccountBackupRestore, handleConfigRollback, handleProviderHealthReset, handleRuntimeRepair, handleProxyRestart } from './admin.js'
+import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountsImport, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginPreflight, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountsCheckAll, handleChatgptAccountCheckTasksList, handleChatgptAccountCheckTaskGet, handleChatgptAccountCheckTaskCancel, handleChatgptAccountCheckTaskResume, handleChatgptAccountHealthEventsGet, handleChatgptAccountResetCreditsGet, handleChatgptAccountsRefreshResetCreditsAll, handleChatgptAccountResetQuota, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleAutomaticDiagnosisGet, handlePriceCatalogGet, handlePriceCatalogPut, handleCostReportGet, handleRuntimeInfoGet, handleDeployUpdate, handleAccountBackupsGet, handleConfigSnapshotsGet, handleAccountBackupRestore, handleConfigRollback, handleProviderHealthReset, handleRuntimeRepair, handleProxyRestart } from './admin.js'
 import { parseProxyMode } from './mode.js'
 import {
   accountCheckTaskManager,
@@ -366,6 +366,16 @@ export function createServer({
     const refreshUsageMatch = url.pathname.match(/^\/admin\/api\/chatgpt-accounts\/([^/]+)\/refresh-usage$/)
     if (req.method === 'POST' && refreshUsageMatch) {
       return handleChatgptAccountRefreshUsage(req, res, decodeURIComponent(refreshUsageMatch[1]))
+    }
+    const accountHealthEventsMatch = url.pathname.match(
+      /^\/admin\/api\/chatgpt-accounts\/([^/]+)\/health-events$/
+    )
+    if (req.method === 'GET' && accountHealthEventsMatch) {
+      return handleChatgptAccountHealthEventsGet(
+        req,
+        res,
+        decodeURIComponent(accountHealthEventsMatch[1])
+      )
     }
     const resetCreditsMatch = url.pathname.match(/^\/admin\/api\/chatgpt-accounts\/([^/]+)\/reset-credits$/)
     if (req.method === 'POST' && resetCreditsMatch) {

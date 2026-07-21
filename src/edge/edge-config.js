@@ -12,6 +12,14 @@ export const EDGE_ALLOWED_STATES = Object.freeze([
   'password_change_required'
 ])
 
+function assertTlsVerificationEnabled(env) {
+  if (env.NODE_TLS_REJECT_UNAUTHORIZED !== '0') return
+  throw new Error(
+    'TLS certificate verification is disabled by NODE_TLS_REJECT_UNAUTHORIZED=0. ' +
+    'Remove this variable before starting Edge; use NODE_EXTRA_CA_CERTS for a trusted custom CA.'
+  )
+}
+
 function parsePort(value, fallback) {
   const port = value ? Number(value) : fallback
   if (!Number.isInteger(port) || port < 1024 || port > 65535 || port === 47892) {
@@ -43,6 +51,7 @@ function isolatedDataRoot(value, repositoryRoot, environment) {
 
 export function loadEdgeConfig(env = process.env, options = {}) {
   const environment = env.NODE_ENV === 'production' ? 'production' : 'development'
+  assertTlsVerificationEnabled(env)
   const authMode = env.AI_EDITOR_EDGE_AUTH_MODE === 'mock' ? 'mock' : 'real'
   if (environment === 'production' && authMode === 'mock') {
     throw new Error('Mock authentication is forbidden in production Edge mode')

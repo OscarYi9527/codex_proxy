@@ -162,6 +162,7 @@ npm audit --omit=dev --audit-level=moderate: 0 vulnerabilities
 ```
 
 分支覆盖率尚未达到 80%，低覆盖模块和下一阶段 N001–N024 需求见
-[`NEXT_DEVELOPMENT_ROADMAP.md`](NEXT_DEVELOPMENT_ROADMAP.md)。审计时开发 shell 检测到
-继承的 `NODE_TLS_REJECT_UNAUTHORIZED=0`；standalone 安装启动器会覆盖为 1，但
-Gateway/Edge 开发启动仍需完成 N006 的显式 TLS fail-closed 门禁。
+[`NEXT_DEVELOPMENT_ROADMAP.md`](NEXT_DEVELOPMENT_ROADMAP.md)，实时执行状态见
+[`DEVELOPMENT_EXECUTION_PLAN.md`](DEVELOPMENT_EXECUTION_PLAN.md)。Gateway/Edge 已完成
+N006：开发脚本显式启用 TLS 校验，配置加载和发布检查遇到
+`NODE_TLS_REJECT_UNAUTHORIZED=0` 会 fail-closed。

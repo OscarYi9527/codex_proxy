@@ -1,5 +1,8 @@
 # Codex Proxy 下一阶段开发需求深挖与路线图
 
+> 实际执行状态、依赖和验收证据统一维护在
+> [`DEVELOPMENT_EXECUTION_PLAN.md`](DEVELOPMENT_EXECUTION_PLAN.md)；本文保留需求背景和设计细节。
+
 日期：2026-07-21<br>
 审计基线：`feature/ai-editor-account-gateway@c75dcd9`<br>
 适用范围：standalone 账号池、AI Editor Gateway/Edge、React 管理端、运维与安全门禁

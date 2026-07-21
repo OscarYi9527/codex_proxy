@@ -113,7 +113,24 @@ try {
     }
     $sharedBefore = Get-NetTCPConnection -LocalPort 47892 -State Listen -ErrorAction SilentlyContinue |
         Select-Object -First 1
-    & $start -Mode all -DataRoot $lifecycleRoot -GatewayPort 47920 -EdgePort 47921 -AuthenticationMode mock
+    $previousTlsVerification = [Environment]::GetEnvironmentVariable(
+        'NODE_TLS_REJECT_UNAUTHORIZED',
+        [EnvironmentVariableTarget]::Process
+    )
+    try {
+        [Environment]::SetEnvironmentVariable(
+            'NODE_TLS_REJECT_UNAUTHORIZED',
+            '0',
+            [EnvironmentVariableTarget]::Process
+        )
+        & $start -Mode all -DataRoot $lifecycleRoot -GatewayPort 47920 -EdgePort 47921 -AuthenticationMode mock
+    } finally {
+        [Environment]::SetEnvironmentVariable(
+            'NODE_TLS_REJECT_UNAUTHORIZED',
+            $previousTlsVerification,
+            [EnvironmentVariableTarget]::Process
+        )
+    }
     Assert-Throws -Message 'A second start must not overwrite live PID metadata' -Action {
         & $start -Mode all -DataRoot $lifecycleRoot -GatewayPort 47920 -EdgePort 47921 -AuthenticationMode mock
     }

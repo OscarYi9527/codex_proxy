@@ -45,16 +45,15 @@
 NODE_TLS_REJECT_UNAUTHORIZED=0
 ```
 
-运行 Gateway/Edge 开发脚本前也应确认父 PowerShell 没有继承该变量：
+Gateway/Edge 配置加载和 `npm run release:check` 检测到该值时会直接拒绝继续。隔离开发
+脚本还会对子进程显式设置安全值，防止父 PowerShell 的错误配置被继承。仍建议清理父进程：
 
 ```powershell
 Remove-Item Env:NODE_TLS_REJECT_UNAUTHORIZED -ErrorAction SilentlyContinue
 ```
 
-standalone 的 VBS 启动器会显式开启证书校验；Gateway/Edge 启动链路仍需按
-[`docs/NEXT_DEVELOPMENT_ROADMAP.md`](docs/NEXT_DEVELOPMENT_ROADMAP.md) 的 N006
-补充 fail-closed 环境门禁。在 N006 完成前，不要用继承了禁用 TLS 校验环境的进程进行
-真实登录、Provider 凭据提交或生产联调。
+自定义 CA 只能通过系统证书存储或 `NODE_EXTRA_CA_CERTS` 接入。不要通过修改启动脚本或
+配置加载器绕过该门禁。
 
 ## 诊断报告
 

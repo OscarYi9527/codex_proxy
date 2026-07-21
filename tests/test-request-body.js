@@ -102,8 +102,11 @@ describe('request body upload safety', () => {
         response.writeHead(200).end()
       } catch (error) {
         response.writeHead(error.statusCode || 500, {
-          'content-type': 'application/json',
-          connection: 'close'
+          // Match the production sendJson boundary: keep the socket available
+          // while req.resume() drains the upload. Forcing Connection: close
+          // races undici's in-flight request body and intermittently turns
+          // the intended 413 response into a client-side ECONNRESET.
+          'content-type': 'application/json'
         })
         response.end(JSON.stringify({
           type: error.type,

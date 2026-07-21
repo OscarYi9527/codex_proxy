@@ -108,17 +108,18 @@ services:
       - ./state/cloudflared:/etc/cloudflared:ro
 
   mihomo:
-    image: ${AI_EDITOR_MIHOMO_IMAGE:-metacubex/mihomo:stable}
+    image: ${AI_EDITOR_MIHOMO_IMAGE:-metacubex/mihomo:latest}
     profiles:
       - clash
     network_mode: host
     restart: unless-stopped
+    user: "${AI_EDITOR_PREVIEW_UID:-1000}:${AI_EDITOR_PREVIEW_GID:-1000}"
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     command:
       - -d
-      - /root/.config/mihomo
+      - /etc/mihomo
     volumes:
-      - ./state/mihomo:/root/.config/mihomo
+      - ./state/mihomo:/etc/mihomo

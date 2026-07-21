@@ -62,8 +62,10 @@ socket 解耦，给后续 T061+ 结算 hook 保留完成或对账机会。
 
 ### 当前架构缺口
 
-- standalone 全账号检查仍在单个管理 HTTP 请求内执行，并通过 `persistAccount()` 多次重写
-  整份加密配置；大号池下一步必须改为后台任务、批量 patch 和独立健康事件存储。
+- standalone 已将全账号检查迁入持久化后台任务，支持进度、取消、超时隔离和重启恢复；
+  `JsonAccountStore` 通过 AsyncLocalStorage 捕获现有账号更新，每 20 个账号合并 patch，
+  每批最多重写一次加密配置，并把脱敏健康事件写入独立 sidecar。N003 仍需在此基础上
+  补齐连续失败、置信度和完整恢复状态机。
 - Gateway 的积分、风险和审计表已经迁移，但 `RequestPreflight` 尚未预留 Turn 风险，
   `ResponsesGateway` 尚未结算或对账，`AccountService` 的积分仍是固定零值。
 - 组织和邀请码 React 页面仍为占位；跨组织 repository 约束、最后 Level-1 保护和正文
@@ -289,7 +291,10 @@ flowchart TD
 | `POST` | `/admin/api/deploy-update` | 启动本机安全部署流程 |
 | `GET` | `/admin/api/chatgpt-login/preflight` | CLI、OAuth app-server 与浏览器预检 |
 | `POST` | `/admin/api/chatgpt-accounts/refresh-usage-all` | 同步全池用量与重置次数 |
-| `POST` | `/admin/api/chatgpt-accounts/check-all` | 非消耗式逐号状态检查和故障分类 |
+| `POST` | `/admin/api/chatgpt-accounts/check-all` | 创建/复用非消耗式账号检查任务 |
+| `GET` | `/admin/api/chatgpt-accounts/check-tasks[/:id]` | 最近任务或指定任务进度/结果 |
+| `POST` | `/admin/api/chatgpt-accounts/check-tasks/:id/cancel` | 协作式取消任务 |
+| `POST` | `/admin/api/chatgpt-accounts/check-tasks/:id/resume` | 从最后批次恢复任务 |
 | `GET` | `/admin/api/config-snapshots` | 配置快照列表 |
 | `POST` | `/admin/api/config-rollback` | 回滚快照 |
 | `GET` | `/admin/api/account-backups` | 加密账号备份列表 |

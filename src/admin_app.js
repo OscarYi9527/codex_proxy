@@ -1,6 +1,6 @@
 const API = '/admin/api'
 let cfg = {}, statsData = { providers: {} }, diagnosticsData = { accounts: [], queue: {}, config_snapshots: [], account_backups: [], recent_route_decisions: [], provider_health: {providers:{}}, credential_protection: {}, circuits: [] }, modelCatalog = [], activePage = location.hash.slice(1) || 'overview'
-let pingResults = {}, modal = null, loginPoll = null, accountsPoll = null, draggedAccountId = null, resetQuotaSubmitting = false
+let pingResults = {}, modal = null, loginPoll = null, accountsPoll = null, accountCheckPoll = null, draggedAccountId = null, resetQuotaSubmitting = false
 let errorGuideData = []
 let loginPreflightData = null
 let priceCatalogData = { prices: {} }, costReportData = { providers: {} }
@@ -464,6 +464,8 @@ function closeModal(){
   activeLoginUi=null
   if(loginPoll)clearInterval(loginPoll)
   loginPoll=null
+  if(accountCheckPoll)clearTimeout(accountCheckPoll)
+  accountCheckPoll=null
   for(const file of accountImportFiles)file.content=''
   accountImportFiles=[];accountImportFileName=''
   clearBatchLoginSecrets()
@@ -1055,16 +1057,83 @@ function accountCheckResultsHtml(result){
   }).join('')
   return `<div class="help-note"><b>非消耗式状态检查</b><p>只验证凭据、账号用量和重置次数端点，不发送模型请求，因此“基础检查正常”不代表所有模型权限都一定可用。</p><p>${esc(summaryText||'没有账号')}</p></div><div style="display:grid;gap:7px;margin-top:12px;max-height:58vh;overflow:auto">${rows||'<span class="cell-sub">账号池为空</span>'}</div>`
 }
+function accountCheckTaskHtml(task){
+  const statusLabels={queued:'排队中',running:'检查中',cancelling:'正在取消',cancelled:'已取消',completed:'已完成',failed:'失败',interrupted:'等待恢复'}
+  const percent=Math.max(0,Math.min(100,Number(task?.progress_percent)||0))
+  const current=(task?.current_accounts||[]).map(account=>account.label||account.id).join('、')
+  const progress=`<div class="help-note"><b>后台检查任务 · ${esc(statusLabels[task?.status]||task?.status||'未知')}</b><p>进度 ${Number(task?.processed||0)} / ${Number(task?.total||0)}，可关闭窗口后继续在后台执行。${current?`<br>当前：${esc(current)}`:''}</p><div style="height:8px;border-radius:999px;background:var(--border);overflow:hidden"><i style="display:block;height:100%;width:${percent}%;background:var(--primary);transition:width .2s"></i></div>${task?.error?`<p style="color:var(--red)">${esc(task.error)}</p>`:''}</div>`
+  return progress+(task?.accounts?.length?`<div style="margin-top:12px">${accountCheckResultsHtml(task)}</div>`:'')
+}
+function updateAccountCheckModal(task){
+  if(!modal||modal.dataset.accountCheckTask!==task.id){
+    showModal('全部账号状态检查',accountCheckTaskHtml(task),'取消任务',`cancelAccountCheckTask('${esc(task.id)}')`)
+    if(modal)modal.dataset.accountCheckTask=task.id
+  }else{
+    const body=modal.querySelector('.modal-body')
+    if(body)body.innerHTML=accountCheckTaskHtml(task)
+  }
+  const primary=modal?.querySelector('.modal-foot .btn-primary')
+  if(!primary)return
+  if(task.can_cancel){
+    primary.textContent='取消任务'
+    primary.setAttribute('onclick',`cancelAccountCheckTask('${esc(task.id)}')`)
+    primary.disabled=false
+  }else if(task.can_resume){
+    primary.textContent='恢复任务'
+    primary.setAttribute('onclick',`resumeAccountCheckTask('${esc(task.id)}')`)
+    primary.disabled=false
+  }else{
+    primary.textContent='完成'
+    primary.setAttribute('onclick','closeModal()')
+    primary.disabled=false
+  }
+}
+async function pollAccountCheckTask(taskId){
+  if(!modal||modal.dataset.accountCheckTask!==taskId)return
+  try{
+    const r=await fetch(API+'/chatgpt-accounts/check-tasks/'+encodeURIComponent(taskId),{cache:'no-store'}),d=await r.json()
+    if(!r.ok)throw new Error(d.error?.message||'读取账号检查进度失败')
+    if(d.config)cfg=d.config
+    updateAccountCheckModal(d.task)
+    if(['completed','cancelled','failed','interrupted'].includes(d.task.status)){
+      accountCheckPoll=null
+      if(d.config)render()
+      try{const diagnostics=await fetch(API+'/diagnostics',{cache:'no-store'});if(diagnostics.ok)diagnosticsData=await diagnostics.json()}catch{}
+      toast(d.message||'账号检查任务已结束',d.task.issues||d.task.status==='failed'?'error':'success')
+      return
+    }
+    accountCheckPoll=setTimeout(()=>pollAccountCheckTask(taskId),750)
+  }catch(e){
+    accountCheckPoll=setTimeout(()=>pollAccountCheckTask(taskId),2000)
+    toast(e.message,'error')
+  }
+}
 async function checkAllAccountStatus(){
-  toast('正在逐个检查全部账号状态，请勿重复点击…')
+  toast('正在创建后台账号检查任务…')
   try{
     const r=await fetch(API+'/chatgpt-accounts/check-all',{method:'POST'}),d=await r.json()
     if(!r.ok)throw new Error(d.error?.message||'账号状态检查失败')
-    cfg=d.config
-    try{const diagnostics=await fetch(API+'/diagnostics',{cache:'no-store'});if(diagnostics.ok)diagnosticsData=await diagnostics.json()}catch{}
-    render()
-    showModal('全部账号状态检查',accountCheckResultsHtml(d.result),'完成','closeModal()')
-    toast(d.message||'账号状态检查完成',d.result?.issues?'error':'success')
+    updateAccountCheckModal(d.task)
+    toast(d.message||'账号检查任务已创建')
+    accountCheckPoll=setTimeout(()=>pollAccountCheckTask(d.task.id),250)
+  }catch(e){toast(e.message,'error')}
+}
+async function cancelAccountCheckTask(taskId){
+  try{
+    const r=await fetch(API+'/chatgpt-accounts/check-tasks/'+encodeURIComponent(taskId)+'/cancel',{method:'POST'}),d=await r.json()
+    if(!r.ok)throw new Error(d.error?.message||'取消账号检查失败')
+    updateAccountCheckModal(d.task)
+    toast(d.message||'已请求取消账号检查')
+    if(!accountCheckPoll)accountCheckPoll=setTimeout(()=>pollAccountCheckTask(taskId),250)
+  }catch(e){toast(e.message,'error')}
+}
+async function resumeAccountCheckTask(taskId){
+  try{
+    const r=await fetch(API+'/chatgpt-accounts/check-tasks/'+encodeURIComponent(taskId)+'/resume',{method:'POST'}),d=await r.json()
+    if(!r.ok)throw new Error(d.error?.message||'恢复账号检查失败')
+    updateAccountCheckModal(d.task)
+    toast(d.message||'账号检查任务已恢复')
+    accountCheckPoll=setTimeout(()=>pollAccountCheckTask(taskId),250)
   }catch(e){toast(e.message,'error')}
 }
 function updateAccountPoolTierPolicyForm(){

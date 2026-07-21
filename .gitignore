@@ -37,6 +37,8 @@ patch-official-codex-app-model-filter.js
 codex-proxy-config.json
 codex-proxy-stats.json
 codex-proxy-provider-health.json
+codex-proxy-account-check-tasks.json
+codex-proxy-account-health-events.json
 models-test.json
 .credential-key.dpapi.json
 .config-backups/

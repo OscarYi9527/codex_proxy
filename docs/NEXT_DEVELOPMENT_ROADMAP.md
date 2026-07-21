@@ -11,9 +11,9 @@
 
 下一阶段不应继续堆叠零散页面功能，而应先补齐四条主链路：
 
-1. **standalone 大号池治理要从“同步 HTTP 请求 + 整份 JSON 重写”升级为可恢复任务和批量持久化。**
-   当前逐号状态检查已经能区分封禁、鉴权、权限、额度、限流和网络故障，但大量账号检查时，
-   每个账号会多次重写并热重载整份配置，规模增大后会放大磁盘、锁竞争和中途失败风险。
+1. **standalone 大号池治理正在从“同步 HTTP 请求 + 整份 JSON 重写”升级为完整健康状态机。**
+   N001/N002 已完成可恢复任务、进度/取消 API 和每批一次的账号 patch；下一步是 N003/N004
+   的连续失败、置信度、恢复状态机和 usage/reset-credit 四态语义。
 2. **Gateway 的积分、Turn 风险和结算是当前最大的产品功能缺口。**
    数据表已经存在，但请求预检只验证登录、设备、Turn ID 和模型；Responses 完成后没有
    风险释放、实际/估算用量落库或幂等结算。管理页面显示的积分仍是固定零值。
@@ -31,8 +31,8 @@
 
 | 发现 | 代码证据 | 影响 |
 |---|---|---|
-| 全账号检查是同步长请求 | `POST /admin/api/chatgpt-accounts/check-all` 在请求内以 2 个 worker 跑完整池 | 大池检查无法查询进度、取消或断点恢复；浏览器断开后结果不直观 |
-| 账号状态会多次重写整份配置 | `persistAccount()` 最终调用 `upsertChatgptAccount()`、`saveProxyConfig()` 和 `reloadProxyConfig()` | 账号数增加时写放大明显；检查中途失败时难以表达批次一致性 |
+| 全账号检查曾是同步长请求（N001 已修复） | `POST /admin/api/chatgpt-accounts/check-all` 现创建持久化任务 | 当前可查询进度、取消，并从最后提交批次恢复 |
+| 账号状态曾多次重写整份配置（N002 已修复） | `JsonAccountStore` 捕获 patch，每 20 个账号 flush | 当前每批最多一次敏感配置写入，并保留并发更新字段 |
 | 状态只有最后一次快照 | 每账号仅保存一个 `health_check` | 无法判断连续失败次数、首次发生时间、恢复趋势和自动处置置信度 |
 | 用量与重置次数已能独立同步 | `refreshAccountQuotaSnapshot()` 分别保存 usage/reset-credit 成功与错误 | 基础语义正确，下一步需要“不支持/失败/陈旧”三态和独立调度周期 |
 | Gateway 积分仍为占位 | `AccountService.status()`、`me()` 返回固定 `0.000000` | 前端显示不代表真实可用余额 |
@@ -43,7 +43,7 @@
 | Provider 凭据只能明文开发 | `ProviderService.addCredential()` 固定写入 `plaintext-v1` | production/non-loopback 启动被安全策略拒绝 |
 | Gateway 仍复用进程内 standalone adapter | `StandaloneRouteAdapter` 动态导入 `src/server.js` 并复制 `chatgptAccounts` | 新增的分级、健康和账号历史没有中央数据库边界 |
 | Gateway 测试分支覆盖率不足 | 2026-07-21：statements 88.80%，branches 70.23%；`account-usage-routes`、`management-shell`、登录异常分支偏低 | “新增代码覆盖率 80%”若包含分支覆盖率，当前尚未达标 |
-| 当前开发 shell 继承了禁用 TLS 的环境变量 | `npm audit` 显示 `NODE_TLS_REJECT_UNAUTHORIZED=0` 警告；standalone VBS 会强制设为 1，但 AI Editor 开发子进程会继承父环境 | Gateway/Edge 开发链路可能在错误环境中关闭证书验证；必须显式 fail-closed |
+| 审计时开发 shell 继承了禁用 TLS 的环境变量（N006 已修复） | Gateway/Edge 配置、开发脚本和发布门禁均显式保护 TLS 校验 | 禁用证书验证时启动/发布检查 fail-closed |
 
 ## 3. P0：standalone 大号池运维加固
 
@@ -52,9 +52,11 @@
 将同步 `check-all` 演进为任务 API：
 
 ```text
-POST   /admin/api/chatgpt-account-check-jobs
-GET    /admin/api/chatgpt-account-check-jobs/:jobId
-POST   /admin/api/chatgpt-account-check-jobs/:jobId/cancel
+POST   /admin/api/chatgpt-accounts/check-all
+GET    /admin/api/chatgpt-accounts/check-tasks
+GET    /admin/api/chatgpt-accounts/check-tasks/:taskId
+POST   /admin/api/chatgpt-accounts/check-tasks/:taskId/cancel
+POST   /admin/api/chatgpt-accounts/check-tasks/:taskId/resume
 ```
 
 要求：
@@ -66,6 +68,9 @@ POST   /admin/api/chatgpt-account-check-jobs/:jobId/cancel
 - 结果不保存上游原始正文，只保存规范化状态、HTTP 状态、错误码和安全原因。
 
 验收：300 个模拟账号可查看进度、取消、恢复；超时账号不会阻塞整个任务；不泄露 Token。
+
+状态：**已完成**。默认并发 2，可通过受限环境变量配置为 1–4；任务包含账号级总超时和
+账号间抖动，进程重启后自动恢复最近的中断任务。
 
 ### N002：批量账号持久化与写合并
 
@@ -82,6 +87,10 @@ POST   /admin/api/chatgpt-account-check-jobs/:jobId/cancel
 
 验收：全池检查的配置写次数从“每账号多次”降到“每批次一次”；崩溃注入测试不会产生
 半写 JSON、丢账号或回退旧 Token。
+
+状态：**已完成**。`JsonAccountStore` 已实现 `patchAccount`、`patchMany`、
+`appendHealthEvents`、`captureAccount` 和 `flush`；全账号检查及全池用量/重置次数同步
+均按最多 20 个账号提交，字段级 patch 不会回退并发改名或 Refresh Token 轮换。
 
 ### N003：健康状态机、证据与恢复
 

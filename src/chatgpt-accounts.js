@@ -3,10 +3,15 @@
 // `~/.codex/auth.json`, and rotates between them when the upstream reports
 // the active account is rate-limited / over quota.
 
+import { AsyncLocalStorage } from 'node:async_hooks'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { proxyConfig, upsertChatgptAccount as persistAccount, deleteChatgptAccount as removeAccount } from './config.js'
+import {
+  proxyConfig,
+  upsertChatgptAccount as persistAccountImmediately,
+  deleteChatgptAccount as removeAccount
+} from './config.js'
 import { id } from './server-utils.js'
 import { chinaFetch, withChinaDispatcher } from './china-fetch.js'
 import { getStats, statsDayKey } from './stats.js'
@@ -42,6 +47,24 @@ const usageRefreshInFlight = new Map()
 const resetCreditsRefreshInFlight = new Map()
 const accountStatusCheckInFlight = new Map()
 const resetCreditConsumeInFlight = new Set()
+const accountPersistenceScope = new AsyncLocalStorage()
+
+function persistAccount(account) {
+  const store = accountPersistenceScope.getStore()
+  if (store) {
+    store.captureAccount(account)
+    return proxyConfig
+  }
+  return persistAccountImmediately(account)
+}
+
+export function withAccountStore(store, callback) {
+  if (!store || typeof store.captureAccount !== 'function' || typeof store.flush !== 'function') {
+    throw new Error('Account store must support captureAccount() and flush()')
+  }
+  if (typeof callback !== 'function') throw new Error('Account store callback is required')
+  return accountPersistenceScope.run(store, callback)
+}
 let roundRobinCursor = 0
 
 export const ACCOUNT_ROUTING_STRATEGIES = [

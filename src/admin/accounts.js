@@ -1,12 +1,37 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { proxyConfig, setActiveChatgptAccount, reorderChatgptAccounts, renameChatgptAccount, setChatgptAccountRouting } from '../config.js'
-import { accountCredentialLifecycle, accountPoolTierState, addChatgptAccount, checkChatgptAccountStatus, consumeAccountResetCredit, deleteChatgptAccount, ensureFreshToken, parseAuthJson, refreshAccountQuotaSnapshot, refreshAccountResetCredits, refreshAccountUsage } from '../chatgpt-accounts.js'
+import { accountCredentialLifecycle, accountPoolTierState, addChatgptAccount, consumeAccountResetCredit, deleteChatgptAccount, ensureFreshToken, parseAuthJson, refreshAccountQuotaSnapshot, refreshAccountResetCredits, refreshAccountUsage, withAccountStore } from '../chatgpt-accounts.js'
 import { sendJson } from '../server-utils.js'
 import { chinaFetch } from '../china-fetch.js'
 import { getCodexAuthFile, isLocalAdminRequest, killLocalCodexProcesses } from './login.js'
 import { publicProxyConfig } from './shared.js'
 import { parseChatgptAccountImport } from '../account-import.js'
+import { accountCheckTaskManager } from '../account-check-tasks.js'
+import { JsonAccountStore } from '../account-store.js'
+
+async function runBatchedAccountOperation(accounts, operation, {
+  batchSize = 20,
+  concurrency = 2
+} = {}) {
+  for (let offset = 0; offset < accounts.length; offset += batchSize) {
+    const batch = accounts.slice(offset, offset + batchSize)
+    const store = new JsonAccountStore()
+    let cursor = 0
+    await withAccountStore(store, async () => {
+      const worker = async () => {
+        while (cursor < batch.length) {
+          const account = batch[cursor++]
+          await operation(account)
+        }
+      }
+      await Promise.all(
+        Array.from({ length: Math.min(concurrency, batch.length) }, worker)
+      )
+    })
+    await store.flush()
+  }
+}
 
 export async function handleChatgptAccountAdd(req, res, body) {
   try {
@@ -292,10 +317,8 @@ export async function handleChatgptAccountsRefreshAll(req, res) {
   const errors = []
   let usageSynced = 0
   let resetCreditsSynced = 0
-  let cursor = 0
-  const worker = async () => {
-    while (cursor < accounts.length) {
-      const account = accounts[cursor++]
+  try {
+    await runBatchedAccountOperation(accounts, async account => {
       try {
         const snapshot = await refreshAccountQuotaSnapshot(account, chinaFetch(fetch))
         if (snapshot.usage_synced) usageSynced++
@@ -306,9 +329,12 @@ export async function handleChatgptAccountsRefreshAll(req, res) {
       } catch (error) {
         errors.push(`${account.label || account.id}: ${error.message}`)
       }
-    }
+    })
+  } catch (error) {
+    return sendJson(res, 500, {
+      error: { type: 'server_error', message: `批量账号状态写入失败：${error.message}` }
+    })
   }
-  await Promise.all(Array.from({ length: Math.min(2, accounts.length) }, worker))
   const masked = publicProxyConfig(proxyConfig)
   return sendJson(res, 200, {
     config: masked,
@@ -324,64 +350,97 @@ export async function handleChatgptAccountsRefreshAll(req, res) {
   })
 }
 
-export async function handleChatgptAccountsCheckAll(req, res) {
-  const accounts = proxyConfig.chatgptAccounts || []
-  const results = []
-  let cursor = 0
-  const worker = async () => {
-    while (cursor < accounts.length) {
-      const account = accounts[cursor++]
-      try {
-        const check = await checkChatgptAccountStatus(account, chinaFetch(fetch))
-        results.push({
-          id: account.id,
-          account_label: account.label || account.email || account.account_id || account.id,
-          routing_enabled: account.routing_enabled !== false,
-          ...check
-        })
-      } catch (error) {
-        results.push({
-          id: account.id,
-          account_label: account.label || account.email || account.account_id || account.id,
-          routing_enabled: account.routing_enabled !== false,
-          state: 'unknown_error',
-          label: '未知异常',
-          severity: 'warning',
-          retryable: true,
-          reason: String(error?.message || error).slice(0, 300),
-          checked_at: new Date().toISOString(),
-          http_status: Number(error?.status) || null,
-          error_code: error?.code || null,
-          usage_synced: false,
-          reset_credits_synced: false,
-          remaining_percent: null
-        })
-      }
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(2, accounts.length) }, worker))
-  const order = new Map(accounts.map((account, index) => [account.id, index]))
-  results.sort((left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0))
-  const summary = results.reduce((counts, result) => {
-    counts[result.state] = (counts[result.state] || 0) + 1
-    return counts
-  }, {})
-  const healthy = Number(summary.healthy || 0)
-  const issues = results.filter(result =>
-    result.state !== 'healthy' || result.reset_credits_synced !== true
-  ).length
-  return sendJson(res, 200, {
-    config: publicProxyConfig(proxyConfig),
-    result: {
-      checked: results.length,
-      healthy,
-      issues,
-      summary,
-      accounts: results,
-      probe_scope: 'credential_usage_and_reset_credits_without_model_request'
-    },
-    message: `状态检查完成：基础正常 ${healthy}，需要关注 ${issues}`
+export function handleChatgptAccountsCheckAll(
+  req,
+  res,
+  taskManager = accountCheckTaskManager
+) {
+  const started = taskManager.start()
+  return sendJson(res, 202, {
+    task: started.task,
+    result: started.task,
+    created: started.created,
+    message: started.created
+      ? `账号检查任务已创建，共 ${started.task.total} 个账号`
+      : '已有账号检查任务正在执行，已返回当前进度'
   })
+}
+
+export function handleChatgptAccountCheckTasksList(
+  req,
+  res,
+  taskManager = accountCheckTaskManager
+) {
+  return sendJson(res, 200, { tasks: taskManager.list() })
+}
+
+export function handleChatgptAccountCheckTaskGet(
+  req,
+  res,
+  taskId,
+  taskManager = accountCheckTaskManager
+) {
+  const task = taskManager.get(taskId)
+  if (!task) {
+    return sendJson(res, 404, {
+      error: { type: 'not_found_error', message: '账号检查任务不存在' }
+    })
+  }
+  const terminal = ['completed', 'cancelled', 'failed', 'interrupted'].includes(task.status)
+  return sendJson(res, 200, {
+    task,
+    result: task,
+    ...(terminal ? { config: publicProxyConfig(proxyConfig) } : {}),
+    message: task.status === 'completed'
+      ? `状态检查完成：基础正常 ${task.healthy}，需要关注 ${task.issues}`
+      : `状态检查进度：${task.processed}/${task.total}`
+  })
+}
+
+export function handleChatgptAccountCheckTaskCancel(
+  req,
+  res,
+  taskId,
+  taskManager = accountCheckTaskManager
+) {
+  const task = taskManager.cancel(taskId)
+  if (!task) {
+    return sendJson(res, 404, {
+      error: { type: 'not_found_error', message: '账号检查任务不存在' }
+    })
+  }
+  return sendJson(res, 202, {
+    task,
+    result: task,
+    message: task.status === 'cancelled'
+      ? '账号检查任务已取消'
+      : '已请求取消；当前在途账号完成后停止'
+  })
+}
+
+export function handleChatgptAccountCheckTaskResume(
+  req,
+  res,
+  taskId,
+  taskManager = accountCheckTaskManager
+) {
+  try {
+    const task = taskManager.resume(taskId)
+    if (!task) {
+      return sendJson(res, 404, {
+        error: { type: 'not_found_error', message: '账号检查任务不存在' }
+      })
+    }
+    return sendJson(res, 202, {
+      task,
+      result: task,
+      message: '账号检查任务已从最后一个提交批次恢复'
+    })
+  } catch (error) {
+    return sendJson(res, 409, {
+      error: { type: 'conflict_error', message: error.message }
+    })
+  }
 }
 
 export async function handleChatgptAccountSwitch(req, res, accountId) {
@@ -459,18 +518,19 @@ export async function handleChatgptAccountResetCreditsGet(req, res, accountId) {
 export async function handleChatgptAccountsRefreshResetCreditsAll(req, res) {
   const accounts = proxyConfig.chatgptAccounts || []
   const errors = []
-  let cursor = 0
-  const worker = async () => {
-    while (cursor < accounts.length) {
-      const account = accounts[cursor++]
+  try {
+    await runBatchedAccountOperation(accounts, async account => {
       try {
         await refreshAccountResetCredits(account, chinaFetch(fetch))
       } catch (error) {
         errors.push(`${account.label || account.id}: ${error.message}`)
       }
-    }
+    })
+  } catch (error) {
+    return sendJson(res, 500, {
+      error: { type: 'server_error', message: `批量重置次数写入失败：${error.message}` }
+    })
   }
-  await Promise.all(Array.from({ length: Math.min(2, accounts.length) }, worker))
   return sendJson(res, 200, {
     config: publicProxyConfig(proxyConfig),
     message: errors.length ? `查询完成，部分账号失败：${errors.join('; ')}` : '全部账号的 Codex 重置次数已查询'

@@ -19,6 +19,8 @@
 - `codex-proxy-config.json`
 - `.credential-key.dpapi.json`（只能由创建它的 Windows 用户解封）
 - `.account-backups\` 中的加密账号备份
+- `codex-proxy-account-check-tasks.json` 与
+  `codex-proxy-account-health-events.json`（不含 Token，但包含本地账号 ID、标签和状态）
 - API Key、Access Token、Refresh Token、邮箱验证码
 - 带 Token 的验证码网站或管理链接
 

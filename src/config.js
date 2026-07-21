@@ -462,6 +462,40 @@ export function upsertChatgptAccount(account) {
   return newCfg
 }
 
+export function patchChatgptAccounts(updates, { onlyExisting = true } = {}) {
+  if (!Array.isArray(updates)) throw new Error('Account updates must be an array')
+  const pending = new Map()
+  for (const update of updates) {
+    const accountId = String(update?.id || '').trim()
+    if (!accountId) throw new Error('Account update requires an id')
+    const patch = update?.patch
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+      throw new Error(`Account update ${accountId} requires an object patch`)
+    }
+    pending.set(accountId, { ...(pending.get(accountId) || {}), ...patch })
+  }
+  if (!pending.size) return proxyConfig
+
+  let changed = false
+  const accounts = (proxyConfig.chatgptAccounts || []).map(account => {
+    const patch = pending.get(account.id)
+    if (!patch) return account
+    pending.delete(account.id)
+    changed = true
+    return { ...account, ...structuredClone(patch) }
+  })
+  if (!onlyExisting) {
+    for (const [accountId, patch] of pending) {
+      changed = true
+      accounts.push({ id: accountId, ...structuredClone(patch) })
+    }
+  }
+  if (!changed) return proxyConfig
+
+  saveProxyConfig({ chatgptAccounts: accounts })
+  return reloadProxyConfig()
+}
+
 export function deleteChatgptAccount(accountId) {
   createAccountBackup('before-account-delete')
   const accounts = (proxyConfig.chatgptAccounts || []).filter(a => a.id !== accountId)

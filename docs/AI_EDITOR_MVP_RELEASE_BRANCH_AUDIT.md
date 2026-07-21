@@ -101,8 +101,9 @@ MVP 已在 Gateway/Edge/Worker 架构上重新实现相同修复：
 - GitHub 运行 `29797010710` 暴露出旧 workflow 固定 Node.js 22 时 Gateway Jest 集成门禁无法完成；
   本地用 Node.js 22 可复现该不兼容，Node.js 24.15.0 是当前项目约束和已验证版本；
 - GitHub 运行 `29801413576` 进一步确认 Windows 隔离脚本在 CI 子进程中找不到
-  `Get-FileHash`；已改为 PowerShell 版本无关的 .NET SHA-256 计算，等待下一轮 CI；
-- GitHub Windows `Release gate` 需在本次 workflow 修正推送后再次确认全绿。
+  `Get-FileHash`；已改为 PowerShell 版本无关的 .NET SHA-256 计算；
+- GitHub Windows `Release gate` 运行 `29801879383` 已在
+  `c51bdaeaf428a2abc9695313190256455216533e` 上全绿。
 
 ## 推荐发布顺序
 

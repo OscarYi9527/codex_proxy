@@ -108,7 +108,7 @@ if [[ -z "$(get_env AI_EDITOR_CLOUDFLARED_IMAGE)" ]]; then
   set_env AI_EDITOR_CLOUDFLARED_IMAGE cloudflare/cloudflared:latest
 fi
 if [[ -z "$(get_env AI_EDITOR_MIHOMO_IMAGE)" ]]; then
-  set_env AI_EDITOR_MIHOMO_IMAGE metacubex/mihomo:stable
+  set_env AI_EDITOR_MIHOMO_IMAGE metacubex/mihomo:latest
 fi
 if [[ -z "$(get_env AI_EDITOR_CLOUDFLARED_PROTOCOL)" ]]; then
   set_env AI_EDITOR_CLOUDFLARED_PROTOCOL http2
@@ -163,6 +163,7 @@ if [[ "${MODE}" == "quick" ]]; then
     PUBLIC_ORIGIN="$(
       compose --profile quick logs --no-color cloudflared-quick 2>&1 \
         | grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' \
+        | grep -Ev '^https://api\.trycloudflare\.com$' \
         | tail -n 1 || true
     )"
     [[ -n "${PUBLIC_ORIGIN}" ]] && break

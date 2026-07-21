@@ -25,6 +25,9 @@ describe('public preview deployment boundary', () => {
     assert.match(compose, /network_mode:\s+host/)
     assert.match(compose, /no-new-privileges:true/)
     assert.match(compose, /cap_drop:\s*\n\s*-\s+ALL/)
+    assert.match(compose, /image:\s+\$\{AI_EDITOR_MIHOMO_IMAGE:-metacubex\/mihomo:latest\}/)
+    assert.match(compose, /user:\s+"\$\{AI_EDITOR_PREVIEW_UID:-1000\}:\$\{AI_EDITOR_PREVIEW_GID:-1000\}"/)
+    assert.match(compose, /state\/mihomo:\/etc\/mihomo/)
   })
 
   it('does not place preview secrets or generated state in the repository', () => {
@@ -53,6 +56,7 @@ describe('public preview deployment boundary', () => {
     assert.match(start, /AI_EDITOR_CLOUDFLARED_REGION1_IP 198\.41\.192\.27/)
     assert.match(start, /AI_EDITOR_CLOUDFLARED_REGION2_IP 198\.41\.200\.233/)
     assert.match(start, /Registered tunnel connection/)
+    assert.match(start, /grep -Ev '\^https:\/\/api\\\.trycloudflare\\\.com\$'/)
     assert.match(text(path.join('scripts', 'verify-preview.sh')), /--retry 30/)
     const bootstrap = 'compose run --rm --no-deps -T gateway node gateway/dist/bootstrap-cli.js'
     assert.match(start, new RegExp(bootstrap.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))

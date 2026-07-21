@@ -6,15 +6,36 @@ on:
 
 jobs:
   release-check:
-    runs-on: ubuntu-latest
+    # The release gate executes Windows-only lifecycle contracts
+    # (powershell.exe, Get-NetTCPConnection, and Win32_Process checks).
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.19.0
           cache: npm
       - run: npm ci
-      - run: npm run release:check
+      - name: Run release gate
+        shell: pwsh
+        run: |
+          npm run release:check 2>&1 | Tee-Object -FilePath release-check.log
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+      - name: Publish release gate diagnostics
+        if: failure()
+        shell: pwsh
+        run: |
+          if (-not (Test-Path -LiteralPath release-check.log)) {
+            exit 0
+          }
+          $tail = (Get-Content -LiteralPath release-check.log -Tail 80) -join "`n"
+          Write-Host '::group::Release gate failure tail'
+          Write-Host $tail
+          Write-Host '::endgroup::'
+          $annotation = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+          Write-Host "::error title=Release gate failure::$annotation"
 
   rk3588-arm64-image:
     runs-on: ubuntu-latest

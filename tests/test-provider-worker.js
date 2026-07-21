@@ -1110,6 +1110,145 @@ describe('Provider Worker ChatGPT subscription runtime', () => {
       assert.equal(storedText.includes(secret), false)
     }
   })
+
+  it('requires administrator reauthentication when every enabled subscription account has an auth error', async () => {
+    const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-worker-relogin-'))
+    temporaryDirectories.add(dataRoot)
+    const executor = new ChatgptSubscriptionExecutor({
+      dataRoot,
+      environment: 'test',
+      fetchImpl: async () => {
+        throw new Error('An auth-error pool must not call the upstream')
+      }
+    })
+    const { origin } = await startWorker({ executor })
+    const configuration = signedRequest(
+      origin,
+      '/internal/v1/runtime/chatgpt-sub',
+      {
+        method: 'PUT',
+        body: {
+          schemaVersion: 1,
+          provider: 'chatgpt-sub',
+          enabled: true,
+          experimental: true,
+          responsesUrl: 'https://chatgpt.example/backend-api/codex/responses',
+          accountStrategy: 'priority',
+          modelIds: ['gpt-5.6-sol'],
+          accounts: [{
+            id: 'account-relogin',
+            label: 'Relogin required',
+            account_id: 'upstream-relogin',
+            access_token: 'expired-access',
+            refresh_token: 'revoked-refresh',
+            expires_at: Date.now() + 60 * 60_000,
+            routing_enabled: true,
+            credential_version: 1,
+            status: 'auth_error'
+          }]
+        }
+      }
+    )
+    assert.equal((await configuration.fetch()).status, 200)
+    configuration.body.fill(0)
+
+    const execute = signedRequest(origin, '/internal/v1/responses', {
+      method: 'POST',
+      turnId: 'turn_chatgpt_relogin_required',
+      body: {
+        model: 'gpt-5.6-sol',
+        stream: true,
+        input: 'hello'
+      }
+    })
+    const response = await execute.fetch()
+    execute.body.fill(0)
+    assert.equal(response.status, 409)
+    assert.deepEqual(await response.json(), {
+      error: {
+        code: 'worker_provider_relogin_required',
+        message: 'ChatGPT subscription account requires administrator reauthentication',
+        requestId: response.headers.get('x-request-id'),
+        retryable: false
+      }
+    })
+  })
+
+  it('normalizes a permanently rejected refresh token to the relogin-required error', async () => {
+    const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-worker-refresh-invalid-'))
+    temporaryDirectories.add(dataRoot)
+    const executor = new ChatgptSubscriptionExecutor({
+      dataRoot,
+      environment: 'test',
+      fetchImpl: async url => {
+        assert.equal(String(url), 'https://auth.openai.com/oauth/token')
+        return new Response(JSON.stringify({
+          error: 'invalid_grant',
+          error_description: 'refresh token revoked'
+        }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+    })
+    const { origin } = await startWorker({ executor })
+    const configuration = signedRequest(
+      origin,
+      '/internal/v1/runtime/chatgpt-sub',
+      {
+        method: 'PUT',
+        body: {
+          schemaVersion: 1,
+          provider: 'chatgpt-sub',
+          enabled: true,
+          experimental: true,
+          responsesUrl: 'https://chatgpt.example/backend-api/codex/responses',
+          accountStrategy: 'priority',
+          modelIds: ['gpt-5.6-sol'],
+          accounts: [{
+            id: 'account-refresh-invalid',
+            label: 'Refresh invalid',
+            account_id: 'upstream-refresh-invalid',
+            access_token: 'expired-access',
+            refresh_token: 'revoked-refresh',
+            expires_at: Date.now() - 60_000,
+            routing_enabled: true,
+            credential_version: 1,
+            status: 'active'
+          }]
+        }
+      }
+    )
+    assert.equal((await configuration.fetch()).status, 200)
+    configuration.body.fill(0)
+
+    const execute = signedRequest(origin, '/internal/v1/responses', {
+      method: 'POST',
+      turnId: 'turn_chatgpt_refresh_invalid',
+      body: {
+        model: 'gpt-5.6-sol',
+        stream: true,
+        input: 'hello'
+      }
+    })
+    const response = await execute.fetch()
+    execute.body.fill(0)
+    assert.equal(response.status, 409)
+    const error = await response.json()
+    assert.equal(error.error.code, 'worker_provider_relogin_required')
+    assert.equal(error.error.retryable, false)
+
+    const poolRequest = signedRequest(
+      origin,
+      '/internal/v1/runtime/chatgpt-sub/accounts'
+    )
+    const poolResponse = await poolRequest.fetch()
+    poolRequest.body.fill(0)
+    assert.equal(poolResponse.status, 200)
+    const pool = await poolResponse.json()
+    assert.equal(pool.accounts[0].status, 'auth_error')
+    assert.equal(pool.accounts[0].health.lastErrorType, 'token_refresh')
+  })
 })
 
 describe('Provider Worker Turn store', () => {

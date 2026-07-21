@@ -49,11 +49,14 @@ function workerError(
   cause?: unknown,
   retryAfterMs?: number
 ): SafeError {
+  const message = code === 'provider_relogin_required'
+    ? 'ChatGPT 订阅账号登录已失效，请一级管理员在“Provider 与模型”中重新登录。'
+    : (statusCode >= 500
+        ? '境外模型通道暂时不可用，请稍后重试。'
+        : '境外模型通道拒绝了本次请求。')
   return new SafeError({
     code,
-    message: statusCode >= 500
-      ? '境外模型通道暂时不可用，请稍后重试。'
-      : '境外模型通道拒绝了本次请求。',
+    message,
     statusCode,
     retryable,
     ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
@@ -95,6 +98,9 @@ function parseSafeWorkerError(
     const code = typeof value.error?.code === 'string'
       ? value.error.code
       : 'provider_worker_rejected'
+    const gatewayCode = code === 'worker_provider_relogin_required'
+      ? 'provider_relogin_required'
+      : code
     const bodyRetryAfterMs = Number(value.error?.retryAfterMs)
     const headerRetryAfterMs = Number(safeHeader(headers || {}, 'retry-after')) * 1000
     const retryAfterMs = Number.isFinite(bodyRetryAfterMs) && bodyRetryAfterMs > 0
@@ -103,7 +109,7 @@ function parseSafeWorkerError(
           ? headerRetryAfterMs
           : undefined)
     return workerError(
-      code,
+      gatewayCode,
       statusCode,
       value.error?.retryable === true,
       undefined,

@@ -43,6 +43,20 @@ function safeError(code, message, statusCode = 500, retryable = statusCode >= 50
   return Object.assign(new Error(message), { code, statusCode, retryable })
 }
 
+function providerReloginRequiredError() {
+  return safeError(
+    'worker_provider_relogin_required',
+    'ChatGPT subscription account requires administrator reauthentication',
+    409,
+    false
+  )
+}
+
+function isProviderReloginRequired(error) {
+  return error?.code === 'TOKEN_REFRESH_RELOGIN_REQUIRED' ||
+    error?.code === 'TOKEN_TEMPORARY_ACCESS_EXPIRED'
+}
+
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 }
@@ -317,7 +331,35 @@ async function collectLimited(stream, limit) {
   return result
 }
 
-function safeUpstreamError(statusCode) {
+function exhaustedPoolRequiresRelogin(errorBody) {
+  if (!errorBody?.length) return false
+  try {
+    const payload = JSON.parse(errorBody.toString('utf8'))
+    const error = object(payload?.error)
+    if (![
+      'account_pool_exhausted',
+      'account_pool_attempts_exhausted'
+    ].includes(error.type)) {
+      return false
+    }
+    const details = object(error.details)
+    const enabled = Number(details.enabled)
+    const authError = Number(details.auth_error)
+    const eligible = Number(details.eligible)
+    return Number.isSafeInteger(enabled) &&
+      enabled > 0 &&
+      Number.isSafeInteger(authError) &&
+      authError >= enabled &&
+      (!Number.isFinite(eligible) || eligible === 0)
+  } catch {
+    return false
+  }
+}
+
+function safeUpstreamError(statusCode, errorBody) {
+  if (statusCode === 503 && exhaustedPoolRequiresRelogin(errorBody)) {
+    return providerReloginRequiredError()
+  }
   if (statusCode === 401 || statusCode === 403) {
     return safeError(
       'worker_provider_authentication_failed',
@@ -675,14 +717,27 @@ export class ChatgptSubscriptionExecutor {
       throw error
     })
     completion.catch(() => {})
-    await response.headerPromise
+    try {
+      await response.headerPromise
+    } catch (error) {
+      await completion.catch(() => {})
+      await this.#persistCredentials()
+      request.cleanupAbort()
+      if (isProviderReloginRequired(error)) {
+        throw providerReloginRequiredError()
+      }
+      throw error
+    }
     await this.#persistCredentials()
     if (response.statusCode < 200 || response.statusCode >= 300) {
       const errorBody = await collectLimited(response, MAX_ERROR_BODY_BYTES)
-      errorBody.fill(0)
-      await completion.catch(() => {})
-      request.cleanupAbort()
-      throw safeUpstreamError(response.statusCode)
+      try {
+        await completion.catch(() => {})
+        request.cleanupAbort()
+        throw safeUpstreamError(response.statusCode, errorBody)
+      } finally {
+        errorBody.fill(0)
+      }
     }
 
     const usage = {

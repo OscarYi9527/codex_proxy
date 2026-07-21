@@ -135,17 +135,37 @@ describe('ProviderWorkerClient', () => {
     try {
       const address = gateway.server.address()
       if (!address || typeof address === 'string') throw new Error('Gateway did not listen')
-      const response = await fetch(`http://127.0.0.1:${address.port}/v1/responses`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-ai-editor-turn-id': 'turn_gateway_worker'
-        },
-        body: JSON.stringify({ model: 'gpt-worker-mock', input: 'hello' })
+      const response = await new Promise<{
+        readonly status: number
+        readonly headers: http.IncomingHttpHeaders
+        readonly body: string
+      }>((resolve, reject) => {
+        const body = JSON.stringify({ model: 'gpt-worker-mock', input: 'hello' })
+        const outgoing = http.request({
+          host: '127.0.0.1',
+          port: address.port,
+          path: '/v1/responses',
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'content-length': Buffer.byteLength(body),
+            'x-ai-editor-turn-id': 'turn_gateway_worker'
+          }
+        }, incoming => {
+          const chunks: Buffer[] = []
+          incoming.on('data', chunk => chunks.push(Buffer.from(chunk)))
+          incoming.once('end', () => resolve({
+            status: incoming.statusCode || 0,
+            headers: incoming.headers,
+            body: Buffer.concat(chunks).toString('utf8')
+          }))
+        })
+        outgoing.once('error', reject)
+        outgoing.end(body)
       })
       expect(response.status).toBe(200)
-      expect(response.headers.get('x-ai-editor-provider-id')).toBe('provider-worker-mock')
-      await expect(response.text()).resolves.toContain('response.completed')
+      expect(response.headers['x-ai-editor-provider-id']).toBe('provider-worker-mock')
+      expect(response.body).toContain('response.completed')
       expect(capturedTurnId).toBe('turn_gateway_worker')
       expect(JSON.parse(capturedBody)).toEqual({
         model: 'gpt-worker-mock',
@@ -299,6 +319,38 @@ describe('ProviderWorkerClient', () => {
         statusCode: 409,
         retryable: false,
         message: '境外模型通道拒绝了本次请求。'
+      })
+    } finally {
+      await close(worker)
+    }
+  })
+
+  it('maps an exhausted auth-error pool to an actionable administrator relogin error', async () => {
+    const worker = http.createServer((_request, response) => {
+      response.writeHead(409, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({
+        error: {
+          code: 'worker_provider_relogin_required',
+          message: 'internal-sensitive-credential-detail',
+          retryable: false
+        }
+      }))
+    })
+    const origin = await listen(worker)
+    try {
+      const client = new ProviderWorkerClient({
+        origin,
+        gatewayId: 'gateway-test',
+        workerId: 'worker-local',
+        region: 'local-development',
+        signingSecret: SIGNING_SECRET,
+        tls: null
+      })
+      await expect(client.listModels()).rejects.toMatchObject({
+        code: 'provider_relogin_required',
+        statusCode: 409,
+        retryable: false,
+        message: 'ChatGPT 订阅账号登录已失效，请一级管理员在“Provider 与模型”中重新登录。'
       })
     } finally {
       await close(worker)

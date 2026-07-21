@@ -5,6 +5,7 @@ param(
     [string]$DataRoot,
     [int]$GatewayPort = 47920,
     [string]$GatewayOrigin,
+    [string]$EdgeOutboundProxy,
     [int]$EdgePort = 47921,
     [int]$ProviderWorkerPort = 47930,
     [ValidateSet('ready', 'login_required', 'account_unavailable', 'service_unavailable', 'password_change_required')]
@@ -67,6 +68,34 @@ $edgeNodeEnvironment = if ([string]::IsNullOrWhiteSpace($GatewayOrigin)) {
 } else {
     'production'
 }
+$normalizedEdgeOutboundProxy = $null
+if (-not [string]::IsNullOrWhiteSpace($EdgeOutboundProxy)) {
+    if ($Mode -ne 'edge') {
+        throw 'EdgeOutboundProxy can only be configured when Mode is edge'
+    }
+    try {
+        $outboundProxyUri = [Uri]::new($EdgeOutboundProxy, [UriKind]::Absolute)
+    } catch {
+        throw 'EdgeOutboundProxy must be an absolute loopback HTTP origin'
+    }
+    $proxyHost = $outboundProxyUri.Host.Trim('[', ']')
+    $proxyAddress = $null
+    $isLoopbackHost = $proxyHost.Equals('localhost', [StringComparison]::OrdinalIgnoreCase)
+    if ([Net.IPAddress]::TryParse($proxyHost, [ref]$proxyAddress)) {
+        $isLoopbackHost = [Net.IPAddress]::IsLoopback($proxyAddress)
+    }
+    if (
+        $outboundProxyUri.Scheme -ne 'http' -or
+        -not $isLoopbackHost -or
+        -not [string]::IsNullOrEmpty($outboundProxyUri.UserInfo) -or
+        -not [string]::IsNullOrEmpty($outboundProxyUri.Query) -or
+        -not [string]::IsNullOrEmpty($outboundProxyUri.Fragment) -or
+        $outboundProxyUri.AbsolutePath -ne '/'
+    ) {
+        throw 'EdgeOutboundProxy must be a loopback HTTP origin without credentials, path, query, or fragment'
+    }
+    $normalizedEdgeOutboundProxy = $outboundProxyUri.GetLeftPart([UriPartial]::Authority)
+}
 
 $node = (Get-Command node -ErrorAction Stop).Source
 $npm = (Get-Command npm.cmd -ErrorAction Stop).Source
@@ -83,6 +112,7 @@ if ($ValidateOnly) {
         gateway = "http://127.0.0.1:$GatewayPort"
         edgeGatewayOrigin = $edgeGatewayOrigin
         edgeNodeEnvironment = $edgeNodeEnvironment
+        edgeOutboundProxy = $normalizedEdgeOutboundProxy
         edge = "http://127.0.0.1:$EdgePort"
         providerWorker = "http://127.0.0.1:$ProviderWorkerPort"
         providerWorkerExecutor = $ProviderWorkerExecutor
@@ -207,22 +237,29 @@ try {
     if ($Mode -in @('all', 'edge')) {
         $edgeRoot = Join-Path $DataRoot 'edge'
         Initialize-AiEditorDataRoot -DataRoot $edgeRoot
+        $edgeEnvironment = @{
+            NODE_ENV = $edgeNodeEnvironment
+            CODEX_PROXY_MODE = 'edge'
+            AI_EDITOR_EDGE_HOST = '127.0.0.1'
+            AI_EDITOR_EDGE_PORT = $EdgePort
+            AI_EDITOR_EDGE_DATA_ROOT = $edgeRoot
+            AI_EDITOR_GATEWAY_ORIGIN = $edgeGatewayOrigin
+            AI_EDITOR_EDGE_LOCAL_NONCE = $localNonce
+            AI_EDITOR_EDGE_AUTH_MODE = $AuthenticationMode
+            AI_EDITOR_MOCK_STATE = $MockState
+            AI_EDITOR_ENABLE_MOCK_CONTROL = if ($AuthenticationMode -eq 'mock') { 'true' } else { 'false' }
+        }
+        if ($normalizedEdgeOutboundProxy) {
+            $edgeEnvironment.NODE_USE_ENV_PROXY = '1'
+            $edgeEnvironment.HTTPS_PROXY = $normalizedEdgeOutboundProxy
+            $edgeEnvironment.HTTP_PROXY = $normalizedEdgeOutboundProxy
+            $edgeEnvironment.NO_PROXY = '127.0.0.1,localhost,::1'
+        }
         $processId = Start-AiEditorProcess `
             -Mode edge `
             -NodePath $node `
             -Arguments @((Join-Path $repo 'src\launcher.js'), '--mode', 'edge') `
-            -Environment @{
-                NODE_ENV = $edgeNodeEnvironment
-                CODEX_PROXY_MODE = 'edge'
-                AI_EDITOR_EDGE_HOST = '127.0.0.1'
-                AI_EDITOR_EDGE_PORT = $EdgePort
-                AI_EDITOR_EDGE_DATA_ROOT = $edgeRoot
-                AI_EDITOR_GATEWAY_ORIGIN = $edgeGatewayOrigin
-                AI_EDITOR_EDGE_LOCAL_NONCE = $localNonce
-                AI_EDITOR_EDGE_AUTH_MODE = $AuthenticationMode
-                AI_EDITOR_MOCK_STATE = $MockState
-                AI_EDITOR_ENABLE_MOCK_CONTROL = if ($AuthenticationMode -eq 'mock') { 'true' } else { 'false' }
-            } `
+            -Environment $edgeEnvironment `
             -DataRoot $DataRoot
         $startedModes.Add('edge')
         Wait-AiEditorServiceHealthy `

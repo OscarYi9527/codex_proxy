@@ -339,13 +339,24 @@ export class AccountCheckTaskManager {
   }
 
   #boundedFetch() {
-    const deadline = AbortSignal.timeout(this.accountTimeoutMs)
     return (url, options = {}) => {
-      const signals = [options.signal, deadline].filter(Boolean)
-      return this.fetchImpl(url, {
-        ...options,
-        signal: signals.length === 1 ? signals[0] : AbortSignal.any(signals)
-      })
+      const timeout = new AbortController()
+      const timer = setTimeout(() => {
+        timeout.abort(new DOMException(
+          'The account check request timed out.',
+          'TimeoutError'
+        ))
+      }, this.accountTimeoutMs)
+      const signals = [options.signal, timeout.signal].filter(Boolean)
+      try {
+        return Promise.resolve(this.fetchImpl(url, {
+          ...options,
+          signal: signals.length === 1 ? signals[0] : AbortSignal.any(signals)
+        })).finally(() => clearTimeout(timer))
+      } catch (error) {
+        clearTimeout(timer)
+        throw error
+      }
     }
   }
 

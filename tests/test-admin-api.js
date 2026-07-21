@@ -105,7 +105,16 @@ describe('原子配置写入和管理 API', () => {
       const { port } = server.address()
       const base = `http://127.0.0.1:${port}`
       const health = await fetch(base + '/health')
-      assert.strictEqual(health.status, 200)
+      const expectedReady = Boolean(
+        proxyConfig.deepseekApiKey ||
+        proxyConfig.openaiApiKey ||
+        (proxyConfig.relays || []).some(relay => relay.api_key) ||
+        (proxyConfig.chatgptAccounts || []).some(account =>
+          account.routing_enabled !== false &&
+          Boolean(account.access_token || account.refresh_token)
+        )
+      )
+      assert.strictEqual(health.status, expectedReady ? 200 : 503)
       assert.match(health.headers.get('x-codex-proxy-request-id'), /^req_/)
       const live = await fetch(base + '/live')
       assert.strictEqual(live.status, 200)

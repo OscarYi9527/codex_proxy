@@ -230,11 +230,11 @@ describe('Level-1 Provider administration page (T083/T088)', () => {
       .toHaveAttribute('href', 'https://auth.openai.com/authorize')
     expect(api.startChatgptAccountLogin).toHaveBeenCalledWith({
       label: '',
-      routingEnabled: false
+      routingEnabled: true
     })
   })
 
-  it('imports pasted auth.json, applies the chosen routing state and clears the secret', async () => {
+  it('imports pasted auth.json with routing enabled by default and clears the secret', async () => {
     const api = client()
     const refresh = jest.fn(async () => undefined)
     render(
@@ -249,7 +249,7 @@ describe('Level-1 Provider administration page (T083/T088)', () => {
     fireEvent.change(screen.getByLabelText('账号名称'), {
       target: { value: '主订阅账号' }
     })
-    fireEvent.click(screen.getByLabelText('导入后立即参与自动路由'))
+    expect(screen.getByLabelText('导入后立即参与自动路由')).toBeChecked()
     const authJson = JSON.stringify({
       tokens: {
         access_token: 'pasted-access-secret',
@@ -289,7 +289,7 @@ describe('Level-1 Provider administration page (T083/T088)', () => {
       />
     )
     fireEvent.click(screen.getByRole('button', { name: '添加订阅账号' }))
-    fireEvent.click(screen.getByLabelText('导入后立即参与自动路由'))
+    expect(screen.getByLabelText('导入后立即参与自动路由')).toBeChecked()
     fireEvent.click(screen.getByRole('button', { name: /一键导入当前 Codex 账号/ }))
     expect(click).toHaveBeenCalledTimes(1)
     expect((click.mock.contexts[0] as HTMLAnchorElement).href)

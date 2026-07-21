@@ -466,6 +466,55 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
     expect(runtime.chatgptAccounts).toHaveLength(1)
   })
 
+  it('routes newly imported ChatGPT accounts by default while preserving explicit opt-out', async () => {
+    const authJson = JSON.stringify({
+      tokens: {
+        access_token: 'default-routing-access-secret',
+        refresh_token: 'default-routing-refresh-secret',
+        account_id: 'default-routing-account-id'
+      }
+    })
+    const enabled = await fixture.gateway.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/chatgpt-accounts/import',
+      headers: headers(),
+      payload: { authJson, label: '默认路由账号' }
+    })
+    expect(enabled.statusCode).toBe(200)
+    expect(enabled.json()).toMatchObject({
+      created: true,
+      routingEnabled: true
+    })
+    expect(runtime.chatgptAccounts).toEqual([
+      expect.objectContaining({
+        account_id: 'default-routing-account-id',
+        routing_enabled: true
+      })
+    ])
+
+    const disabled = await fixture.gateway.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/chatgpt-accounts/import',
+      headers: headers(),
+      payload: {
+        authJson,
+        label: '仅保存账号',
+        routingEnabled: false
+      }
+    })
+    expect(disabled.statusCode).toBe(200)
+    expect(disabled.json()).toMatchObject({
+      created: false,
+      routingEnabled: false
+    })
+    expect(runtime.chatgptAccounts).toEqual([
+      expect.objectContaining({
+        account_id: 'default-routing-account-id',
+        routing_enabled: false
+      })
+    ])
+  })
+
   it('imports a ChatGPT account through one shortcut, creates the default pool and updates duplicates', async () => {
     const first = await fixture.gateway.app.inject({
       method: 'POST',

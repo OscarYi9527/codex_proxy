@@ -695,7 +695,7 @@ export class ProviderService {
         statusCode: 400
       })
     }
-    const requestedRoutingEnabled = body['routingEnabled'] === true
+    const requestedRoutingEnabled = body['routingEnabled'] !== false
     const now = this.clock.now().toISOString()
     let result: {
       providerId: string
@@ -774,7 +774,7 @@ export class ProviderService {
       const routingEnabled = body['routingEnabled'] === undefined
         ? duplicate
           ? current['routingEnabled'] !== false
-          : false
+          : true
         : requestedRoutingEnabled
       settings[credentialId] = {
         ...(current as Record<string, unknown>),
@@ -1131,7 +1131,7 @@ export class ProviderService {
       await this.importChatgptAccount(identity, {
         authJson,
         ...(label ? { label } : {}),
-        routingEnabled: body['routingEnabled'] === true
+        routingEnabled: body['routingEnabled'] !== false
       })
     })
     await this.recordAllowed(

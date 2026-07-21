@@ -303,7 +303,7 @@ export function ProvidersPage({
   const [notice, setNotice] = useState<string | null>(null)
   const [accountDialogOpen, setAccountDialogOpen] = useState(false)
   const [accountLabel, setAccountLabel] = useState('')
-  const [routingEnabled, setRoutingEnabled] = useState(false)
+  const [routingEnabled, setRoutingEnabled] = useState(true)
   const [accountDialogError, setAccountDialogError] = useState<string | null>(null)
   const [selectedAuthFile, setSelectedAuthFile] = useState<string | null>(null)
   const [dragActive, setDragActive] = useState(false)
@@ -375,7 +375,7 @@ export function ProvidersPage({
     setNativeImportPending(false)
     setLoginStatus(null)
     setAccountLabel('')
-    setRoutingEnabled(false)
+    setRoutingEnabled(true)
   }
 
   const validateAuthJson = (raw: string): string | null => {
@@ -805,7 +805,7 @@ export function ProvidersPage({
                 />
                 导入后立即参与自动路由
               </label>
-              <small>默认仅保存到账号池，避免新账号被意外消耗额度。</small>
+              <small>默认立即参与路由；如需仅保存凭据，可在导入前关闭此项。</small>
             </div>
 
             <div className="account-import-options">

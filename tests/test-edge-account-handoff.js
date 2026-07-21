@@ -218,6 +218,42 @@ describe('Edge real handoff and secure storage (T026/T032/T033)', () => {
     assert.equal((await secureStore.load()).refreshToken, 'rotated-refresh')
   })
 
+  it('clears an ambiguous rotated binding and reports login_required', async () => {
+    const secureStore = new MemoryRefreshTokenStore()
+    await secureStore.save({
+      deviceSessionId: 'ds_reused',
+      refreshToken: 'refresh-token-consumed-after-lost-response'
+    })
+    const binding = new LocalAccountBindingStore({
+      secureStore,
+      now: () => 30_000
+    })
+    const client = new GatewayClient({
+      gatewayOrigin: 'http://127.0.0.1:47920',
+      bindingStore: binding,
+      now: () => 30_000,
+      fetchImpl: async () => new Response(JSON.stringify({
+        error: {
+          code: 'refresh_token_reuse_detected',
+          message: 'Refresh Token reuse was detected.',
+          retryable: false
+        }
+      }), {
+        status: 401,
+        headers: { 'content-type': 'application/json' }
+      })
+    })
+
+    await client.initialize()
+    assert.deepEqual(await client.getSafeStatus(), {
+      state: 'login_required',
+      checkedAt: new Date(30_000).toISOString(),
+      actions: ['login']
+    })
+    assert.equal(binding.snapshot(), null)
+    assert.equal(await secureStore.load(), null)
+  })
+
   it('passes the macOS Keychain password over stdin instead of process arguments', async () => {
     const root = testRoot('keychain')
     const calls = []

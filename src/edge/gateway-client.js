@@ -3,6 +3,11 @@ import { Readable } from 'node:stream'
 
 const ACCESS_REFRESH_SKEW_MS = 30_000
 const JSON_LIMIT = 1024 * 1024
+const LOGIN_REQUIRED_CODES = new Set([
+  'login_required',
+  'invalid_grant',
+  'refresh_token_reuse_detected'
+])
 
 function edgeError(code, message, statusCode = 401, retryable = false) {
   return Object.assign(new Error(message), { code, statusCode, retryable })
@@ -47,10 +52,15 @@ export class GatewayClient {
   }
 
   async getSafeStatus() {
-    const snapshot = await this.getAuthenticatedSnapshot().catch(error => {
-      if (error.code === 'login_required') return null
-      throw error
-    })
+    let snapshot
+    try {
+      snapshot = await this.getAuthenticatedSnapshot()
+    } catch (error) {
+      if (!LOGIN_REQUIRED_CODES.has(error.code)) throw error
+      const current = this.bindingStore.snapshot()
+      if (current) await this.bindingStore.clear(current.bindingVersion)
+      snapshot = null
+    }
     if (!snapshot) {
       return {
         state: 'login_required',
@@ -82,7 +92,7 @@ export class GatewayClient {
         actions: []
       }
     } catch (error) {
-      if (['login_required', 'invalid_grant', 'refresh_token_reuse_detected'].includes(error.code)) {
+      if (LOGIN_REQUIRED_CODES.has(error.code)) {
         await this.bindingStore.clear(snapshot.bindingVersion)
         return {
           state: 'login_required',

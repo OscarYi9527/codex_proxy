@@ -42,7 +42,15 @@ function Write-AtomicJson([string]$Path, $Value) {
 
 function Get-Hash([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $stream = [IO.File]::OpenRead($Path)
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = $sha256.ComputeHash($stream)
+        return ([BitConverter]::ToString($bytes)).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $sha256.Dispose()
+        $stream.Dispose()
+    }
 }
 
 function Get-GitCommit([string]$Root) {

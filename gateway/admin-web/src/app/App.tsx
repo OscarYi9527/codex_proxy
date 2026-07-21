@@ -9,7 +9,6 @@ import { CreditManagementPage } from '../pages/credits/CreditManagementPage'
 import { AuditPage } from '../pages/audit/AuditPage'
 import { DiagnosticsPage } from '../pages/system/DiagnosticsPage'
 import { ProvidersPage } from '../pages/system/ProvidersPage'
-import { CompactManagementPage } from '../pages/compact/CompactManagementPage'
 import { managementApi, type ManagementApiClient } from './api-client'
 import {
   browserManagementBootstrapFromHash,
@@ -250,18 +249,6 @@ export function App({
       : current)
   }
 
-  if (data.surface === 'embedded') {
-    return (
-      <CompactManagementPage
-        client={client}
-        account={data.account}
-        providers={data.providers}
-        fullRoute={data.initialRoute}
-        onRefresh={refreshProviderData}
-      />
-    )
-  }
-
   return (
     <div className="management-layout">
       <aside>
@@ -348,6 +335,7 @@ export function App({
             client={client}
             providers={data.providers}
             models={data.models}
+            compact={data.surface === 'embedded'}
             onRefresh={refreshProviderData}
           />
         )}

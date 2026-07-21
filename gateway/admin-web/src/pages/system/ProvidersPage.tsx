@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { ManagementApiClient } from '../../app/api-client'
 import { currentCodexAuthFromEvent } from '../../app/bootstrap'
+import { CompactManagementPage } from '../compact/CompactManagementPage'
 import type {
   AccountRoutingStrategy,
   ChatgptAccountLoginStatus,
@@ -302,11 +303,13 @@ export function ProvidersPage({
   client,
   providers,
   models,
+  compact = false,
   onRefresh
 }: {
   readonly client: ManagementApiClient
   readonly providers: ProviderListResponse
   readonly models: ModelRouteResponse
+  readonly compact?: boolean
   readonly onRefresh: () => Promise<void>
 }) {
   const [busy, setBusy] = useState(false)
@@ -574,6 +577,17 @@ export function ProvidersPage({
   )
   const providerName = new Map(providers.providers.map(item => [item.id, item.displayName]))
   const rateByModel = new Map((models.rates || []).map(rate => [rate.modelId, rate]))
+
+  if (compact) {
+    return (
+      <CompactManagementPage
+        client={client}
+        providers={providers}
+        fullRoute="providers"
+        onRefresh={onRefresh}
+      />
+    )
+  }
 
   return (
     <>

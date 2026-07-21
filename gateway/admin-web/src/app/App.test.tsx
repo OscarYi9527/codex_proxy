@@ -392,7 +392,7 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
       .toBe(seesProviders)
   })
 
-  it('renders the compact embedded account panel and repairs an unreadable account label', async () => {
+  it('keeps the management shell and compacts only the embedded Provider page', async () => {
     const api = clientFor('level1')
     api.providers = jest.fn(async (): Promise<ProviderListResponse> => ({
       warning: null,
@@ -459,11 +459,12 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
     render(<App client={api} />)
     bootstrap('providers', window.location.origin, 'embedded')
 
-    expect(await screen.findByRole('heading', { name: '快速管理' })).toBeInTheDocument()
+    expect(await screen.findByRole('navigation', { name: '管理导航' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Provider 与模型' })).toBeInTheDocument()
     expect(screen.getByText('ChatGPT 订阅池')).toBeInTheDocument()
     expect(document.body.textContent).not.toContain('ChatGPT ???')
     expect(screen.getByText('短周期')).toHaveTextContent('80%')
-    expect(screen.getByRole('link', { name: '在浏览器打开完整管理页面' }))
+    expect(screen.getByRole('link', { name: '在浏览器打开完整 Provider 管理' }))
       .toHaveAttribute(
         'href',
         'ai-editor-code://open-full-management?route=providers'

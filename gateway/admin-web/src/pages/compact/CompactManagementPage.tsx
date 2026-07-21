@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import type { ManagementApiClient } from '../../app/api-client'
 import type {
-  AccountDetails,
   ManagementRoute,
   ProviderCredentialSummary,
   ProviderListResponse,
@@ -37,13 +36,11 @@ function accountLabel(
 
 export function CompactManagementPage({
   client,
-  account,
   providers,
   fullRoute,
   onRefresh
 }: {
   readonly client: ManagementApiClient
-  readonly account: AccountDetails
   readonly providers: ProviderListResponse | null
   readonly fullRoute: ManagementRoute
   readonly onRefresh: () => Promise<void>
@@ -72,38 +69,19 @@ export function CompactManagementPage({
   }
 
   return (
-    <main className="compact-management">
+    <section className="compact-management" aria-labelledby="compact-provider-title">
       <header className="compact-management-header">
         <div>
           <p className="eyebrow">AI EDITOR</p>
-          <h1>快速管理</h1>
-          <p>仅显示账号路由和额度。</p>
+          <h2 id="compact-provider-title">Provider 与模型</h2>
+          <p>仅显示订阅账号路由和额度。</p>
         </div>
         <a className="full-management-link" href={fullManagementUrl}>
-          在浏览器打开完整管理页面
+          在浏览器打开完整 Provider 管理
         </a>
       </header>
 
       {notice && <p className="compact-notice" role="status">{notice}</p>}
-
-      <section className="compact-summary-grid" aria-label="账号与积分摘要">
-        <article>
-          <span>产品账号</span>
-          <strong>{account.account.loginName || account.account.email || 'AI Editor 用户'}</strong>
-          <small>{account.account.status === 'active' ? '账号正常' : '账号不可用'}</small>
-        </article>
-        <article>
-          <span>可用积分</span>
-          <strong>{account.credits.available}</strong>
-          <small>本期已使用 {account.credits.settled}</small>
-        </article>
-      </section>
-
-      {account.account.mustChangePassword && (
-        <p className="compact-warning">
-          当前账号必须先修改密码，请在完整管理页面完成。
-        </p>
-      )}
 
       <section className="compact-account-list" aria-labelledby="compact-routing-title">
         <div className="compact-section-title">
@@ -178,6 +156,6 @@ export function CompactManagementPage({
           </p>
         )}
       </section>
-    </main>
+    </section>
   )
 }

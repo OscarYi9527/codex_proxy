@@ -16,4 +16,5 @@ docker compose \
   --profile quick \
   --profile named \
   --profile clash \
+  --profile openvpn \
   down

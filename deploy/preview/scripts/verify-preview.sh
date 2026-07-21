@@ -75,15 +75,32 @@ grep -q '"status":"ok"' <<<"${PUBLIC_LIVE}" || {
   exit 1
 }
 
-if [[ "$(sed -n 's/^AI_EDITOR_WORKER_HTTPS_PROXY=//p' "${RUNTIME_ENV}" | tail -n 1)" != "" ]]; then
-  assert_loopback_listener 7890 Mihomo
+WORKER_PROXY="$(
+  sed -n 's/^AI_EDITOR_WORKER_HTTPS_PROXY=//p' "${RUNTIME_ENV}" | tail -n 1
+)"
+if [[ -n "${WORKER_PROXY}" ]]; then
+  case "${WORKER_PROXY}" in
+    http://127.0.0.1:7890)
+      PROXY_PORT=7890
+      PROXY_LABEL=Mihomo
+      ;;
+    http://127.0.0.1:7891)
+      PROXY_PORT=7891
+      PROXY_LABEL="OpenVPN egress"
+      ;;
+    *)
+      echo "Unsupported preview Worker proxy: ${WORKER_PROXY}" >&2
+      exit 1
+      ;;
+  esac
+  assert_loopback_listener "${PROXY_PORT}" "${PROXY_LABEL}"
   status="$(
-    curl --proxy http://127.0.0.1:7890 \
+    curl --proxy "${WORKER_PROXY}" \
       --silent --show-error --output /dev/null --write-out '%{http_code}' \
       --max-time 20 https://api.openai.com/v1/models || true
   )"
   if [[ "${status}" == "000" ]]; then
-    echo "Mihomo could not reach the OpenAI HTTPS endpoint." >&2
+    echo "${PROXY_LABEL} could not reach the OpenAI HTTPS endpoint." >&2
     exit 1
   fi
 fi

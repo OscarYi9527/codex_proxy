@@ -8,13 +8,15 @@ COMPOSE_FILE="${PREVIEW_DIR}/compose.yaml"
 MODE="quick"
 PUBLIC_ORIGIN=""
 WITH_CLASH=0
+WITH_OPENVPN=0
 EXECUTOR="mock"
 
 usage() {
   cat <<'EOF'
 Usage:
   ./scripts/start-preview.sh [--quick] [--named https://preview.example.com]
-                             [--with-clash] [--executor mock|chatgpt-sub]
+                             [--with-clash|--with-openvpn]
+                             [--executor mock|chatgpt-sub]
 
 Quick mode creates a temporary trycloudflare.com URL. Named mode requires
 state/cloudflared/config.yml and its credentials JSON.
@@ -36,6 +38,10 @@ while [[ $# -gt 0 ]]; do
       WITH_CLASH=1
       shift
       ;;
+    --with-openvpn)
+      WITH_OPENVPN=1
+      shift
+      ;;
     --executor)
       EXECUTOR="${2:-}"
       shift 2
@@ -54,6 +60,10 @@ done
 
 if [[ "${EXECUTOR}" != "mock" && "${EXECUTOR}" != "chatgpt-sub" ]]; then
   echo "--executor must be mock or chatgpt-sub" >&2
+  exit 2
+fi
+if [[ "${WITH_CLASH}" -eq 1 && "${WITH_OPENVPN}" -eq 1 ]]; then
+  echo "--with-clash and --with-openvpn are mutually exclusive." >&2
   exit 2
 fi
 if [[ "${MODE}" == "named" && ! "${PUBLIC_ORIGIN}" =~ ^https://[^/]+$ ]]; then
@@ -135,6 +145,25 @@ if [[ "${WITH_CLASH}" -eq 1 ]]; then
   fi
   chmod 600 "${PREVIEW_DIR}/state/mihomo/config.yaml"
   set_env AI_EDITOR_WORKER_HTTPS_PROXY http://127.0.0.1:7890
+elif [[ "${WITH_OPENVPN}" -eq 1 ]]; then
+  OPENVPN_CONFIG="${PREVIEW_DIR}/secrets/openvpn/client.ovpn"
+  OPENVPN_AUTH="${PREVIEW_DIR}/secrets/openvpn/auth"
+  for secret in "${OPENVPN_CONFIG}" "${OPENVPN_AUTH}"; do
+    if [[ ! -s "${secret}" ]]; then
+      echo "OpenVPN secret is missing or empty: ${secret}" >&2
+      exit 1
+    fi
+    mode="$(stat -c '%a' "${secret}")"
+    if [[ "${mode}" != "600" && "${mode}" != "400" ]]; then
+      echo "OpenVPN secret must have mode 0600 or 0400: ${secret}" >&2
+      exit 1
+    fi
+  done
+  if [[ "$(awk 'END { print NR }' "${OPENVPN_AUTH}")" -lt 2 ]]; then
+    echo "OpenVPN auth must contain username and password on separate lines." >&2
+    exit 1
+  fi
+  set_env AI_EDITOR_WORKER_HTTPS_PROXY http://127.0.0.1:7891
 else
   set_env AI_EDITOR_WORKER_HTTPS_PROXY ""
 fi
@@ -146,6 +175,9 @@ else
 fi
 
 compose build
+if [[ "${WITH_OPENVPN}" -eq 1 ]]; then
+  compose --profile openvpn build vpn-egress
+fi
 # Real-auth Gateway startup intentionally refuses to create an administrator
 # in a background service. Run the one-time bootstrap in the foreground so
 # its generated password is shown only to the operator. On later starts this
@@ -153,6 +185,33 @@ compose build
 compose run --rm --no-deps -T gateway node gateway/dist/bootstrap-cli.js
 if [[ "${WITH_CLASH}" -eq 1 ]]; then
   compose --profile clash up -d mihomo
+elif [[ "${WITH_OPENVPN}" -eq 1 ]]; then
+  compose --profile openvpn up -d vpn-egress
+  VPN_READY=0
+  for _ in $(seq 1 120); do
+    container_id="$(compose --profile openvpn ps -q vpn-egress 2>/dev/null || true)"
+    status=""
+    if [[ -n "${container_id}" ]]; then
+      status="$(
+        docker inspect \
+          --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+          "${container_id}" 2>/dev/null || true
+      )"
+    fi
+    if [[ "${status}" == "healthy" ]]; then
+      VPN_READY=1
+      break
+    fi
+    if [[ "${status}" == "unhealthy" ]]; then
+      break
+    fi
+    sleep 1
+  done
+  if [[ "${VPN_READY}" -ne 1 ]]; then
+    echo "OpenVPN egress did not become healthy." >&2
+    compose --profile openvpn logs --no-color --tail 120 vpn-egress >&2
+    exit 1
+  fi
 fi
 compose up -d provider-worker
 

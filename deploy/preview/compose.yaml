@@ -16,6 +16,49 @@ x-ai-editor-runtime: &ai-editor-runtime
     - ALL
 
 services:
+  vpn-egress:
+    build:
+      context: ../..
+      dockerfile: deploy/preview/vpn-egress/Dockerfile
+    image: ai-editor-preview-vpn-egress:local
+    profiles:
+      - openvpn
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    ports:
+      - "127.0.0.1:7891:7891"
+    read_only: true
+    tmpfs:
+      - /run
+      - /tmp
+    volumes:
+      - ./secrets/openvpn/client.ovpn:/run/ai-editor-vpn/client.ovpn:ro
+      - ./secrets/openvpn/auth:/run/ai-editor-vpn/auth:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          test -f /run/ai-editor-vpn/ready &&
+          status="$$(curl --proxy http://127.0.0.1:7891
+          --silent --show-error --output /dev/null
+          --write-out '%{http_code}' --connect-timeout 8 --max-time 20
+          https://api.openai.com/v1/models || true)" &&
+          test "$${status}" != "000"
+      interval: 15s
+      timeout: 25s
+      retries: 4
+      start_period: 60s
+
   provider-worker:
     <<: *ai-editor-runtime
     command:

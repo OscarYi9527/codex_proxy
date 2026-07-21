@@ -12,6 +12,7 @@ External preview tester
   -> Ubuntu VM loopback Gateway :47920
   -> signed loopback Provider Worker :47930
   -> optional Mihomo/Clash loopback proxy :7890
+     or isolated OpenVPN HTTP egress :7891
   -> ChatGPT/OpenAI test Provider
 ```
 
@@ -154,6 +155,45 @@ loopback. Start the real subscription executor with:
 
 The real account must be imported through the isolated Gateway management
 page. Never copy credentials from shared `47892`.
+
+## Optional isolated OpenVPN outbound
+
+Use this path when a provider supplies a Linux-compatible `.ovpn` profile
+instead of a Clash subscription. The VPN runs in its own Docker network
+namespace and exposes only an HTTP proxy on host loopback `127.0.0.1:7891`.
+Its `redirect-gateway` therefore cannot replace the Ubuntu host default route
+or interrupt SSH, Gateway, or Cloudflare Tunnel traffic.
+
+Install the profile and its username/password without committing either:
+
+```bash
+cd ~/codex_proxy/deploy/preview
+install -d -m 700 secrets/openvpn
+install -m 600 /path/to/client.ovpn secrets/openvpn/client.ovpn
+
+read -rp 'OpenVPN username: ' OPENVPN_USERNAME
+read -rsp 'OpenVPN password: ' OPENVPN_PASSWORD
+printf '\n'
+umask 077
+printf '%s\n%s\n' "${OPENVPN_USERNAME}" "${OPENVPN_PASSWORD}" \
+  > secrets/openvpn/auth
+unset OPENVPN_USERNAME OPENVPN_PASSWORD
+```
+
+Start the real subscription executor through this egress:
+
+```bash
+./scripts/start-preview.sh \
+  --quick \
+  --with-openvpn \
+  --executor chatgpt-sub
+```
+
+The container enforces server certificate usage, keeps the auth file read-only,
+publishes no public VPN port, and exits when either OpenVPN or its private HTTP
+proxy stops. Free or shared VPN profiles are suitable only for temporary
+connectivity acceptance; production requires a dedicated, policy-compliant
+egress service.
 
 ## Verification and shutdown
 

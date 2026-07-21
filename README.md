@@ -975,6 +975,7 @@ VS Code 兼容层会把 `chatgpt.cliExecutable` 指向 `codex-vscode-launcher.ex
 - [Oscar 第一轮 Gateway/Edge Mock 联调交接](docs/AI_EDITOR_GATEWAY_OSCAR_HANDOFF.md)
 - [Oscar 真实认证与 Responses 联调交接](docs/AI_EDITOR_GATEWAY_REAL_AUTH_RESPONSES_HANDOFF.md)
 - [Provider Worker PW0/PW1 交接](docs/AI_EDITOR_PROVIDER_WORKER_PW0_PW1_HANDOFF.md)
+- [Proxy MVP 分支合并与发布审计](docs/AI_EDITOR_MVP_RELEASE_BRANCH_AUDIT.md)
 
 ## 安全说明
 

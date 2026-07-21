@@ -1029,7 +1029,7 @@ export class ProviderService {
 				'provider_credential',
 				credentialId
 			)
-		} catch {
+		} catch (error) {
 			await this.audit(
 				this.repository,
 				identity,
@@ -1038,6 +1038,12 @@ export class ProviderService {
 				credentialId,
 				'failed'
 			)
+			if (
+				error instanceof SafeError &&
+				error.code === 'provider_relogin_required'
+			) {
+				throw error
+			}
 			throw new SafeError({
 				code: 'provider_usage_refresh_failed',
 				message: '上游额度刷新失败，请检查账号状态后重试。',

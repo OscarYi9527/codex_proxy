@@ -99,4 +99,14 @@ describe('Gateway common deterministic and safe primitives', () => {
     expect(error.statusCode).toBe(413)
     expect(error.retryable).toBe(false)
   })
+
+  it('maps unsupported Fastify request media types without reporting an internal outage', () => {
+    const error = toSafeError(Object.assign(
+      new Error('unsupported media type'),
+      { code: 'FST_ERR_CTP_INVALID_MEDIA_TYPE', statusCode: 415 }
+    ))
+    expect(error.code).toBe('unsupported_media_type')
+    expect(error.statusCode).toBe(415)
+    expect(error.retryable).toBe(false)
+  })
 })

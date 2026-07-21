@@ -1,5 +1,8 @@
 import { useState } from 'react'
-import type { ManagementApiClient } from '../../app/api-client'
+import {
+  managementErrorMessage,
+  type ManagementApiClient
+} from '../../app/api-client'
 import type {
   ManagementRoute,
   ProviderCredentialSummary,
@@ -61,8 +64,11 @@ export function CompactManagementPage({
       await operation()
       await onRefresh()
       setNotice(message)
-    } catch {
-      setNotice('操作失败，请稍后重试或打开完整管理页面查看。')
+    } catch (error) {
+      setNotice(managementErrorMessage(
+        error,
+        '操作失败，请稍后重试或打开完整管理页面查看。'
+      ))
     } finally {
       setBusyId(null)
     }

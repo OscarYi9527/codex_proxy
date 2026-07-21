@@ -22,17 +22,76 @@ import type {
   UsageResponse
 } from './types'
 
+export class ManagementRequestError extends Error {
+  constructor(
+    readonly statusCode: number,
+    readonly code: string,
+    message: string,
+    readonly safeForDisplay: boolean,
+    readonly requestId: string | null,
+    readonly retryable: boolean
+  ) {
+    super(message)
+    this.name = 'ManagementRequestError'
+  }
+}
+
+export function managementErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof ManagementRequestError && error.safeForDisplay
+    ? error.message
+    : fallback
+}
+
+function jsonRequestOptions(options: RequestInit): RequestInit {
+  const method = String(options.method || 'GET').toUpperCase()
+  if (
+    options.body === undefined &&
+    (method === 'POST' || method === 'PUT' || method === 'PATCH')
+  ) {
+    return { ...options, body: '{}' }
+  }
+  return options
+}
+
+async function assertResponseOk(response: Response): Promise<void> {
+  if (response.ok) return
+  let error: Record<string, unknown> | null = null
+  try {
+    const value = await response.json() as { error?: unknown }
+    if (value?.error && typeof value.error === 'object' && !Array.isArray(value.error)) {
+      error = value.error as Record<string, unknown>
+    }
+  } catch {
+    // A reverse proxy may replace a Gateway error with an HTML response.
+  }
+  const safeMessage = typeof error?.['message'] === 'string' &&
+    error['message'].trim().length > 0
+    ? error['message'].trim()
+    : null
+  throw new ManagementRequestError(
+    response.status,
+    typeof error?.['code'] === 'string'
+      ? error['code']
+      : `management_request_failed_${response.status}`,
+    safeMessage || `management_request_failed_${response.status}`,
+    safeMessage !== null,
+    typeof error?.['requestId'] === 'string' ? error['requestId'] : null,
+    error?.['retryable'] === true
+  )
+}
+
 async function requestJson<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const normalized = jsonRequestOptions(options)
   const response = await fetch(path, {
-    ...options,
+    ...normalized,
     credentials: 'include',
     headers: {
       accept: 'application/json',
-      ...(options.body ? { 'content-type': 'application/json' } : {}),
-      ...options.headers
+      ...(normalized.body ? { 'content-type': 'application/json' } : {}),
+      ...normalized.headers
     }
   })
-  if (!response.ok) throw new Error(`management_request_failed_${response.status}`)
+  await assertResponseOk(response)
   return response.json() as Promise<T>
 }
 
@@ -138,16 +197,17 @@ export interface ManagementApiClient {
 }
 
 async function requestVoid(path: string, options: RequestInit): Promise<void> {
+  const normalized = jsonRequestOptions(options)
   const response = await fetch(path, {
-    ...options,
+    ...normalized,
     credentials: 'include',
     headers: {
       accept: 'application/json',
-      ...(options.body ? { 'content-type': 'application/json' } : {}),
-      ...options.headers
+      ...(normalized.body ? { 'content-type': 'application/json' } : {}),
+      ...normalized.headers
     }
   })
-  if (!response.ok) throw new Error(`management_request_failed_${response.status}`)
+  await assertResponseOk(response)
 }
 
 export const managementApi: ManagementApiClient = {

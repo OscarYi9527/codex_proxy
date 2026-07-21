@@ -49,6 +49,18 @@ export function toSafeError(error: unknown): SafeError {
       cause: error
     })
   }
+  if (
+    error &&
+    typeof error === 'object' &&
+    (error as { code?: unknown }).code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE'
+  ) {
+    return new SafeError({
+      code: 'unsupported_media_type',
+      message: 'Request content type is not supported.',
+      statusCode: 415,
+      cause: error
+    })
+  }
   return new SafeError({
     code: 'internal_error',
     message: '服务暂时不可用，请稍后重试。',

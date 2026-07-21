@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import type { ManagementApiClient } from '../../app/api-client'
+import {
+  managementErrorMessage,
+  type ManagementApiClient
+} from '../../app/api-client'
 import { currentCodexAuthFromEvent } from '../../app/bootstrap'
 import { CompactManagementPage } from '../compact/CompactManagementPage'
 import type {
@@ -337,8 +340,11 @@ export function ProvidersPage({
       await operation()
       await onRefresh()
       setNotice(success)
-    } catch {
-      setError('Provider 操作失败，请检查配置、账号状态和管理员权限。')
+    } catch (error) {
+      setError(managementErrorMessage(
+        error,
+        'Provider 操作失败，请检查配置、账号状态和管理员权限。'
+      ))
     } finally {
       setBusy(false)
     }

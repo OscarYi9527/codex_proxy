@@ -1,7 +1,10 @@
 import { jest } from '@jest/globals'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { App } from './App'
-import type { ManagementApiClient } from './api-client'
+import {
+  ManagementRequestError,
+  type ManagementApiClient
+} from './api-client'
 import type {
   AccountRole,
   ManagementRoute,
@@ -480,6 +483,24 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
           routingEnabled: false
         }
       )
+    })
+
+    api.refreshProviderCredentialUsage = jest.fn(async () => {
+      throw new ManagementRequestError(
+        409,
+        'provider_relogin_required',
+        'ChatGPT 订阅账号登录已失效，请重新登录。',
+        true,
+        'req_test',
+        false
+      )
+    })
+    const refreshQuota = screen.getByRole('button', { name: '刷新额度' })
+    await waitFor(() => expect(refreshQuota).not.toBeDisabled())
+    fireEvent.click(refreshQuota)
+    await waitFor(() => {
+      expect(screen.getByRole('status'))
+        .toHaveTextContent('ChatGPT 订阅账号登录已失效，请重新登录。')
     })
   })
 

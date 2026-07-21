@@ -2,6 +2,7 @@ import type {
   GatewayProviderRuntimeConfiguration,
   ProviderRouteAdapter
 } from '../../src/routing/standalone-route-adapter.js'
+import { SafeError } from '../../src/common/errors.js'
 import type { ChatgptLoginCoordinator } from '../../src/providers/chatgpt-login-service.js'
 import {
   createRealGatewayFixture,
@@ -16,8 +17,10 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
 	let importChatgptCredential: ((authJson: string) => Promise<void>) | undefined
 	let loginProviderId: string | undefined
 	let refreshedAccountId: string | undefined
+	let refreshFailure: SafeError | undefined
 
   beforeEach(async () => {
+    refreshFailure = undefined
     const adapter: ProviderRouteAdapter = {
       async listModels() {
         return { object: 'list', data: [] }
@@ -93,6 +96,7 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
 				}
 			},
 			async refreshChatgptAccountUsage(accountId) {
+				if (refreshFailure) throw refreshFailure
 				refreshedAccountId = accountId
 			}
 		}
@@ -455,6 +459,27 @@ describe('Level-1 Provider administration (T081/T082/T084-T089)', () => {
 		})
 		expect(refreshed.statusCode).toBe(200)
 		expect(refreshedAccountId).toBe(credentialId)
+
+		refreshFailure = new SafeError({
+			code: 'provider_relogin_required',
+			message: 'ChatGPT subscription account login expired.',
+			statusCode: 409
+		})
+		const reloginRequired = await fixture.gateway.app.inject({
+			method: 'POST',
+			url: `/api/v1/admin/providers/${providerId}/credentials/${credentialId}/refresh-usage`,
+			headers: headers(),
+			payload: {}
+		})
+		expect(reloginRequired.statusCode).toBe(409)
+		expect(reloginRequired.json()).toMatchObject({
+			error: {
+				code: 'provider_relogin_required',
+				message: 'ChatGPT subscription account login expired.',
+				retryable: false
+			}
+		})
+		refreshFailure = undefined
 
     const invalidManualCredential = await fixture.gateway.app.inject({
       method: 'POST',

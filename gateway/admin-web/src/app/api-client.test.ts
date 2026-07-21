@@ -1,5 +1,5 @@
 import { jest } from '@jest/globals'
-import { managementApi } from './api-client'
+import { ManagementRequestError, managementApi } from './api-client'
 
 describe('management audit API client', () => {
   const fetchMock = jest.fn<typeof fetch>()
@@ -44,5 +44,49 @@ describe('management audit API client', () => {
         body: JSON.stringify({ days: 45 })
       })
     )
+  })
+
+  it('sends an explicit JSON object for bodyless management POST requests', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true } as Response)
+
+    await managementApi.refreshProviderCredentialUsage('provider test', 'credential test')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/admin/providers/provider%20test/credentials/credential%20test/refresh-usage',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+        body: '{}',
+        headers: expect.objectContaining({
+          accept: 'application/json',
+          'content-type': 'application/json'
+        })
+      })
+    )
+  })
+
+  it('preserves a safe Gateway error for the management UI', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        error: {
+          code: 'provider_relogin_required',
+          message: 'ChatGPT 订阅账号登录已失效，请重新登录。',
+          requestId: 'req_test',
+          retryable: false
+        }
+      })
+    } as Response)
+
+    await expect(managementApi.refreshProviderCredentialUsage('provider', 'credential'))
+      .rejects.toEqual(expect.objectContaining<Partial<ManagementRequestError>>({
+        statusCode: 409,
+        code: 'provider_relogin_required',
+        message: 'ChatGPT 订阅账号登录已失效，请重新登录。',
+        safeForDisplay: true,
+        requestId: 'req_test',
+        retryable: false
+      }))
   })
 })

@@ -307,7 +307,15 @@ export function createServer({ fetchImpl = fetch } = {}) {
       return res.end(getAdminAppJs())
     }
 
-    if (req.method === 'GET' && url.pathname === '/admin') {
+    if (req.method === 'GET' && url.pathname === '/admin/runtime.js') {
+      res.writeHead(200, { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'no-cache' })
+      return res.end(
+        'window.__TORVYE_MANAGEMENT__=Object.freeze({' +
+        'mode:"standalone",surface:"browser",apiBase:"/admin/api"});'
+      )
+    }
+
+    if (req.method === 'GET' && (url.pathname === '/admin' || url.pathname === '/admin/')) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' })
       return res.end(getAdminHtml())
     }

@@ -54,6 +54,7 @@ import { registerManagementShell } from './api/management-shell.js'
 import { ProviderRepository } from './db/repositories/provider-repository.js'
 import { ProviderService } from './providers/provider-service.js'
 import { registerAdminProviderRoutes } from './api/admin-provider-routes.js'
+import { registerFullConsoleRoutes } from './api/full-console-routes.js'
 import { registerAdminOrganizationRoutes } from './api/admin-organization-routes.js'
 import { registerAdminCreditRoutes } from './api/admin-credit-routes.js'
 import { OrganizationRepository } from './db/repositories/organization-repository.js'
@@ -371,6 +372,11 @@ export async function createGatewayApp(options: {
     registerAdminProviderRoutes(app, {
       authenticate: authenticateAccount,
       service: providerService,
+      rates
+    })
+    registerFullConsoleRoutes(app, {
+      authenticate: authenticateAccount,
+      providers: providerService,
       rates
     })
     registerAdminOrganizationRoutes(app, {

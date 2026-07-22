@@ -1088,6 +1088,52 @@ export class ProviderService {
     return { models: await this.repository.listModelRoutes() }
   }
 
+  async consoleUsage(identity: AccessIdentity, days = 370) {
+    await this.requireLevel1(identity, 'provider.usage.console', null)
+    const boundedDays = Math.max(1, Math.min(370, Math.trunc(days) || 370))
+    const since = new Date(
+      this.clock.now().getTime() - boundedDays * 24 * 60 * 60 * 1000
+    ).toISOString()
+    const [models, records] = await Promise.all([
+      this.repository.listProviderModelUsageSummaries(),
+      this.repository.listConsoleUsageRecords(since)
+    ])
+    return { models, records, since }
+  }
+
+  async probe(identity: AccessIdentity, providerId: string) {
+    await this.requireLevel1(identity, 'provider.probe', providerId)
+    const provider = await this.requireProvider(providerId)
+    if (provider.status !== 'active') {
+      return {
+        ok: false,
+        latency: 0,
+        source: 'provider-active-probe',
+        error: 'Provider is disabled.'
+      }
+    }
+    if (!this.adapter.probeProvider) {
+      return {
+        ok: false,
+        latency: 0,
+        source: 'provider-active-probe',
+        error: 'Active upstream probing is not supported by this runtime.'
+      }
+    }
+    const credentials = await this.repository.listCredentials(provider.id)
+    const result = await this.adapter.probeProvider({
+      provider: provider.kind === 'openai'
+        ? 'openai-api'
+        : provider.kind === 'chatgpt'
+          ? 'chatgpt-sub'
+          : provider.kind,
+      ...(provider.kind === 'relay' ? { relayId: provider.id } : {}),
+      ...(credentials[0] ? { credentialId: credentials[0].id } : {})
+    })
+    await this.recordAllowed(identity, 'provider.probe', 'provider', provider.id)
+    return result
+  }
+
   async putModel(
     identity: AccessIdentity,
     publicModelId: string,

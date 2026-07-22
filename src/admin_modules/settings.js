@@ -1,4 +1,21 @@
+function renderGatewaySettings(){
+  const providers=[
+    ['ChatGPT 订阅池',(cfg.chatgptAccounts||[]).length,'个账号'],
+    ['OpenAI API',cfg.openaiApiKey?1:0,cfg.openaiApiKey?'已配置':'未配置'],
+    ['DeepSeek',cfg.deepseekApiKey?1:0,cfg.deepseekApiKey?'已配置':'未配置'],
+    ['中转节点',(cfg.relays||[]).length,'个节点']
+  ]
+  const providerRows=providers.map(([name,value,unit])=>`<div class="provider-row" style="grid-template-columns:1fr auto"><div><b>${esc(name)}</b><div class="cell-sub">配置和凭据由中央 Gateway 统一管理</div></div><span class="badge">${value} ${unit}</span></div>`).join('')
+  const circuits=diagnosticsData.circuits||[]
+  const circuitRows=circuits.length?circuits.map(item=>`<div class="provider-row" style="grid-template-columns:1fr auto"><div><b>${esc(item.name||'Provider')}</b><div class="cell-sub">${esc(item.lastFailure?.message||'暂无最近错误')}</div></div><span class="status ${item.state==='closed'?'':item.state==='half-open'?'warn':'off'}"><i></i>${item.state==='closed'?'正常':item.state==='half-open'?'正在探测':'熔断中'}</span></div>`).join(''):'<div class="help-note"><p>尚无 Provider 熔断记录。系统会在上游恢复后自动探测，不需要手动重置。</p></div>'
+  const priceRows=Object.entries(priceCatalogData.prices||{}).slice(0,30).map(([model,rate])=>`<tr><td class="cell-main">${esc(model)}</td><td>${esc(rate.input_credit_per_token||rate.inputCreditPerToken||'-')}</td><td>${esc(rate.output_credit_per_token||rate.outputCreditPerToken||'-')}</td><td>${esc(rate.multiplier||'1')}</td></tr>`).join('')
+  const security=`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>凭据只写不回显</b><div class="cell-sub">管理 API 只返回脱敏预览，页面不会取得完整 API Key、Access Token 或 Refresh Token</div></div><span class="status"><i></i>已启用</span></div><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>中央凭据存储</b><div class="cell-sub">信封加密 envelope-v1；密钥版本由 Gateway 管理</div></div><span class="badge">Central</span></div><div class="provider-row" style="grid-template-columns:1fr auto"><div><b>管理权限</b><div class="cell-sub">完整平台仅允许一级管理员使用，所有写操作校验同源会话</div></div><span class="badge">Level-1</span></div></div>`
+  return pageHead('系统设置','查看中央 Gateway 的路由、费率、安全与运行状态')+
+    `<div class="grid"><div>${card('资源配置','前往对应模块修改账号、密钥和节点',`<div class="card-body">${providerRows}</div>`,button('管理模型服务','providers',"switchPage('providers')",'btn-primary')+button('管理账号池','accounts',"switchPage('accounts')"))}${card('模型积分费率','一级管理员可见 · 当前只读汇总',priceRows?`<div class="table-wrap"><table class="table"><thead><tr><th>模型</th><th>输入积分/Token</th><th>输出积分/Token</th><th>倍率</th></tr></thead><tbody>${priceRows}</tbody></table></div>`:empty('analytics','暂无模型费率','配置模型路由后将显示中央费率'))}</div><div>${card('安全基线','敏感凭据与管理会话',security)}${card('Provider 熔断状态','中央服务自动恢复',`<div class="card-body">${circuitRows}</div>`)}${card('运行环境','中央 Gateway',`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">运行模式</span><span class="badge">Gateway</span></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">管理 API</span><code>/admin/api</code></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">数据来源</span><b>中央数据库与 Provider Worker</b></div></div>`)}</div></div>`
+}
+
 function renderSettings(){
+  if(CENTRAL_MANAGEMENT)return renderGatewaySettings()
   const relayOptions=(cfg.relays||[]).map(r=>`<option value="relay:${esc(r.id)}" ${cfg.openaiApiUpstream==='relay:'+r.id?'selected':''}>中转节点 · ${esc(r.name)}</option>`).join('')
   const models=[...modelCatalog]
   if(cfg.defaultModel&&!models.some(model=>model.id===cfg.defaultModel))models.unshift({id:cfg.defaultModel,name:cfg.defaultModel})

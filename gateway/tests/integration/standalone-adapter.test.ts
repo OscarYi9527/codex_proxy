@@ -11,6 +11,7 @@ describe('existing Provider compatibility adapter (T044-T046)', () => {
   let observedUrl: string | undefined
   let observedAuthorization: string | undefined
   let observedBody: { model?: string; stream?: boolean } | undefined
+  let upstreamBaseUrl: string
   const previous: Record<string, string | undefined> = {}
 
   beforeEach(async () => {
@@ -18,6 +19,16 @@ describe('existing Provider compatibility adapter (T044-T046)', () => {
     observedAuthorization = undefined
     observedBody = undefined
     upstream = http.createServer(async (request, response) => {
+      if (request.method === 'GET' && request.url === '/v1/models') {
+        observedUrl = request.url
+        observedAuthorization = request.headers.authorization
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({
+          object: 'list',
+          data: [{ id: 'gpt-5.4-mini', object: 'model', owned_by: 'test' }]
+        }))
+        return
+      }
       const chunks: Buffer[] = []
       for await (const chunk of request) chunks.push(Buffer.from(chunk))
       observedUrl = request.url
@@ -63,6 +74,7 @@ describe('existing Provider compatibility adapter (T044-T046)', () => {
     })
     const address = upstream.address()
     if (!address || typeof address === 'string') throw new Error('Local upstream address is invalid')
+    upstreamBaseUrl = `http://127.0.0.1:${address.port}/v1`
     for (const key of [
       'CODEX_RELAYS',
       'CODEX_PROXY_STORAGE_ROOT',
@@ -78,7 +90,7 @@ describe('existing Provider compatibility adapter (T044-T046)', () => {
     process.env.CODEX_RELAYS = JSON.stringify([{
       id: 'isolated',
       name: 'Isolated test Provider',
-      base_url: `http://127.0.0.1:${address.port}/v1`,
+      base_url: upstreamBaseUrl,
       api_key: 'isolated-local-test-key',
       models: ['gpt-5.4-mini']
     }])
@@ -150,6 +162,41 @@ describe('existing Provider compatibility adapter (T044-T046)', () => {
       model: 'gpt-5.4-mini',
       stream: true
     })
+
+    const centralRelay = await fixture.gateway.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/providers',
+      headers: { authorization: `Bearer ${tokens.accessToken}` },
+      payload: {
+        kind: 'relay',
+        displayName: 'Active Probe Relay',
+        config: {
+          baseUrl: upstreamBaseUrl,
+          models: ['gpt-5.4-mini']
+        }
+      }
+    })
+    const centralRelayId = centralRelay.json().id as string
+    await fixture.gateway.app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/providers/${centralRelayId}/credentials`,
+      headers: { authorization: `Bearer ${tokens.accessToken}` },
+      payload: { secret: 'isolated-local-test-key' }
+    })
+    const probe = await fixture.gateway.app.inject({
+      method: 'POST',
+      url: '/admin/api/ping',
+      headers: { authorization: `Bearer ${tokens.accessToken}` },
+      payload: { type: 'relay', relayId: centralRelayId }
+    })
+    expect(probe.statusCode).toBe(200)
+    expect(probe.json()).toMatchObject({
+      ok: true,
+      status: 200,
+      source: 'standalone-active-probe'
+    })
+    expect(observedUrl).toBe('/v1/models')
+    expect(observedAuthorization).toBe('Bearer isolated-local-test-key')
 
     const importedSubscription = await fixture.gateway.app.inject({
       method: 'POST',

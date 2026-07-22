@@ -19,6 +19,28 @@ describe('admin console product brand', () => {
     assert.match(source, /<title>TORVYE AI Gateway · 统一管理平台<\/title>/)
     assert.match(source, /<strong>TORVYE AI Gateway<\/strong><span>统一管理平台<\/span>/)
     assert.match(source, /<div class="brand-mark">T<\/div>/)
+    assert.match(source, /<script src="\/admin\/runtime\.js"><\/script>/)
+    assert.match(source, /<script src="\/admin\/app\.js"><\/script>/)
+  })
+
+  it('keeps one complete console source with isolated standalone and Gateway modes', () => {
+    const app = fs.readFileSync(require.resolve('../src/admin_app.js'), 'utf8')
+    const html = fs.readFileSync(require.resolve('../src/admin.html'), 'utf8')
+    const accounts = fs.readFileSync(require.resolve('../src/admin_modules/accounts.js'), 'utf8')
+    const tutorial = fs.readFileSync(require.resolve('../src/admin_modules/tutorial.js'), 'utf8')
+    const settings = fs.readFileSync(require.resolve('../src/admin_modules/settings.js'), 'utf8')
+    assert.match(app, /MANAGEMENT\.mode === 'gateway'/)
+    assert.match(app, /bootstrapCentralManagement/)
+    assert.match(app, /\/api\/v1\/webview\/session/)
+    assert.match(app, /history\.replaceState/)
+    assert.match(app, /filter\(\(\[,v\]\)=>\(Number\(v\.requests\)\|\|0\)>0\)/)
+    assert.match(app, /const ADMIN_ACTIONS = new Set/)
+    assert.match(app, /document\.addEventListener\(eventName,dispatchAdminAction\)/)
+    for (const source of [html, app, accounts, tutorial]) {
+      assert.doesNotMatch(source, /\s(?:onclick|onchange|oninput|onkeydown|ondragstart|ondragover|ondragleave|ondrop)=/)
+    }
+    assert.match(accounts, /CENTRAL_MANAGEMENT/)
+    assert.match(settings, /renderGatewaySettings/)
   })
 })
 

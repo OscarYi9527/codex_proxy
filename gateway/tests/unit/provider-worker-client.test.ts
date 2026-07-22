@@ -301,6 +301,24 @@ describe('ProviderWorkerClient', () => {
         url: '/internal/v1/runtime/chatgpt-sub/accounts/credential-one/refresh-usage',
         turnId: ''
       })
+      await expect(client.probeProvider({
+        provider: 'chatgpt-sub',
+        credentialId: 'credential-one'
+      })).resolves.toMatchObject({
+        ok: true,
+        status: 200,
+        source: 'provider-worker-active-probe'
+      })
+      expect(requests.at(-1)).toMatchObject({
+        method: 'POST',
+        url: '/internal/v1/runtime/chatgpt-sub/accounts/credential-one/refresh-usage'
+      })
+      await expect(client.probeProvider({
+        provider: 'openai-api'
+      })).resolves.toMatchObject({
+        ok: false,
+        source: 'provider-worker-active-probe'
+      })
     } finally {
       await close(worker)
     }

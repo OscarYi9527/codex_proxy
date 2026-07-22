@@ -17,6 +17,11 @@ const MANAGEMENT_CSP = [
   "object-src 'none'"
 ].join('; ')
 
+const FULL_CONSOLE_CSP = MANAGEMENT_CSP.replace(
+  "style-src 'self'",
+  "style-src 'self' 'unsafe-inline'"
+)
+
 function secureManagementReply(reply: FastifyReply): FastifyReply {
   return reply
     .header('Content-Security-Policy', MANAGEMENT_CSP)
@@ -24,6 +29,11 @@ function secureManagementReply(reply: FastifyReply): FastifyReply {
     .header('X-Content-Type-Options', 'nosniff')
     .header('X-Frame-Options', 'DENY')
     .header('Cross-Origin-Resource-Policy', 'same-origin')
+}
+
+function secureFullConsoleReply(reply: FastifyReply): FastifyReply {
+  return secureManagementReply(reply)
+    .header('Content-Security-Policy', FULL_CONSOLE_CSP)
 }
 
 function unavailable(): SafeError {
@@ -36,14 +46,25 @@ function unavailable(): SafeError {
 }
 
 export function registerManagementShell(app: FastifyInstance): void {
+  const moduleRoot = path.dirname(fileURLToPath(import.meta.url))
   const distRoot = path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
+    moduleRoot,
     '..',
     '..',
     'admin-web',
     'dist'
   )
   const indexFile = path.join(distRoot, 'index.html')
+  const sharedAdminRoot = path.resolve(moduleRoot, '..', '..', '..', 'src')
+  const fullConsoleIndex = path.join(sharedAdminRoot, 'admin.html')
+  const fullConsoleScripts = [
+    path.join(sharedAdminRoot, 'admin_ui_behaviors.cjs'),
+    path.join(sharedAdminRoot, 'admin_modules', 'accounts.js'),
+    path.join(sharedAdminRoot, 'admin_modules', 'tutorial.js'),
+    path.join(sharedAdminRoot, 'admin_modules', 'analytics.js'),
+    path.join(sharedAdminRoot, 'admin_modules', 'settings.js'),
+    path.join(sharedAdminRoot, 'admin_app.js')
+  ]
 
   const index = async (_request: unknown, reply: FastifyReply) => {
     if (!fs.existsSync(indexFile)) throw unavailable()
@@ -54,6 +75,37 @@ export function registerManagementShell(app: FastifyInstance): void {
   }
   app.get('/admin', index)
   app.get('/admin/', index)
+
+  const fullConsole = async (_request: unknown, reply: FastifyReply) => {
+    if (!fs.existsSync(fullConsoleIndex)) throw unavailable()
+    // The shared standalone console uses one inline stylesheet and bounded
+    // dynamic style attributes for quota/health visualization. Scripts remain
+    // external-only; inline script execution is never enabled.
+    await secureFullConsoleReply(reply)
+      .header('Cache-Control', 'no-store')
+      .type('text/html; charset=utf-8')
+      .send(fs.createReadStream(fullConsoleIndex))
+  }
+  app.get('/admin/full', fullConsole)
+  app.get('/admin/full/', fullConsole)
+
+  app.get('/admin/runtime.js', async (_request, reply) => {
+    await secureManagementReply(reply)
+      .header('Cache-Control', 'no-store')
+      .type('text/javascript; charset=utf-8')
+      .send(
+        'window.__TORVYE_MANAGEMENT__=Object.freeze({' +
+        'mode:"gateway",surface:"browser",apiBase:"/admin/api"});'
+      )
+  })
+
+  app.get('/admin/app.js', async (_request, reply) => {
+    if (fullConsoleScripts.some(file => !fs.existsSync(file))) throw unavailable()
+    await secureManagementReply(reply)
+      .header('Cache-Control', 'no-store')
+      .type('text/javascript; charset=utf-8')
+      .send(fullConsoleScripts.map(file => fs.readFileSync(file, 'utf8')).join('\n;\n'))
+  })
 
   app.get('/admin/assets/:asset', async (request, reply) => {
     const asset = (request.params as { asset?: string }).asset || ''

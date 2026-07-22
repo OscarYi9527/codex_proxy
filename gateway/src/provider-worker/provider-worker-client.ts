@@ -6,6 +6,8 @@ import { SafeError } from '../common/errors.js'
 import type {
   GatewayProviderRuntimeConfiguration,
   ProviderForwardResult,
+  ProviderProbeRequest,
+  ProviderProbeResult,
   ProviderRouteAdapter,
   SafeAccountPoolSnapshot,
   SafeModelList
@@ -284,6 +286,52 @@ export class ProviderWorkerClient implements ProviderRouteAdapter {
       {},
       'refresh_usage'
     )
+  }
+
+  async probeProvider(request: ProviderProbeRequest): Promise<ProviderProbeResult> {
+    const startedAt = this.now()
+    if (request.provider !== 'chatgpt-sub') {
+      return {
+        ok: false,
+        latency: 0,
+        source: 'provider-worker-active-probe',
+        error: 'This Provider is not available in the current Provider Worker.'
+      }
+    }
+    try {
+      if (request.credentialId) {
+        await this.refreshChatgptAccountUsage(request.credentialId)
+      } else {
+        const [status, models] = await Promise.all([
+          this.providerRuntimeStatus(),
+          this.listModels()
+        ])
+        if (!status.enabled || models.data.length === 0) {
+          return {
+            ok: false,
+            latency: Math.max(0, this.now() - startedAt),
+            source: 'provider-worker-active-probe',
+            error: 'No routable ChatGPT subscription account is available.'
+          }
+        }
+      }
+      return {
+        ok: true,
+        status: 200,
+        latency: Math.max(0, this.now() - startedAt),
+        source: 'provider-worker-active-probe',
+        error: null
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        latency: Math.max(0, this.now() - startedAt),
+        source: 'provider-worker-active-probe',
+        error: error instanceof SafeError
+          ? error.message
+          : 'Provider Worker upstream probe failed.'
+      }
+    }
   }
 
   async listPendingUsage(limit = 100): Promise<ProviderUsageReceipt[]> {

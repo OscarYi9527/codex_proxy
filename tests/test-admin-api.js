@@ -127,6 +127,13 @@ describe('原子配置写入和管理 API', () => {
       assert.ok(ACCOUNT_ROUTING_STRATEGIES.includes(publicConfig.chatgptAccountStrategy))
       assert.ok(Number.isFinite(publicConfig.chatgptLowQuotaThreshold))
 
+      const runtimeScriptResponse = await fetch(base + '/admin/runtime.js')
+      const runtimeScript = await runtimeScriptResponse.text()
+      assert.strictEqual(runtimeScriptResponse.status, 200)
+      assert.match(runtimeScriptResponse.headers.get('content-type'), /javascript/i)
+      assert.match(runtimeScript, /mode:"standalone"/)
+      assert.ok(!runtimeScript.includes('access_token'))
+
       const missingRouting = await fetch(base + '/admin/api/chatgpt-accounts/missing/routing', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },

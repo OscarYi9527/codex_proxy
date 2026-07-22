@@ -30,7 +30,7 @@ flowchart LR
     Edge -->|Access Token + session + Turn ID| Gateway[Gateway :47920]
     Gateway --> DB[(SQLite / PostgreSQL)]
     Gateway -->|隔离 Provider 配置| Provider[Provider adapters]
-    Gateway --> Admin[React 管理页面]
+    Gateway --> Admin[React 内嵌管理 + 共享完整控制台]
     Shared[standalone :47892]:::protected
     Edge -. 禁止读写 .-> Shared
     Gateway -. 禁止读写 .-> Shared
@@ -113,7 +113,7 @@ flowchart LR
 | `gateway/src/routing/` | 预检、动态模型目录和现有 Provider 兼容适配 |
 | `gateway/src/providers/` | Level-1 Provider 服务、凭据边界和隔离 ChatGPT 官方登录 |
 | `gateway/src/db/` | Kysely schema、SQLite/PostgreSQL 方言、迁移和 repository |
-| `gateway/admin-web/` | React/Vite 管理外壳、角色导航、账号页面及 Provider/诊断页面 |
+| `gateway/admin-web/` | React/Vite 内嵌管理外壳、角色导航、账号页面及精简 Provider/诊断页面 |
 | `tools/*-ai-editor-dev.ps1` | 隔离启动、PID 归属停止和确认式数据重置 |
 | `src/routes/chatgpt-sub.js` | ChatGPT 请求、账号轮换、公平队列和取消联动 |
 | `src/chatgpt-accounts.js` | OAuth Token、额度、预测、租约、自适应并发和冷却 |
@@ -150,6 +150,36 @@ Gateway 数据库只保存 ticket 和管理 Cookie 的 keyed digest。`POST /api
 `Secure`。所有 Cookie 写操作要求固定 Gateway `Origin`，关闭标签页时
 `DELETE /api/v1/webview/session` 撤销会话。React 导航使用服务端返回的角色许可列表，
 普通用户页面只读取自身账号、积分、设备和使用记录。
+
+### TORVYE 双管理表面与共享完整控制台
+
+Gateway 的 `/admin` 保留 React 内嵌管理表面，用于 Code 中的账号、安全、组织、邀请码、
+积分、审计和精简 Provider 操作。浏览器入口仍使用合同冻结的
+`/admin#browser?ticket=...&route=...`；React 入口只负责把该浏览器表面重定向到
+`/admin/full`，一次性 ticket 不进入查询参数、Cookie、localStorage 或服务日志。
+
+`/admin/full` 直接加载 standalone 使用的同一组源文件：
+
+- `src/admin.html`
+- `src/admin_ui_behaviors.cjs`
+- `src/admin_app.js`
+- `src/admin_modules/*`
+
+因此 standalone 与中央 Gateway 不维护两套完整控制台。`/admin/runtime.js` 只声明
+`standalone` 或 `gateway` 运行模式；共享前端根据模式选择相同页面和不同的数据适配。
+Gateway 的 `/admin/api/*` 兼容层把中央 Provider、模型路由、账号池、额度、健康、熔断和
+用量转换为完整控制台形状，所有接口仍先校验 HttpOnly 管理 Cookie，并再次强制
+Level-1。中央凭据保持只写不回显，配置响应只包含脱敏预览。
+
+兼容层的统计不从 Provider 汇总反推或复制到每个配置模型。Gateway 直接从
+`usage_records` 按 `provider_id + model_id` 聚合累计请求与输入/输出 Token，并按
+Asia/Shanghai 自然日生成最近 370 天的日统计。通道检测通过 Provider adapter 主动访问
+上游；Provider Worker 的 ChatGPT 探测使用真实额度刷新，未由当前 Worker 承载的通道
+返回明确的不支持结果。历史健康状态仅用于状态展示，不再作为手动检测的成功依据。
+
+本机特有的切换 Codex 账号、重置订阅额度、清空本地统计、部署、恢复本机备份和重启
+standalone Proxy 不会被映射为中央操作：共享前端在 Gateway 模式隐藏这些入口，直接
+调用兼容接口时服务端仍以 `409 full_console_operation_unavailable` fail closed。
 
 ### Gateway Provider 管理
 

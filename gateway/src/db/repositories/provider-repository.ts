@@ -54,6 +54,23 @@ export interface ProviderUsageSummary {
   readonly lastUsedAt: string | null
 }
 
+export interface ProviderModelUsageSummary {
+  readonly providerId: string
+  readonly modelId: string
+  readonly requests: number
+  readonly inputTokens: number
+  readonly outputTokens: number
+}
+
+export interface ProviderConsoleUsageRecord {
+  readonly providerId: string
+  readonly accountId: string
+  readonly modelId: string
+  readonly inputTokens: number
+  readonly outputTokens: number
+  readonly completedAt: string
+}
+
 function parseObject(value: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(value)
@@ -329,6 +346,59 @@ export class ProviderRepository {
       outputTokens: value.outputTokens,
       settledCredits: formatCredits(value.settledCredits),
       lastUsedAt: value.lastUsedAt
+    }))
+  }
+
+  async listProviderModelUsageSummaries(): Promise<ProviderModelUsageSummary[]> {
+    const rows = await this.db
+      .selectFrom('usage_records')
+      .select(['provider_id', 'model_id', 'input_tokens', 'output_tokens'])
+      .execute()
+    const summaries = new Map<string, {
+      providerId: string
+      modelId: string
+      requests: number
+      inputTokens: number
+      outputTokens: number
+    }>()
+    for (const row of rows) {
+      const key = `${row.provider_id}\u0000${row.model_id}`
+      const current = summaries.get(key) || {
+        providerId: row.provider_id,
+        modelId: row.model_id,
+        requests: 0,
+        inputTokens: 0,
+        outputTokens: 0
+      }
+      current.requests += 1
+      current.inputTokens += row.input_tokens
+      current.outputTokens += row.output_tokens
+      summaries.set(key, current)
+    }
+    return [...summaries.values()]
+  }
+
+  async listConsoleUsageRecords(since: string): Promise<ProviderConsoleUsageRecord[]> {
+    const rows = await this.db
+      .selectFrom('usage_records')
+      .select([
+        'provider_id',
+        'account_id',
+        'model_id',
+        'input_tokens',
+        'output_tokens',
+        'completed_at'
+      ])
+      .where('completed_at', '>=', since)
+      .orderBy('completed_at', 'asc')
+      .execute()
+    return rows.map(row => ({
+      providerId: row.provider_id,
+      accountId: row.account_id,
+      modelId: row.model_id,
+      inputTokens: row.input_tokens,
+      outputTokens: row.output_tokens,
+      completedAt: row.completed_at
     }))
   }
 

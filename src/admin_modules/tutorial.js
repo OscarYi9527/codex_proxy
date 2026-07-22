@@ -2,7 +2,7 @@ function helpStep(number,title,desc,action='',done=false){
   return `<div class="help-step"><span class="help-number ${done?'done':''}">${done?svg('check'):number}</span><div><strong>${title}</strong><p>${desc}</p>${action?`<div class="help-action">${action}</div>`:''}</div></div>`
 }
 function helpFeature(icon,title,desc,page){
-  return `<button class="help-feature" onclick="switchPage('${page}')"><span>${svg(icon)}</span><div><strong>${title}</strong><small>${desc}</small></div>${svg('arrow')}</button>`
+  return `<button class="help-feature" data-admin-onclick="switchPage('${page}')"><span>${svg(icon)}</span><div><strong>${title}</strong><small>${desc}</small></div>${svg('arrow')}</button>`
 }
 function errorGuideRowsHtml(query=''){
   const guides=AdminUIBehaviors.filterErrorGuides(errorGuideData,query)
@@ -14,7 +14,7 @@ function filterErrorGuide(value){
   if(target)target.innerHTML=errorGuideRowsHtml(value)
 }
 function errorGuideLookup(){
-  return `<div class="card-body" style="display:grid;gap:13px"><div class="help-note"><b>先看状态码，再看完整报错正文和来源</b><p>同一个状态码可能来自本地代理、ChatGPT、OpenAI API、DeepSeek 或中转节点。比如截图中的 503 明确写着账号池排队超时，应先检查账号池；402 通常表示对应上游的余额、计费或套餐权限不可用。</p></div><div class="field"><label>搜索错误码或关键词</label><input class="input" id="error_guide_query" inputmode="search" placeholder="例如：503、402、额度、登录、超时" oninput="filterErrorGuide(this.value)"><span class="hint">建议同时记录报错正文和 X-Codex-Proxy-Request-Id，便于进一步定位。</span></div></div><div id="error_guide_results">${errorGuideRowsHtml()}</div>`
+  return `<div class="card-body" style="display:grid;gap:13px"><div class="help-note"><b>先看状态码，再看完整报错正文和来源</b><p>同一个状态码可能来自本地代理、ChatGPT、OpenAI API、DeepSeek 或中转节点。比如截图中的 503 明确写着账号池排队超时，应先检查账号池；402 通常表示对应上游的余额、计费或套餐权限不可用。</p></div><div class="field"><label>搜索错误码或关键词</label><input class="input" id="error_guide_query" inputmode="search" placeholder="例如：503、402、额度、登录、超时" data-admin-oninput="filterErrorGuide(this.value)"><span class="hint">建议同时记录报错正文和 X-Codex-Proxy-Request-Id，便于进一步定位。</span></div></div><div id="error_guide_results">${errorGuideRowsHtml()}</div>`
 }
 function renderHelp(){
   const quotaResetGuide=`<div class="help-manual"><div class="help-note" style="border-color:color-mix(in srgb,var(--red) 28%,var(--border));background:color-mix(in srgb,var(--red) 6%,var(--surface-2))"><b style="color:var(--red)">高风险：会消耗 1 次重置机会且无法撤销</b><p>只有账号确实有可用重置次数并且你明确需要立即恢复额度时才使用；不确定时不要操作。</p></div><ol><li><b>先查询重置次数。</b><span>进入账号池，点击目标账号的“查询次数”，确认可用次数和到期时间。</span></li><li><b>核对目标账号。</b><span>点击标有“高风险”的重置入口，检查弹窗中的账号名称，再完整输入该名称。</span></li><li><b>勾选两项风险确认。</b><span>分别确认目标账号正确，以及操作会消耗 1 次机会并且不可撤销。</span></li><li><b>完成最终系统确认。</b><span>只有三步全部完成后才会提交。提交期间不要关闭弹窗、刷新页面或重复点击，等待额度和剩余次数自动刷新。</span></li></ol></div>`

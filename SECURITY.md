@@ -40,6 +40,26 @@
 - `gateway/tests/security/secret-leak.test.ts` 对数据库、管理 API、日志和导出形状执行
   固定秘密回归；发布前必须与完整覆盖率测试一起通过。
 
+## TORVYE 浏览器完整管理平台
+
+- `/admin` 的 Code 内嵌 React 管理与 `/admin/full` 的浏览器完整控制台共用同一个
+  HttpOnly 管理会话，不接受 URL Bearer Token 或 localStorage Token。
+- 浏览器必须从一次性 `#browser?ticket=...` 入口进入；ticket 交换前即从地址栏历史状态
+  中移除，重放、过期、错误 Origin 或非一级管理员均 fail closed。
+- `/admin/full` 的 HTML/JavaScript 可以公开加载，但 `/admin/api/*` 的所有数据请求都
+  重新验证管理 Cookie；所有写操作还要求固定 Gateway Origin。
+- 共享 console 仍使用 standalone 的单个内联样式表和额度/健康动态样式，因此仅
+  `/admin/full` 的 CSP 对 `style-src` 开放 `unsafe-inline`；`script-src` 始终保持
+  external-only，绝不开放内联脚本。
+- 共享 console 的按钮、输入框和拖拽交互使用 `data-admin-on*` 与外部脚本中的白名单
+  事件委托；页面不包含 `onclick`、`onchange` 等可执行内联处理器，也不使用
+  `eval`/`Function` 绕过 CSP。未知动作名或不支持的参数形状不会执行。
+- 完整控制台只返回 masked preview。API Key、ChatGPT Access/Refresh Token、Provider
+  Worker 签名秘密和完整凭据不得出现在 HTML、JSON、日志、错误、导出或浏览器存储中。
+- standalone 专属的部署、备份恢复、统计清空、额度重置和进程重启操作不会透传到中央
+  Gateway；即使绕过前端直接请求也返回安全的 `409`。
+- 中央完整控制台永不读取、复制、导入或控制用户本机 `127.0.0.1:47892` 的配置和数据。
+
 加密文件不能脱离 `.credential-key.dpapi.json` 和原 Windows 用户单独恢复。迁移
 电脑前应先在原用户环境中使用管理后台确认账号可用；不要把密钥文件或备份上传到
 公共仓库。DPAPI 保护降低静态文件泄露风险，但不能防御已经控制当前 Windows 用户

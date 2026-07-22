@@ -1,5 +1,9 @@
-const API = '/admin/api'
-let cfg = {}, statsData = { providers: {} }, diagnosticsData = { accounts: [], queue: {}, config_snapshots: [], account_backups: [], recent_route_decisions: [], provider_health: {providers:{}}, credential_protection: {}, circuits: [] }, modelCatalog = [], activePage = location.hash.slice(1) || 'overview'
+const MANAGEMENT = window.__TORVYE_MANAGEMENT__ || Object.freeze({mode:'standalone',surface:'browser',apiBase:'/admin/api'})
+const API = MANAGEMENT.apiBase || '/admin/api'
+const CENTRAL_MANAGEMENT = MANAGEMENT.mode === 'gateway'
+const FULL_CONSOLE_PAGES = new Set(['overview','providers','relays','accounts','analytics','settings','help'])
+const browserBootstrapHash = location.hash.startsWith('#browser?') ? location.hash : ''
+let cfg = {}, statsData = { providers: {} }, diagnosticsData = { accounts: [], queue: {}, config_snapshots: [], account_backups: [], recent_route_decisions: [], provider_health: {providers:{}}, credential_protection: {}, circuits: [] }, modelCatalog = [], activePage = FULL_CONSOLE_PAGES.has(location.hash.slice(1)) ? location.hash.slice(1) : 'overview'
 let pingResults = {}, modal = null, loginPoll = null, accountsPoll = null, draggedAccountId = null, resetQuotaSubmitting = false
 let errorGuideData = []
 let loginPreflightData = null
@@ -28,6 +32,94 @@ const icons = {
 }
 function svg(name, cls=''){ return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${icons[name]||''}</svg>` }
 function esc(v=''){ return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])) }
+const ADMIN_ACTIONS = new Set([
+  'toggleSidebar','load','toggleTheme','switchPage','shiftUsageCalendarMonth','resetUsageCalendarMonth',
+  'deployWorkspaceUpdate','refreshDiagnosis','pingAll','pingChannel','runDiagnosisAction','toggleSecret',
+  'saveConfig','openRelay','saveRelay','removeRelay','closeModal','readRelayLink','parseRelayLink',
+  'importCurrentAccount','saveAccount',
+  'openAuthFilePicker','authDrag','authDrop','openBatchOfficialLogin','loadAuthFiles','clearManualAccountImport',
+  'openRenameAccount','saveAccountRenameOnEnter','saveAccountRename','copyLoginDiagnostics',
+  'copyBatchLoginCredential','startBatchOfficialLogin','advanceBatchOfficialLogin','finishBatchOfficialLogin',
+  'cancelBatchOfficialLogin','skipBatchOfficialLogin',
+  'loadBatchLoginFiles','copyDeviceCode','startOfficialLogin','cancelOfficialLogin',
+  'updateResetQuotaConfirmation','resetAccountQuota','updateAccountPoolTierPolicyForm','saveAccountPolicy',
+  'filterErrorGuide','copyProxyAddress','startAccountDrag',
+  'preventAdminDrag','dropAccount','refreshAccountUsageOne','updateAccountWeight',
+  'refreshAccountResetCreditsOne','openResetQuota','openAccountPolicy','removeAccount','switchAccount',
+  'toggleAccountRouting','setAccountViewMode','setHealthRange','setAccountCategory','openOfficialLogin',
+  'checkAllAccountStatus','refreshAllUsage','refreshAllResetCredits','restartCodex','openAccount',
+  'rollbackConfigSnapshot','restoreAccountBackup','downloadDiagnostics','repairRuntime',
+  'resetProviderHealth','gracefulRestartProxy','resetCircuits','savePriceCatalog','resetStats'
+])
+function splitAdminActionArguments(source){
+  const values=[]
+  let current='',quote='',escaped=false
+  for(const char of source){
+    if(escaped){current+=char;escaped=false;continue}
+    if(char==='\\'){current+=char;escaped=true;continue}
+    if(quote){current+=char;if(char===quote)quote='';continue}
+    if(char==="'"||char==='"'){current+=char;quote=char;continue}
+    if(char===','){values.push(current.trim());current='';continue}
+    current+=char
+  }
+  if(quote||escaped)throw new Error('Malformed admin action arguments')
+  if(current.trim())values.push(current.trim())
+  return values
+}
+function parseAdminActionArgument(token,event,element){
+  if(token==='event')return event
+  if(token==='this')return element
+  if(token==='this.value')return element.value
+  if(token==='this.files')return element.files
+  if(token==='true')return true
+  if(token==='false')return false
+  if(token==='null')return null
+  if(/^-?\d+(?:\.\d+)?$/.test(token))return Number(token)
+  if((token.startsWith("'")&&token.endsWith("'"))||(token.startsWith('"')&&token.endsWith('"'))){
+    const quote=token[0]
+    let value=''
+    for(let index=1;index<token.length-1;index++){
+      const char=token[index]
+      if(char!=='\\'){value+=char;continue}
+      index++
+      const escaped=token[index]
+      value+=escaped==='n'?'\n':escaped==='r'?'\r':escaped==='t'?'\t':escaped===quote?quote:escaped
+    }
+    return value
+  }
+  throw new Error('Unsupported admin action argument')
+}
+function dispatchAdminAction(event){
+  if(!(event.target instanceof Element))return
+  const attribute=`data-admin-on${event.type}`
+  const element=event.target.closest(`[${attribute}]`)
+  if(!element)return
+  const expression=element.getAttribute(attribute)||''
+  const match=/^([A-Za-z_$][\w$]*)\((.*)\)$/.exec(expression.trim())
+  if(!match||!ADMIN_ACTIONS.has(match[1]))return
+  const action=globalThis[match[1]]
+  if(typeof action!=='function')return
+  try{
+    const args=splitAdminActionArguments(match[2]).map(token=>parseAdminActionArgument(token,event,element))
+    const result=action(...args)
+    if(result&&typeof result.catch==='function')result.catch(error=>toast(error?.message||'操作失败','error'))
+  }catch(error){
+    toast(error?.message||'操作失败','error')
+  }
+}
+for(const eventName of ['click','change','input','keydown','dragstart','dragover','dragleave','drop']){
+  document.addEventListener(eventName,dispatchAdminAction)
+}
+function openAuthFilePicker(){document.getElementById('auth_file')?.click()}
+function clearManualAccountImport(input){
+  if(!input.value.trim())return
+  accountImportFiles=[]
+  accountImportFileName=''
+  const preview=document.getElementById('auth_file_preview')
+  if(preview)preview.innerHTML=''
+}
+function saveAccountRenameOnEnter(event,id){if(event.key==='Enter')void saveAccountRename(id)}
+function preventAdminDrag(event){event.preventDefault()}
 function fmt(n=0){ n=Number(n)||0; return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':n.toLocaleString('zh-CN') }
 function allProviders(){ return Object.values(statsData.providers||{}) }
 function totals(){ return allProviders().reduce((a,p)=>({requests:a.requests+(p.requests||0),input:a.input+(p.input_tokens||0),output:a.output+(p.output_tokens||0)}),{requests:0,input:0,output:0}) }
@@ -127,7 +219,7 @@ function usageHeatmap(){
   const currentMonth=statsDateKey().slice(0,7), isCurrent=usageCalendarMonth===currentMonth
   return `<div class="usage-calendar">
     <div class="usage-calendar-top">
-      <div class="usage-calendar-toolbar"><div><strong>${year} 年 ${month} 月</strong><span>${isCurrent?'当前月份':'历史月份'}</span></div><div class="usage-calendar-nav"><button onclick="shiftUsageCalendarMonth(-1)" title="上一个月">‹</button>${isCurrent?'':`<button class="calendar-today" onclick="resetUsageCalendarMonth()">本月</button>`}<button onclick="shiftUsageCalendarMonth(1)" title="下一个月" ${isCurrent?'disabled':''}>›</button></div></div>
+      <div class="usage-calendar-toolbar"><div><strong>${year} 年 ${month} 月</strong><span>${isCurrent?'当前月份':'历史月份'}</span></div><div class="usage-calendar-nav"><button data-admin-onclick="shiftUsageCalendarMonth(-1)" title="上一个月">‹</button>${isCurrent?'':`<button class="calendar-today" data-admin-onclick="resetUsageCalendarMonth()">本月</button>`}<button data-admin-onclick="shiftUsageCalendarMonth(1)" title="下一个月" ${isCurrent?'disabled':''}>›</button></div></div>
       <div class="usage-calendar-summary"><div><span>本月 Token</span><strong>${fmt(tokens)}</strong></div><div><span>活跃天数</span><strong>${activeDays}</strong></div><div><span>完成请求</span><strong>${fmt(requests)}</strong></div><div><span>账号尝试</span><strong>${fmt(attempts)}</strong></div></div>
     </div>
     <div class="usage-month-calendar"><div class="usage-month-weekdays">${['周一','周二','周三','周四','周五','周六','周日'].map(label=>`<span>${label}</span>`).join('')}</div><div class="usage-month-grid">${cellHtml}</div></div>
@@ -197,11 +289,22 @@ const navGroups = [
   ['帮助',[['help','新手使用教程']]]
 ]
 function renderNav(){
-  document.getElementById('nav').innerHTML=navGroups.map(([g,items])=>`<div class="nav-label">${g}</div>${items.map(([id,label])=>`<button class="nav-btn ${activePage===id?'active':''}" onclick="switchPage('${id}')">${svg(id)}<span>${label}</span></button>`).join('')}`).join('')
+  document.getElementById('nav').innerHTML=navGroups.map(([g,items])=>`<div class="nav-label">${g}</div>${items.map(([id,label])=>`<button class="nav-btn ${activePage===id?'active':''}" data-admin-onclick="switchPage('${id}')">${svg(id)}<span>${label}</span></button>`).join('')}`).join('')
 }
 function switchPage(page){
   activePage=pages[page]?page:'overview'; location.hash=activePage
-  const [title,sub]=pages[activePage]; document.getElementById('top-title').textContent=title; document.getElementById('top-subtitle').textContent=sub
+  const [title,sub]=pages[activePage]
+  const centralSubtitles={
+    overview:'查看中央 Gateway 运行状态与资源使用情况',
+    providers:'管理中央上游模型服务与只写凭据',
+    relays:'管理中央 OpenAI 兼容节点与模型路由',
+    accounts:'管理中央 ChatGPT 订阅账号与自动轮换',
+    analytics:'查看中央请求、Token 与模型用量',
+    settings:'查看中央 Gateway 路由、费率与安全状态',
+    help:'中央统一管理平台使用教程'
+  }
+  document.getElementById('top-title').textContent=title
+  document.getElementById('top-subtitle').textContent=CENTRAL_MANAGEMENT?(centralSubtitles[activePage]||sub):sub
   document.getElementById('sidebar').classList.remove('open'); animateNextRender=true; renderNav(); render()
   if(accountsPoll){clearInterval(accountsPoll);accountsPoll=null}
   if(activePage==='accounts')accountsPoll=setInterval(()=>{if(!document.hidden)load(false,false)},60000)
@@ -233,7 +336,7 @@ function setHealthRange(range){
 async function load(showMessage=false,includeModels=true){
   const btn=document.getElementById('refreshButton'); btn.innerHTML=svg('refresh')
   try{
-    const [c,s,d,r,m,e,p,cost]=await Promise.all([fetch(API+'/config'),fetch(API+'/stats'),fetch(API+'/diagnostics').catch(()=>null),fetch(API+'/resilience').catch(()=>null),includeModels?fetch('/v1/models').catch(()=>null):null,fetch(API+'/error-guide').catch(()=>null),fetch(API+'/prices').catch(()=>null),fetch(API+'/costs').catch(()=>null)])
+    const [c,s,d,r,m,e,p,cost]=await Promise.all([fetch(API+'/config'),fetch(API+'/stats'),fetch(API+'/diagnostics').catch(()=>null),fetch(API+'/resilience').catch(()=>null),includeModels?fetch(CENTRAL_MANAGEMENT?API+'/models':'/v1/models').catch(()=>null):null,fetch(API+'/error-guide').catch(()=>null),fetch(API+'/prices').catch(()=>null),fetch(API+'/costs').catch(()=>null)])
     if(!c.ok||!s.ok) throw new Error('服务响应异常')
     cfg=(await c.json()).config||{}; statsData=await s.json()
     if(d?.ok)diagnosticsData=await d.json()
@@ -248,7 +351,7 @@ async function load(showMessage=false,includeModels=true){
 function pageHead(title,desc,actions=''){ return `<div class="page-head"><div><h1>${title}</h1><p>${desc}</p></div><div class="card-actions">${actions}</div></div>` }
 function metric(label,value,icon,foot){ return `<div class="metric"><div class="metric-top"><span>${label}</span><span class="metric-icon">${svg(icon)}</span></div><strong>${value}</strong><div class="metric-foot">${foot}</div></div>` }
 function card(title,sub,body,actions=''){ return `<section class="card"><div class="card-head"><div class="card-title"><strong>${title}</strong>${sub?`<span>${sub}</span>`:''}</div><div class="card-actions">${actions}</div></div>${body}</section>` }
-function button(text,icon,fn,cls=''){ return `<button class="btn ${cls}" onclick="${fn}">${icon?svg(icon):''}${text}</button>` }
+function button(text,icon,fn,cls=''){ return `<button class="btn ${cls}" data-admin-onclick="${fn}">${icon?svg(icon):''}${text}</button>` }
 function empty(icon,title,desc,action=''){ return `<div class="empty"><div class="empty-icon">${svg(icon)}</div><strong>${title}</strong><p>${desc}</p>${action}</div>` }
 function providerRows(){
   const providers=[
@@ -272,7 +375,7 @@ function providerRows(){
     const trend=persisted?.windows?.[healthRange]
     const trendText=trend?.requests?`${healthRange} ${trend.success_rate??'-'}% · P95 ${fmt(trend.p95_latency_ms)} ms · 429 ${trend.rate_limited}`:checked
     const healthTitle=persisted?.last_error?` title="${esc(persisted.last_error)}"`:''
-    return `<div class="provider-row"><div class="provider-name"><span class="provider-logo ${logo}">${logo==='chatgpt'?'G':logo==='openai'?'AI':logo==='deepseek'?'D':'R'}</span><div><strong>${name}</strong><small>${sub}</small></div></div><div class="latency-cell"${healthTitle}><span class="status ${statusClass}"><i></i>${status}</span><div class="cell-sub">${trendText}</div>${persisted?.trend_warning?`<div class="cell-sub" style="color:var(--red)">${esc(persisted.trend_warning.message)}</div>`:''}</div><div class="usage-cell"><span class="cell-sub">${fmt(p.requests)} 次请求</span><div class="mini-bar"><i style="width:${Math.min(100,(p.requests||0)/Math.max(1,totals().requests)*100)}%"></i></div></div><button class="btn btn-sm" onclick="pingChannel('${key}')">${svg('pulse')}检测</button></div>`
+    return `<div class="provider-row"><div class="provider-name"><span class="provider-logo ${logo}">${logo==='chatgpt'?'G':logo==='openai'?'AI':logo==='deepseek'?'D':'R'}</span><div><strong>${name}</strong><small>${sub}</small></div></div><div class="latency-cell"${healthTitle}><span class="status ${statusClass}"><i></i>${status}</span><div class="cell-sub">${trendText}</div>${persisted?.trend_warning?`<div class="cell-sub" style="color:var(--red)">${esc(persisted.trend_warning.message)}</div>`:''}</div><div class="usage-cell"><span class="cell-sub">${fmt(p.requests)} 次请求</span><div class="mini-bar"><i style="width:${Math.min(100,(p.requests||0)/Math.max(1,totals().requests)*100)}%"></i></div></div><button class="btn btn-sm" data-admin-onclick="pingChannel('${key}')">${svg('pulse')}检测</button></div>`
   }).join('')
 }
 function deploymentBanner(){
@@ -294,7 +397,7 @@ function diagnosisCenter(){
   const issues=diagnosis.issues||[]
   const tone=diagnosis.summary?.level==='critical'?'off':diagnosis.summary?.level==='warning'?'warn':''
   const body=issues.length?issues.slice(0,8).map(issue=>{
-    const actions=(issue.actions||[]).map(item=>`<button class="btn btn-sm" onclick="runDiagnosisAction('${esc(item.id)}','${esc(item.target||'')}',event)">${esc(item.label)}</button>`).join('')
+    const actions=(issue.actions||[]).map(item=>`<button class="btn btn-sm" data-admin-onclick="runDiagnosisAction('${esc(item.id)}','${esc(item.target||'')}',event)">${esc(item.label)}</button>`).join('')
     return `<div class="provider-row" style="grid-template-columns:minmax(0,1fr) auto"><div><span class="status ${issue.level==='critical'?'off':'warn'}"><i></i><b>${esc(issue.title)}</b></span><div class="cell-sub" style="margin-top:5px">${esc(issue.conclusion)}</div></div><div class="card-actions">${actions}</div></div>`
   }).join(''):`<div class="help-note"><span class="status ${tone}"><i></i>${esc(diagnosis.summary?.conclusion||'未发现明显异常')}</span></div>`
   const pool=diagnosis.account_pool||{},ops=diagnosis.trends?.operational||{}
@@ -304,17 +407,17 @@ function diagnosisCenter(){
 function renderOverview(){
   const t=totals()
   const today=normalizedDaily(1)[0]
-  const recent=allProviders().flatMap(p=>Object.entries(p.models||{})).sort((a,b)=>(b[1].requests||0)-(a[1].requests||0)).slice(0,4)
+  const recent=allProviders().flatMap(p=>Object.entries(p.models||{})).filter(([,v])=>(Number(v.requests)||0)>0).sort((a,b)=>(b[1].requests||0)-(a[1].requests||0)).slice(0,4)
   const activity=recent.length?recent.map(([name,v])=>`<div class="activity"><span class="activity-icon">${svg('arrow')}</span><div><p><b>${esc(name)}</b> 完成 ${fmt(v.requests)} 次路由请求</p><small>输入 ${fmt(v.input_tokens)} · 输出 ${fmt(v.output_tokens)} Tokens</small></div></div>`).join(''):empty('pulse','暂无调用记录','请求将在这里实时汇总')
   return pageHead('控制台概览','统一查看模型网关、账号池和节点状态',button('检测全部通道','pulse','pingAll()','btn-primary'))+
     deploymentBanner()+
     `<div class="metrics">${metric('今日请求',fmt(today.requests),'pulse',`累计完成 ${fmt(t.requests)} 次`)}${metric('今日 Token',fmt(dailyTokens(today)),'analytics',`输入 ${fmt(today.input_tokens)} · 输出 ${fmt(today.output_tokens)}`)}${metric('连续活跃',`${activeStreak()} 天`,'server','以每天产生请求或 Token 记录计算')}${metric('账号池',String((cfg.chatgptAccounts||[]).length),'users',`今日 ${fmt(today.account_attempts)} 次账号路由尝试`)}</div>`+
     diagnosisCenter()+
-    `<div class="grid overview-grid">${card('AI 使用日历','按月查看 · 默认显示当前月份 · 数据仅保存在本机',`<div class="card-body usage-calendar-body">${usageHeatmap()}</div>`)}${card('最近调用','按模型请求量排序',`<div class="card-body">${activity}</div>`)}${card('服务状态','上游通道与实时连通性',`<div class="card-body">${providerRows()}</div>`,button('管理服务','',"switchPage('providers')",'btn-sm'))}${card('运行信息','当前网关环境',`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">默认模型</span><b>${esc(cfg.defaultModel||'-')}</b></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">统计更新时间</span><b>${statsData.updated?new Date(statsData.updated).toLocaleTimeString('zh-CN'):'-'}</b></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">部署模式</span><span class="badge">Local</span></div></div>`)}</div>`
+    `<div class="grid overview-grid">${card('AI 使用日历',CENTRAL_MANAGEMENT?'按月查看 · 中央统计':'按月查看 · 默认显示当前月份 · 数据仅保存在本机',`<div class="card-body usage-calendar-body">${usageHeatmap()}</div>`)}${card('最近调用','按模型请求量排序',`<div class="card-body">${activity}</div>`)}${card('服务状态','上游通道与实时连通性',`<div class="card-body">${providerRows()}</div>`,button('管理服务','',"switchPage('providers')",'btn-sm'))}${card('运行信息','当前网关环境',`<div class="card-body"><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">默认模型</span><b>${esc(cfg.defaultModel||'-')}</b></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">统计更新时间</span><b>${statsData.updated?new Date(statsData.updated).toLocaleTimeString('zh-CN'):'-'}</b></div><div class="provider-row" style="grid-template-columns:1fr auto"><span class="cell-sub">部署模式</span><span class="badge">${CENTRAL_MANAGEMENT?'Central Gateway':'Local'}</span></div></div>`)}</div>`
 }
 function field(name,label,type='text',hint='',full=false){
   const value=cfg[name]||'', password=type==='password'
-  return `<div class="field ${full?'full':''}"><label>${label}${hint?` <span class="hint">${hint}</span>`:''}</label><div class="input-wrap"><input class="input" id="f_${name}" type="${password?'password':'text'}" value="${esc(value)}">${password?`<button class="icon-btn" type="button" onclick="toggleSecret('f_${name}',this)">${svg('eye')}</button>`:''}</div></div>`
+  return `<div class="field ${full?'full':''}"><label>${label}${hint?` <span class="hint">${hint}</span>`:''}</label><div class="input-wrap"><input class="input" id="f_${name}" type="${password?'password':'text'}" value="${esc(value)}">${password?`<button class="icon-btn" type="button" data-admin-onclick="toggleSecret('f_${name}',this)">${svg('eye')}</button>`:''}</div></div>`
 }
 function toggleSecret(id,btn){ const el=document.getElementById(id); el.type=el.type==='password'?'text':'password'; btn.innerHTML=svg('eye') }
 function renderProviders(){
@@ -325,7 +428,7 @@ function renderProviders(){
 }
 function renderRelays(){
   const relays=cfg.relays||[]
-  const body=relays.length?`<div class="table-wrap"><table class="table"><thead><tr><th>节点</th><th>状态</th><th>模型</th><th>操作</th></tr></thead><tbody>${relays.map(r=>`<tr><td><div class="cell-main">${esc(r.name)}</div><div class="cell-sub">${esc(r.base_url)}</div></td><td><span class="status ${pingResults['relay:'+r.id]?.ok?'':'off'}"><i></i>${pingResults['relay:'+r.id]?(pingResults['relay:'+r.id].ok?'正常':'异常'):'未检测'}</span></td><td><div class="tags">${(r.models||[]).slice(0,4).map(m=>`<span class="tag">${esc(m)}</span>`).join('')}${(r.models||[]).length>4?`<span class="tag">+${r.models.length-4}</span>`:''}</div></td><td><div class="card-actions"><button class="btn btn-sm" onclick="pingChannel('relay','${esc(r.id)}')">${svg('pulse')}</button><button class="btn btn-sm" onclick="openRelay('${esc(r.id)}')">${svg('edit')}</button><button class="btn btn-sm btn-danger" onclick="removeRelay('${esc(r.id)}')">${svg('trash')}</button></div></td></tr>`).join('')}</tbody></table></div>`:empty('relays','还没有中转节点','添加 OpenAI 兼容 API 节点，构建多线路容灾',button('添加第一个节点','plus','openRelay()','btn-primary'))
+  const body=relays.length?`<div class="table-wrap"><table class="table"><thead><tr><th>节点</th><th>状态</th><th>模型</th><th>操作</th></tr></thead><tbody>${relays.map(r=>`<tr><td><div class="cell-main">${esc(r.name)}</div><div class="cell-sub">${esc(r.base_url)}</div></td><td><span class="status ${pingResults['relay:'+r.id]?.ok?'':'off'}"><i></i>${pingResults['relay:'+r.id]?(pingResults['relay:'+r.id].ok?'正常':'异常'):'未检测'}</span></td><td><div class="tags">${(r.models||[]).slice(0,4).map(m=>`<span class="tag">${esc(m)}</span>`).join('')}${(r.models||[]).length>4?`<span class="tag">+${r.models.length-4}</span>`:''}</div></td><td><div class="card-actions"><button class="btn btn-sm" data-admin-onclick="pingChannel('relay','${esc(r.id)}')">${svg('pulse')}</button><button class="btn btn-sm" data-admin-onclick="openRelay('${esc(r.id)}')">${svg('edit')}</button><button class="btn btn-sm btn-danger" data-admin-onclick="removeRelay('${esc(r.id)}')">${svg('trash')}</button></div></td></tr>`).join('')}</tbody></table></div>`:empty('relays','还没有中转节点','添加 OpenAI 兼容 API 节点，构建多线路容灾',button('添加第一个节点','plus','openRelay()','btn-primary'))
   return pageHead('中转节点',`集中管理第三方兼容节点，共 ${relays.length} 个`,button('添加节点','plus','openRelay()','btn-primary'))+card('节点列表','支持独立模型映射与健康检测',body)
 }
 function formatDuration(seconds){
@@ -452,7 +555,7 @@ async function runDiagnosisAction(id,target,event){
 }
 function showModal(title,body,saveText,saveFn){
   closeModal(); const el=document.createElement('div'); el.className='modal-overlay'; el.onclick=e=>{if(e.target===el)closeModal()}
-  el.innerHTML=`<div class="modal"><div class="modal-head"><strong>${title}</strong><button class="icon-btn" onclick="closeModal()">${svg('x')}</button></div><div class="modal-body">${body}</div><div class="modal-foot">${button('取消','','closeModal()')}${button(saveText,'check',saveFn,'btn-primary')}</div></div>`; document.body.appendChild(el); modal=el
+  el.innerHTML=`<div class="modal"><div class="modal-head"><strong>${title}</strong><button class="icon-btn" data-admin-onclick="closeModal()">${svg('x')}</button></div><div class="modal-body">${body}</div><div class="modal-foot">${button('取消','','closeModal()')}${button(saveText,'check',saveFn,'btn-primary')}</div></div>`; document.body.appendChild(el); modal=el
 }
 function clearBatchLoginSecrets(){
   for(const item of batchLoginQueue)item.password=''
@@ -473,7 +576,7 @@ function closeModal(){
 }
 function openRelay(id=''){
   const r=(cfg.relays||[]).find(x=>x.id===id)||{id:'',name:'',base_url:'https://api.openai.com/v1',api_key:'',models:['gpt-5.4','gpt-5.4-mini']}
-  const quick=id?'':`<div class="field full"><label>CC Switch 快捷导入链接 <span class="hint">兼容 ccswitch://v1/import</span></label><div class="input-wrap"><input class="input" id="relay_deeplink" placeholder="粘贴供应商提供的 ccswitch:// 快捷链接"><button class="btn" onclick="readRelayLink()">${svg('download')}读取剪贴板</button><button class="btn" onclick="parseRelayLink()">解析</button></div><span class="hint" id="relay_link_hint">链接只在本地解析，不会访问供应商网站。</span></div><div class="divider full">或者手动填写</div>`
+  const quick=id?'':`<div class="field full"><label>CC Switch 快捷导入链接 <span class="hint">兼容 ccswitch://v1/import</span></label><div class="input-wrap"><input class="input" id="relay_deeplink" placeholder="粘贴供应商提供的 ccswitch:// 快捷链接"><button class="btn" data-admin-onclick="readRelayLink()">${svg('download')}读取剪贴板</button><button class="btn" data-admin-onclick="parseRelayLink()">解析</button></div><span class="hint" id="relay_link_hint">链接只在本地解析，不会访问供应商网站。</span></div><div class="divider full">或者手动填写</div>`
   showModal(id?'编辑中转节点':'添加中转节点',`<div class="form-grid">${quick}<div class="field"><label>节点 ID</label><input class="input" id="relay_id" value="${esc(r.id)}" ${id?'readonly':''} placeholder="例如 hk-01"></div><div class="field"><label>显示名称</label><input class="input" id="relay_name" value="${esc(r.name)}" placeholder="香港主节点"></div><div class="field full"><label>API Base URL</label><input class="input" id="relay_url" value="${esc(r.base_url)}"></div><div class="field full"><label>API Key</label><input class="input" type="password" id="relay_key" value="${esc(r.api_key)}"></div><div class="field full"><label>模型列表 <span class="hint">每行或逗号分隔</span></label><textarea id="relay_models">${esc((r.models||[]).join('\n'))}</textarea></div></div>`,'保存节点','saveRelay()')
 }
 async function readRelayLink(){
@@ -530,15 +633,16 @@ async function saveRelay(){
 }
 async function removeRelay(id){ if(!confirm('确定删除这个中转节点吗？'))return; try{const r=await fetch(API+'/relays/'+encodeURIComponent(id),{method:'DELETE'}),d=await r.json();if(!r.ok)throw new Error(d.error?.message||'删除失败');cfg=d.config;render();toast('节点已删除')}catch(e){toast(e.message,'error')} }
 function openAccount(){
-  showModal('快捷导入 ChatGPT 账号',`<div class="quick-import"><button class="quick-option" onclick="importCurrentAccount()">${svg('refresh')}<strong>一键导入当前账号</strong><small>完整 OAuth 凭据<br>可自动续约</small></button><button class="quick-option" id="auth_drop" onclick="document.getElementById('auth_file').click()" ondragover="authDrag(event,true)" ondragleave="authDrag(event,false)" ondrop="authDrop(event)">${svg('download')}<strong>批量选择账号文件</strong><small>CPA/sub2 自动验权<br>兼容 Token 才能临时直用</small></button><button class="quick-option" onclick="openBatchOfficialLogin(event)">${svg('users')}<strong>批量官方登录</strong><small>把临时或不兼容账号转为<br>可自动续约账号</small></button></div><input id="auth_file" type="file" multiple accept=".json,.txt,application/json,text/plain" class="hidden" onchange="loadAuthFiles(this.files)">
+  const currentImport=CENTRAL_MANAGEMENT?'':`<button class="quick-option" data-admin-onclick="importCurrentAccount()">${svg('refresh')}<strong>一键导入当前账号</strong><small>完整 OAuth 凭据<br>可自动续约</small></button>`
+  showModal('快捷导入 ChatGPT 账号',`<div class="quick-import">${currentImport}<button class="quick-option" id="auth_drop" data-admin-onclick="openAuthFilePicker()" data-admin-ondragover="authDrag(event,true)" data-admin-ondragleave="authDrag(event,false)" data-admin-ondrop="authDrop(event)">${svg('download')}<strong>批量选择账号文件</strong><small>CPA/sub2 自动验权<br>兼容 Token 才能临时直用</small></button><button class="quick-option" data-admin-onclick="openBatchOfficialLogin(event)">${svg('users')}<strong>批量官方登录</strong><small>把临时或不兼容账号转为<br>可自动续约账号</small></button></div><input id="auth_file" type="file" multiple accept=".json,.txt,application/json,text/plain" class="hidden" data-admin-onchange="loadAuthFiles(this.files)">
   <div class="help-note" style="margin-top:12px"><b>系统会自动分类并校验 OAuth 客户端</b><p><b>稳定保险池：</b>默认用于完整可续约账号；仅在日抛池不可用时参与，并保留安全余量。<br><b>日抛优先池：</b>默认用于仅 Access Token 的临时账号；优先消耗到 0，周额度 7 天仍未恢复就自动停用弃号。<br><b>权限不兼容：</b>某些 CPA/sub2 Token 虽能查询额度，但不能调用 Codex Responses，将强制仅保存并提示官方登录。</p></div><div id="auth_file_preview" style="display:grid;gap:7px;margin:10px 0"></div>
-  <div class="divider">或者手动粘贴单个账号</div><div class="form-grid"><div class="field full"><label>单账号备注 <span class="hint">批量文件会使用文件内名称</span></label><input class="input" id="account_label" maxlength="80" placeholder="例如：备用账号"></div><div class="field full"><label>账号池分级</label><select class="input" id="account_pool_tier"><option value="">自动：可续约进稳定池，临时号进日抛池</option><option value="stable">稳定保险池</option><option value="disposable">日抛优先池</option></select><span class="hint">可以在账号“额度策略”中随时调整，已弃号需先改为稳定池才能恢复。</span></div><div class="field full"><label style="display:flex;align-items:center;gap:8px"><input id="account_routing_enabled" type="checkbox"> 导入后立即参与自动路由</label><span class="hint">日抛号会优先使用到 0；不兼容 Token 即使勾选也会强制仅保存。</span></div><div class="field full"><label>账号文件内容</label><textarea id="account_json" style="min-height:150px" placeholder='粘贴 auth.json、sub2/CPA JSON 或完整凭据 TXT' oninput="if(this.value.trim()){accountImportFiles=[];accountImportFileName='';const p=document.getElementById('auth_file_preview');if(p)p.innerHTML=''}"></textarea><span class="hint" id="auth_file_hint">凭据只发送到本机管理接口，不会访问文件来源网站。</span></div></div>`,'安全导入','saveAccount()')
+  <div class="divider">或者手动粘贴单个账号</div><div class="form-grid"><div class="field full"><label>单账号备注 <span class="hint">批量文件会使用文件内名称</span></label><input class="input" id="account_label" maxlength="80" placeholder="例如：备用账号"></div><div class="field full"><label>账号池分级</label><select class="input" id="account_pool_tier"><option value="">自动：可续约进稳定池，临时号进日抛池</option><option value="stable">稳定保险池</option><option value="disposable">日抛优先池</option></select><span class="hint">可以在账号“额度策略”中随时调整，已弃号需先改为稳定池才能恢复。</span></div><div class="field full"><label style="display:flex;align-items:center;gap:8px"><input id="account_routing_enabled" type="checkbox"> 导入后立即参与自动路由</label><span class="hint">日抛号会优先使用到 0；不兼容 Token 即使勾选也会强制仅保存。</span></div><div class="field full"><label>账号文件内容</label><textarea id="account_json" style="min-height:150px" placeholder='粘贴 auth.json、sub2/CPA JSON 或完整凭据 TXT' data-admin-oninput="clearManualAccountImport(this)"></textarea><span class="hint" id="auth_file_hint">凭据只发送到本机管理接口，不会访问文件来源网站。</span></div></div>`,'安全导入','saveAccount()')
   accountImportFiles=[];accountImportFileName=''
 }
 function openRenameAccount(id){
   const account=(cfg.chatgptAccounts||[]).find(item=>item.id===id)
   if(!account)return toast('账号不存在','error')
-  showModal('修改账号名称',`<div class="form-grid"><div class="field full"><label>账号名称</label><input class="input" id="rename_account_label" maxlength="80" value="${esc(account.label||account.email||'')}" placeholder="例如：工作账号" onkeydown="if(event.key==='Enter')saveAccountRename('${esc(id)}')"><span class="hint">仅修改本地显示名称，不影响 OpenAI 账号信息或登录状态。</span></div></div>`,'保存名称',`saveAccountRename('${esc(id)}')`)
+  showModal('修改账号名称',`<div class="form-grid"><div class="field full"><label>账号名称</label><input class="input" id="rename_account_label" maxlength="80" value="${esc(account.label||account.email||'')}" placeholder="例如：工作账号" data-admin-onkeydown="saveAccountRenameOnEnter(event,'${esc(id)}')"><span class="hint">仅修改本地显示名称，不影响 OpenAI 账号信息或登录状态。</span></div></div>`,'保存名称',`saveAccountRename('${esc(id)}')`)
   setTimeout(()=>document.getElementById('rename_account_label')?.select(),0)
 }
 async function saveAccountRename(id){
@@ -603,7 +707,7 @@ function loginPreflightHtml(data){
     ? `<div style="display:flex;justify-content:space-between;gap:10px"><span>私密浏览器</span><span class="status"><i></i>${esc(data.browser.kind)} · 可用</span></div>`
     : '<div style="display:flex;justify-content:space-between;gap:10px"><span>私密浏览器</span><span class="status warn"><i></i>未找到，将提供手动登录链接</span></div>'
   const repairs=data.ok?'':`<div class="help-note" style="margin-top:10px"><b>修复命令</b><p><code>${(data.repair_commands||[]).map(esc).join('<br>')}</code></p></div>`
-  return `<div style="display:grid;gap:8px"><div class="status ${data.ok?'':'off'}"><i></i>${esc(data.message||'预检完成')}</div>${candidates||'<span class="cell-sub">没有发现 Codex CLI</span>'}${browser}${repairs}<button class="btn btn-sm" type="button" onclick="copyLoginDiagnostics()">${svg('download')}复制登录诊断</button></div>`
+  return `<div style="display:grid;gap:8px"><div class="status ${data.ok?'':'off'}"><i></i>${esc(data.message||'预检完成')}</div>${candidates||'<span class="cell-sub">没有发现 Codex CLI</span>'}${browser}${repairs}<button class="btn btn-sm" type="button" data-admin-onclick="copyLoginDiagnostics()">${svg('download')}复制登录诊断</button></div>`
 }
 function ignoreAccidentalModalTrigger(event){
   if(event&&event.button!=null&&event.button!==0)return true
@@ -682,8 +786,8 @@ function renderBatchLoginQueue(){
     currentBox.innerHTML=current?`<div style="display:grid;gap:9px">
       <div><b>当前 ${batchLoginIndex+1}/${batchLoginQueue.length}：${esc(current.label||current.email)}</b><div class="cell-sub">${esc(current.email)}</div></div>
       <div style="display:flex;gap:7px;flex-wrap:wrap">
-        <button class="btn btn-sm" type="button" onclick="copyBatchLoginCredential('email')">${svg('download')}复制邮箱</button>
-        <button class="btn btn-sm" type="button" onclick="copyBatchLoginCredential('password')" ${current.password?'':'disabled'}>${svg('shield')}复制登录密码</button>
+        <button class="btn btn-sm" type="button" data-admin-onclick="copyBatchLoginCredential('email')">${svg('download')}复制邮箱</button>
+        <button class="btn btn-sm" type="button" data-admin-onclick="copyBatchLoginCredential('password')" ${current.password?'':'disabled'}>${svg('shield')}复制登录密码</button>
         ${current.status==='waiting'?button('取消当前登录','x','cancelBatchOfficialLogin()','btn-sm'):''}
         ${current.status==='error'?button('跳过此账号','arrow','skipBatchOfficialLogin()','btn-sm'):''}
       </div>
@@ -737,7 +841,7 @@ async function openBatchOfficialLogin(event){
   showModal('批量官方登录队列',`<div class="form-grid">
     <div class="field full"><div class="help-note"><b>适用于缺少 ChatGPT refresh_token 的 CPA/sub2 文件</b><p>系统只从本地文件生成邮箱队列，然后逐个打开 OpenAI 官方登录。不会自动处理验证码、MFA 或验证码挑战，也不会把密码发送到后台。</p></div></div>
     <div class="field full"><label>登录环境预检</label><div id="batch_login_preflight" class="help-note">${loginPreflightHtml(null)}</div></div>
-    <div class="field full"><label>选择账号文件 <span class="hint">可以一次选择多个 CPA、sub2 和 TXT 文件，自动按邮箱/账号 ID 去重</span></label><input id="batch_login_files" type="file" multiple accept=".json,.txt,application/json,text/plain" class="input" onchange="loadBatchLoginFiles(this.files)"><span class="hint" id="batch_login_file_hint">文件只在浏览器本地解析；最多识别 100 个账号。</span></div>
+    <div class="field full"><label>选择账号文件 <span class="hint">可以一次选择多个 CPA、sub2 和 TXT 文件，自动按邮箱/账号 ID 去重</span></label><input id="batch_login_files" type="file" multiple accept=".json,.txt,application/json,text/plain" class="input" data-admin-onchange="loadBatchLoginFiles(this.files)"><span class="hint" id="batch_login_file_hint">文件只在浏览器本地解析；最多识别 100 个账号。</span></div>
     <div class="field full"><label>这批账号的分类</label><select class="input" id="batch_login_pool_tier"><option value="disposable">日抛优先池</option><option value="stable">稳定保险池</option></select><span class="hint">批量登录通常用于短期 CPA/sub2，默认日抛；如果是自有长期订阅号，请改为稳定池。</span></div>
     <div class="field full"><label style="display:flex;align-items:center;gap:8px"><input id="batch_login_routing_enabled" type="checkbox"> 登录成功后立即参与自动路由</label><span class="hint">建议保持关闭，全部登录后刷新额度并逐个启用。</span></div>
     <div class="field full"><label>当前账号</label><div id="batch_login_current" class="help-note"><span class="cell-sub">尚未生成登录队列。</span></div></div>
@@ -852,7 +956,7 @@ async function finishBatchOfficialLogin(){
 function loginStatusContent(d){
   const state=d.status==='waiting'?'warn':d.status==='success'?'':'off'
   const link=typeof d.verificationUrl==='string'&&d.verificationUrl.startsWith('https://')?`<a class="btn btn-sm btn-primary" href="${esc(d.verificationUrl)}" target="_blank" rel="noopener noreferrer">打开验证页（请确认私密模式）</a>`:''
-  const code=d.userCode?`<code style="font-size:15px;font-weight:700;letter-spacing:1px">${esc(d.userCode)}</code><button class="btn btn-sm" onclick="copyDeviceCode('${esc(d.userCode)}')">复制验证码</button>`:''
+  const code=d.userCode?`<code style="font-size:15px;font-weight:700;letter-spacing:1px">${esc(d.userCode)}</code><button class="btn btn-sm" data-admin-onclick="copyDeviceCode('${esc(d.userCode)}')">复制验证码</button>`:''
   const cancel=d.status==='waiting'?button('取消','','cancelOfficialLogin()','btn-sm'):''
   const runtime=d.codexSource?`<span class="tag" title="${esc(d.codexVersion||'版本未知')}">${esc(d.codexSource)} · ${esc(d.codexVersion||'版本未知')}</span>`:''
   return `<span class="status ${state}"><i></i>${esc(d.message||'等待设备授权信息…')}</span>${runtime}${code}${link}${cancel}`
@@ -940,7 +1044,7 @@ function openResetQuota(id){
   if(count<=0)return toast('请先查询并确认该账号有可用重置次数','error')
   const name=account.label||account.account_id||account.id
   const expiry=(account.reset_credits?.expires_at||[]).map(value=>new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})).join('；')
-  showModal('重置 Codex 额度',`<div class="reset-warning"><b>高风险操作 · 消耗 1 次 · 不可撤销</b><p>账号：${esc(name)}<br>当前可用：${count} 次${expiry?`<br>到期（北京时间）：${esc(expiry)}`:''}</p><p>必须依次完成账号名称、风险选项和最终系统确认，才会提交重置。</p></div><div class="field"><label>第一步：输入完整账号名称 <b>${esc(name)}</b></label><input class="input" id="reset_account_confirmation" autocomplete="off" placeholder="输入上方完整账号名称" oninput="updateResetQuotaConfirmation('${esc(id)}')"><span class="hint">名称必须完全一致，用于防止选错账号。</span></div><div class="reset-confirmations help-note" style="display:grid;gap:10px;margin-top:15px"><b>第二步：勾选以下两项确认</b><label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer"><input type="checkbox" id="reset_target_confirmation" style="margin-top:2px" onchange="updateResetQuotaConfirmation('${esc(id)}')"><span>我确认当前要重置的目标账号是 <strong>${esc(name)}</strong>。</span></label><label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer"><input type="checkbox" id="reset_credit_confirmation" style="margin-top:2px" onchange="updateResetQuotaConfirmation('${esc(id)}')"><span>我已知晓此操作会立即消耗 <strong>1 次重置机会</strong>，提交后无法撤销。</span></label></div><p class="reset-final-hint" style="margin:13px 0 0;color:var(--muted);font-size:10px">第三步：点击下方按钮后，系统还会进行最后一次确认。</p>`,'确认并继续',`resetAccountQuota('${esc(id)}')`)
+  showModal('重置 Codex 额度',`<div class="reset-warning"><b>高风险操作 · 消耗 1 次 · 不可撤销</b><p>账号：${esc(name)}<br>当前可用：${count} 次${expiry?`<br>到期（北京时间）：${esc(expiry)}`:''}</p><p>必须依次完成账号名称、风险选项和最终系统确认，才会提交重置。</p></div><div class="field"><label>第一步：输入完整账号名称 <b>${esc(name)}</b></label><input class="input" id="reset_account_confirmation" autocomplete="off" placeholder="输入上方完整账号名称" data-admin-oninput="updateResetQuotaConfirmation('${esc(id)}')"><span class="hint">名称必须完全一致，用于防止选错账号。</span></div><div class="reset-confirmations help-note" style="display:grid;gap:10px;margin-top:15px"><b>第二步：勾选以下两项确认</b><label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer"><input type="checkbox" id="reset_target_confirmation" style="margin-top:2px" data-admin-onchange="updateResetQuotaConfirmation('${esc(id)}')"><span>我确认当前要重置的目标账号是 <strong>${esc(name)}</strong>。</span></label><label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer"><input type="checkbox" id="reset_credit_confirmation" style="margin-top:2px" data-admin-onchange="updateResetQuotaConfirmation('${esc(id)}')"><span>我已知晓此操作会立即消耗 <strong>1 次重置机会</strong>，提交后无法撤销。</span></label></div><p class="reset-final-hint" style="margin:13px 0 0;color:var(--muted);font-size:10px">第三步：点击下方按钮后，系统还会进行最后一次确认。</p>`,'确认并继续',`resetAccountQuota('${esc(id)}')`)
   const submit=modal?.querySelector('.modal-foot .btn-primary')
   if(submit){
     submit.id='reset_quota_submit'
@@ -1020,7 +1124,7 @@ function openAccountPolicy(id){
   const emergencyUntil=Date.parse(account.emergency_continue_until||'')
   const emergencyActive=Number.isFinite(emergencyUntil)&&emergencyUntil>Date.now()
   showModal('账号额度与预留策略',`<div class="form-grid">
-    <div class="field full"><label>账号池分级</label><select class="input" id="policy_pool_tier" data-original="${poolTier}" onchange="updateAccountPoolTierPolicyForm()"><option value="stable" ${poolTier==='stable'?'selected':''}>稳定保险池</option><option value="disposable" ${poolTier==='disposable'?'selected':''}>日抛优先池</option></select><span class="hint" id="policy_pool_tier_hint"></span></div>
+    <div class="field full"><label>账号池分级</label><select class="input" id="policy_pool_tier" data-original="${poolTier}" data-admin-onchange="updateAccountPoolTierPolicyForm()"><option value="stable" ${poolTier==='stable'?'selected':''}>稳定保险池</option><option value="disposable" ${poolTier==='disposable'?'selected':''}>日抛优先池</option></select><span class="hint" id="policy_pool_tier_hint"></span></div>
     <div class="field"><label>安全余量 <span class="hint">稳定池账号独立阈值</span></label><input class="input" id="policy_reserve" type="number" min="0" max="100" value="${Number(account.low_quota_threshold??globalReserve)}"></div>
     <div class="field"><label>每日请求上限 <span class="hint">0 为不限</span></label><input class="input" id="policy_requests" type="number" min="0" value="${Number(account.daily_request_limit||0)}"></div>
     <div class="field full"><label>每日 Token 上限 <span class="hint">输入 + 输出，0 为不限</span></label><input class="input" id="policy_tokens" type="number" min="0" value="${Number(account.daily_token_limit||0)}"></div>
@@ -1209,7 +1313,63 @@ async function resetProviderHealth(){
 async function resetStats(){if(!confirm('确定清空全部本地用量统计吗？'))return;try{const r=await fetch(API+'/stats',{method:'DELETE'});statsData=await r.json();render();toast('统计数据已清空')}catch(e){toast(e.message,'error')}}
 function toast(message,type='success'){document.querySelector('.toast')?.remove();const el=document.createElement('div');el.className='toast '+type;el.innerHTML=`${svg(type==='error'?'x':'check')}<span>${esc(message)}</span>`;document.body.appendChild(el);setTimeout(()=>el.remove(),2800)}
 
-window.addEventListener('hashchange',()=>switchPage(location.hash.slice(1)))
-document.getElementById('refreshButton').innerHTML=svg('refresh')
-document.getElementById('menuButton').innerHTML=svg('overview')
-initTheme(); switchPage(activePage); load()
+function fullConsoleRouteFromManagementRoute(route){
+  return ({
+    providers:'accounts',
+    diagnostics:'settings',
+    usage:'analytics'
+  })[route]||'overview'
+}
+function renderManagementBootstrapError(message){
+  document.getElementById('nav').innerHTML=''
+  document.getElementById('top-title').textContent='统一管理平台'
+  document.getElementById('top-subtitle').textContent='需要一级管理员授权'
+  document.getElementById('app').innerHTML=`<div class="card"><div class="card-body">${empty('shield','无法打开管理平台',message)}</div></div>`
+}
+async function bootstrapCentralManagement(){
+  const environment=document.getElementById('side-environment')
+  if(environment)environment.textContent='Central Gateway · Level-1'
+  if(!CENTRAL_MANAGEMENT)return true
+  let route='overview'
+  try{
+    let sessionResponse
+    if(browserBootstrapHash){
+      const values=new URLSearchParams(browserBootstrapHash.slice('#browser?'.length))
+      if([...values.keys()].some(key=>key!=='ticket'&&key!=='route'))throw new Error('管理页面链接无效')
+      const ticket=values.get('ticket'),requestedRoute=values.get('route')
+      if(!ticket||ticket.length<16||!requestedRoute)throw new Error('管理页面票据无效或已过期')
+      route=fullConsoleRouteFromManagementRoute(requestedRoute)
+      history.replaceState(null,'',`${location.pathname}#${route}`)
+      sessionResponse=await fetch('/api/v1/webview/session',{
+        method:'POST',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({ticket})
+      })
+    }else{
+      sessionResponse=await fetch(API+'/session',{cache:'no-store'})
+    }
+    const session=await sessionResponse.json().catch(()=>({}))
+    if(!sessionResponse.ok)throw new Error(session.error?.message||'管理会话无效或已过期')
+    if(session.account?.role!=='level1')throw new Error('浏览器完整管理平台仅对一级管理员开放')
+    activePage=route
+    return true
+  }catch(error){
+    history.replaceState(null,'',location.pathname)
+    renderManagementBootstrapError(error.message||'管理会话建立失败，请从 AI Editor 账户菜单重新打开')
+    return false
+  }
+}
+async function startFullConsole(){
+  document.getElementById('refreshButton').innerHTML=svg('refresh')
+  document.getElementById('menuButton').innerHTML=svg('overview')
+  initTheme()
+  document.documentElement.dataset.managementMode=CENTRAL_MANAGEMENT?'gateway':'standalone'
+  if(!await bootstrapCentralManagement())return
+  switchPage(activePage)
+  await load()
+}
+window.addEventListener('hashchange',()=>{
+  const page=location.hash.slice(1)
+  if(FULL_CONSOLE_PAGES.has(page))switchPage(page)
+})
+void startFullConsole()

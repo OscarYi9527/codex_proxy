@@ -90,6 +90,20 @@ export interface ProviderForwardResult {
   readonly deferSettlement?: boolean
 }
 
+export interface ProviderProbeRequest {
+  readonly provider: 'deepseek' | 'openai-api' | 'chatgpt-sub' | 'relay'
+  readonly relayId?: string
+  readonly credentialId?: string
+}
+
+export interface ProviderProbeResult {
+  readonly ok: boolean
+  readonly status?: number
+  readonly latency: number
+  readonly source: string
+  readonly error?: string | null
+}
+
 export interface ProviderRouteAdapter {
 	listModels(): Promise<SafeModelList>
   forwardResponses(
@@ -111,6 +125,7 @@ export interface ProviderRouteAdapter {
 	safeDiagnostics?(): Promise<Record<string, unknown>>
 	safeAccountPool?(): Promise<SafeAccountPoolSnapshot>
 	refreshChatgptAccountUsage?(accountId: string): Promise<void>
+	probeProvider?(request: ProviderProbeRequest): Promise<ProviderProbeResult>
 	acknowledgeSettlement?(
 		result: ProviderForwardResult,
 		usage: SettlementRecord
@@ -654,9 +669,17 @@ export class StandaloneRouteAdapter implements ProviderRouteAdapter {
     return response.result()
   }
 
-  private async requestMemory(method: string, url: string): Promise<MemoryResponse> {
+  private async requestMemory(
+    method: string,
+    url: string,
+    body?: Record<string, unknown>
+  ): Promise<MemoryResponse> {
     const response = new MemoryResponse()
-    await this.handler()(new SyntheticRequest({ method, url }), response)
+    await this.handler()(new SyntheticRequest({
+      method,
+      url,
+      ...(body ? { body } : {})
+    }), response)
     if (!response.writableEnded) {
       await new Promise<void>((resolve, reject) => {
         response.once('finish', resolve)
@@ -743,6 +766,39 @@ export class StandaloneRouteAdapter implements ProviderRouteAdapter {
 			for (const chunk of response.chunks) chunk.fill(0)
 		}
 	}
+
+  async probeProvider(request: ProviderProbeRequest): Promise<ProviderProbeResult> {
+    const response = await this.requestMemory('POST', '/admin/api/ping', {
+      type: request.provider,
+      ...(request.relayId ? { relayId: request.relayId } : {})
+    })
+    const body = response.body()
+    try {
+      const value = record(JSON.parse(body.toString('utf8')))
+      return {
+        ok: value['ok'] === true,
+        ...(Number.isFinite(Number(value['status']))
+          ? { status: Number(value['status']) }
+          : {}),
+        latency: Math.max(0, Number(value['latency']) || 0),
+        source: 'standalone-active-probe',
+        ...(typeof value['error'] === 'string'
+          ? { error: safeText(value['error'], 240) }
+          : {})
+      }
+    } catch {
+      return {
+        ok: false,
+        status: response.statusCode,
+        latency: 0,
+        source: 'standalone-active-probe',
+        error: `Provider probe returned ${response.statusCode}`
+      }
+    } finally {
+      body.fill(0)
+      for (const chunk of response.chunks) chunk.fill(0)
+    }
+  }
 
   private handler(): StandaloneHandler {
     if (this.#handler) return this.#handler

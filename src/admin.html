@@ -65,16 +65,17 @@
     <aside class="sidebar" id="sidebar">
       <div class="brand"><div class="brand-mark">T</div><div class="brand-copy"><strong>TORVYE AI Gateway</strong><span>统一管理平台</span></div></div>
       <nav class="nav-scroll" id="nav"></nav>
-      <div class="sidebar-foot"><div class="service-card"><div class="service-line"><i class="dot"></i><span id="side-status">网关服务运行中</span></div><small>Local · 127.0.0.1</small></div></div>
+      <div class="sidebar-foot"><div class="service-card"><div class="service-line"><i class="dot"></i><span id="side-status">网关服务运行中</span></div><small id="side-environment">Local · 127.0.0.1</small></div></div>
     </aside>
     <main class="main">
       <header class="topbar">
-        <div style="display:flex;align-items:center;gap:11px"><button class="icon-btn mobile-menu" onclick="toggleSidebar()" aria-label="菜单" id="menuButton"></button><div class="top-title"><strong id="top-title">控制台概览</strong><span id="top-subtitle">查看网关运行状态与资源使用情况</span></div></div>
-        <div class="top-actions"><button class="icon-btn" id="refreshButton" onclick="load(true)" title="刷新"></button><button class="icon-btn" id="themeButton" onclick="toggleTheme()" title="切换主题"></button><button class="btn hide-mobile" onclick="switchPage('settings')"><span class="status"><i></i></span>系统正常</button></div>
+        <div style="display:flex;align-items:center;gap:11px"><button class="icon-btn mobile-menu" data-admin-onclick="toggleSidebar()" aria-label="菜单" id="menuButton"></button><div class="top-title"><strong id="top-title">控制台概览</strong><span id="top-subtitle">查看网关运行状态与资源使用情况</span></div></div>
+        <div class="top-actions"><button class="icon-btn" id="refreshButton" data-admin-onclick="load(true)" title="刷新"></button><button class="icon-btn" id="themeButton" data-admin-onclick="toggleTheme()" title="切换主题"></button><button class="btn hide-mobile" data-admin-onclick="switchPage('settings')"><span class="status"><i></i></span>系统正常</button></div>
       </header>
       <div class="content" id="app"><div class="card"><div class="card-body"><div class="skeleton"></div></div></div></div>
     </main>
   </div>
+  <script src="/admin/runtime.js"></script>
   <script src="/admin/app.js"></script>
 </body>
 </html>

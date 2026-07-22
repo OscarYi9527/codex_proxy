@@ -13,6 +13,15 @@ const {
   quotaResetFinalMessage
 } = require('../src/admin_ui_behaviors.cjs')
 
+describe('admin console product brand', () => {
+  it('uses the TORVYE AI Gateway unified management brand', () => {
+    const source = fs.readFileSync(require.resolve('../src/admin.html'), 'utf8')
+    assert.match(source, /<title>TORVYE AI Gateway · 统一管理平台<\/title>/)
+    assert.match(source, /<strong>TORVYE AI Gateway<\/strong><span>统一管理平台<\/span>/)
+    assert.match(source, /<div class="brand-mark">T<\/div>/)
+  })
+})
+
 describe('admin quota reset DOM behavior', () => {
   it('keeps submission disabled until all confirmations match', () => {
     assert.equal(quotaResetState({ expectedAccount: 'Team A' }).ready, false)

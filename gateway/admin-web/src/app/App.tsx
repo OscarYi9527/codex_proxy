@@ -60,7 +60,7 @@ function PlaceholderPage({ route }: { readonly route: ManagementRoute }) {
   }
   return (
     <section className="content-card">
-      <h2>{labels[route] || 'AI Editor 管理'}</h2>
+      <h2>{labels[route] || '统一管理平台'}</h2>
       <p className="muted">此角色页面将在对应管理阶段启用。</p>
     </section>
   )
@@ -192,8 +192,8 @@ export function App({
   if (!data) {
     return (
       <main className="bootstrap-shell">
-        <p className="eyebrow">AI EDITOR GATEWAY</p>
-        <h1>AI Editor 管理</h1>
+        <p className="eyebrow">TORVYE AI GATEWAY</p>
+        <h1>统一管理平台</h1>
         {error ? (
           <p role="alert" className="warning">{error}</p>
         ) : (
@@ -252,8 +252,8 @@ export function App({
   return (
     <div className="management-layout">
       <aside>
-        <p className="eyebrow">AI EDITOR</p>
-        <h1>管理</h1>
+        <p className="eyebrow">TORVYE AI GATEWAY</p>
+        <h1>统一管理平台</h1>
         <nav aria-label="管理导航">
           {data.session.navigation.map(item => (
             <button
@@ -272,7 +272,7 @@ export function App({
         <header className="page-header">
           <div>
             <p className="eyebrow">安全账号中心</p>
-            <h1>AI Editor 管理</h1>
+            <h1>TORVYE AI Gateway</h1>
           </div>
           <span className="role-badge">{accountRoleLabel(data.session.account.role)}</span>
         </header>

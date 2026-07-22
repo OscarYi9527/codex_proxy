@@ -82,7 +82,7 @@ export function CompactManagementPage({
     <section className="compact-management" aria-labelledby="compact-provider-title">
       <header className="compact-management-header">
         <div>
-          <p className="eyebrow">AI EDITOR</p>
+          <p className="eyebrow">TORVYE AI GATEWAY</p>
           <h2 id="compact-provider-title">订阅账号</h2>
           <p>仅显示账号路由和额度。</p>
         </div>

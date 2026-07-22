@@ -364,6 +364,12 @@ function bootstrap(
 }
 
 describe('Gateway management shell role navigation (T050/T054/T055)', () => {
+  it('uses the TORVYE AI Gateway unified management brand', () => {
+    render(<App client={clientFor('user')} />)
+    expect(screen.getByText('TORVYE AI GATEWAY')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '统一管理平台' })).toBeInTheDocument()
+  })
+
   it('accepts only the fixed same-window bootstrap envelope', async () => {
     render(<App client={clientFor('user')} />)
     bootstrap('account', 'https://evil.example')

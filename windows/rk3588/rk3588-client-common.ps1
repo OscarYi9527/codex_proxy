@@ -235,6 +235,17 @@ function ConvertFrom-RkSecureString {
     }
 }
 
+function ConvertTo-RkSecureString {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
+
+    $secureValue = [Security.SecureString]::new()
+    foreach ($character in $Value.ToCharArray()) {
+        $secureValue.AppendChar($character)
+    }
+    $secureValue.MakeReadOnly()
+    return $secureValue
+}
+
 function Assert-RkCredentialText {
     param([Parameter(Mandatory = $true)][string]$Value)
 

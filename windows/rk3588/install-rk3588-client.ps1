@@ -88,7 +88,7 @@ if ($ClientApiKey -and $ClientApiKeyStdin) {
 if ($ClientApiKeyStdin) {
     $stdinValue = [Console]::In.ReadToEnd().TrimEnd("`r", "`n")
     try {
-        $ClientApiKey = ConvertTo-SecureString $stdinValue -AsPlainText -Force
+        $ClientApiKey = ConvertTo-RkSecureString $stdinValue
     } finally {
         $stdinValue = $null
     }

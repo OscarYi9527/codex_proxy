@@ -39,6 +39,17 @@ function New-TestCredential {
         [Guid]::NewGuid().ToString('N')
 }
 
+function ConvertTo-TestSecureString {
+    param([Parameter(Mandatory = $true)][string]$Value)
+
+    $secureValue = [Security.SecureString]::new()
+    foreach ($character in $Value.ToCharArray()) {
+        $secureValue.AppendChar($character)
+    }
+    $secureValue.MakeReadOnly()
+    return $secureValue
+}
+
 function Install-TestClient {
     param(
         [Parameter(Mandatory = $true)][string]$Credential,
@@ -47,7 +58,7 @@ function Install-TestClient {
         [switch]$DoNotSetDefault
     )
 
-    $secure = ConvertTo-SecureString $Credential -AsPlainText -Force
+    $secure = ConvertTo-TestSecureString $Credential
     & $installer `
         -BaseUrl 'https://rk3588-relay.example.ts.net/v1' `
         -Model $Model `
@@ -149,7 +160,8 @@ exit /b 0
     Assert-True `
         -Condition ($envelope.protection -eq 'Windows DPAPI CurrentUser') `
         -Message 'Credential envelope is not protected with DPAPI CurrentUser.'
-    $credentialAcl = Get-Acl -LiteralPath $credentialFile
+    $credentialAcl = (Get-Item -LiteralPath $credentialFile -Force).
+        GetAccessControl([Security.AccessControl.AccessControlSections]::Access)
     Assert-True `
         -Condition (@($credentialAcl.Access | Where-Object IsInherited).Count -eq 0) `
         -Message 'Credential file retained inherited ACL entries.'
@@ -181,7 +193,7 @@ exit /b 0
         -Message 'Offline client diagnostics did not pass.'
 
     $credentialTwo = New-TestCredential
-    $secureTwo = ConvertTo-SecureString $credentialTwo -AsPlainText -Force
+    $secureTwo = ConvertTo-TestSecureString $credentialTwo
     & $keySetter -StateDir (Join-Path $testRoot 'state') -ClientApiKey $secureTwo
     $rotated = & $helper --state-dir (Join-Path $testRoot 'state')
     Assert-True `

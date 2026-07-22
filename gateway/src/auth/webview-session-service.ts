@@ -49,7 +49,7 @@ function navigationForRole(role: AccountRole): readonly ManagementNavigationItem
     ? organization
     : [
         ...organization,
-        { id: 'providers', label: 'Provider 与模型' },
+        { id: 'providers', label: '订阅账号' },
         { id: 'diagnostics', label: '系统诊断' }
       ]
 }

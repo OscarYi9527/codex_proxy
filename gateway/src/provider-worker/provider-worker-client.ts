@@ -50,7 +50,7 @@ function workerError(
   retryAfterMs?: number
 ): SafeError {
   const message = code === 'provider_relogin_required'
-    ? 'ChatGPT 订阅账号登录已失效，请一级管理员在“Provider 与模型”中重新登录。'
+    ? 'ChatGPT 订阅账号登录已失效，请一级管理员在“订阅账号”中重新登录。'
     : (statusCode >= 500
         ? '境外模型通道暂时不可用，请稍后重试。'
         : '境外模型通道拒绝了本次请求。')

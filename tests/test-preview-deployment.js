@@ -7,7 +7,7 @@ const root = path.resolve(import.meta.dirname, '..')
 const preview = path.join(root, 'deploy', 'preview')
 
 function text(file) {
-  return fs.readFileSync(path.join(preview, file), 'utf8')
+  return fs.readFileSync(path.join(preview, file), 'utf8').replace(/\r\n/g, '\n')
 }
 
 describe('public preview deployment boundary', () => {

@@ -53,7 +53,7 @@ function PlaceholderPage({ route }: { readonly route: ManagementRoute }) {
   const labels: Partial<Record<ManagementRoute, string>> = {
     organization: '组织与用户',
     invitations: '邀请码',
-    providers: 'Provider 与模型',
+    providers: '订阅账号',
     diagnostics: '系统诊断',
     credits: '组织额度',
     audit: '调用审计'

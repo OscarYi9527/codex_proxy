@@ -32,9 +32,13 @@ function accountLabel(
   credential: ProviderCredentialSummary
 ): string {
   const value = credential.label?.trim() || ''
-  return value && !value.includes('\uFFFD') && !/\?{2,}/.test(value)
-    ? value
-    : provider.displayName
+  if (value && !value.includes('\uFFFD') && !/\?{2,}/.test(value)) return value
+  const providerName = provider.displayName?.trim() || ''
+  return providerName &&
+    !providerName.includes('\uFFFD') &&
+    !/\?{2,}/.test(providerName)
+    ? providerName
+    : 'ChatGPT 订阅账号'
 }
 
 export function CompactManagementPage({
@@ -79,11 +83,11 @@ export function CompactManagementPage({
       <header className="compact-management-header">
         <div>
           <p className="eyebrow">AI EDITOR</p>
-          <h2 id="compact-provider-title">Provider 与模型</h2>
-          <p>仅显示订阅账号路由和额度。</p>
+          <h2 id="compact-provider-title">订阅账号</h2>
+          <p>仅显示账号路由和额度。</p>
         </div>
         <a className="full-management-link" href={fullManagementUrl}>
-          在浏览器打开完整 Provider 管理
+          在浏览器打开账号管理
         </a>
       </header>
 
@@ -158,7 +162,7 @@ export function CompactManagementPage({
 
         {subscriptionAccounts.length === 0 && (
           <p className="compact-empty">
-            暂无可管理的订阅账号，请在完整管理页面中添加或检查账号。
+            暂无可管理的订阅账号，请在浏览器账号管理页面中添加。
           </p>
         )}
       </section>

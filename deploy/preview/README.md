@@ -189,6 +189,12 @@ Start the real subscription executor through this egress:
   --executor chatgpt-sub
 ```
 
+`start-preview.sh` assigns the same loopback egress to the Provider Worker and
+to the isolated Codex `device-auth` child used by Gateway account management.
+It does not proxy Gateway database, account, Edge or Cloudflare traffic. This
+prevents the browser from reporting a successful authorization while the
+remote Codex process fails its final OpenAI token exchange.
+
 The container enforces server certificate usage, keeps the auth file read-only,
 publishes no public VPN port, and exits when either OpenVPN or its private HTTP
 proxy stops. Free or shared VPN profiles are suitable only for temporary

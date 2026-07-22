@@ -78,6 +78,13 @@ grep -q '"status":"ok"' <<<"${PUBLIC_LIVE}" || {
 WORKER_PROXY="$(
   sed -n 's/^AI_EDITOR_WORKER_HTTPS_PROXY=//p' "${RUNTIME_ENV}" | tail -n 1
 )"
+LOGIN_PROXY="$(
+  sed -n 's/^AI_EDITOR_CHATGPT_LOGIN_HTTPS_PROXY=//p' "${RUNTIME_ENV}" | tail -n 1
+)"
+if [[ "${LOGIN_PROXY}" != "${WORKER_PROXY}" ]]; then
+  echo "ChatGPT login egress must match the isolated Provider Worker egress." >&2
+  exit 1
+fi
 if [[ -n "${WORKER_PROXY}" ]]; then
   case "${WORKER_PROXY}" in
     http://127.0.0.1:7890)

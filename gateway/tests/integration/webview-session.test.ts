@@ -73,7 +73,7 @@ describe('one-time Webview ticket and HttpOnly management session (T049/T052)', 
       account: { role: 'level1' },
       navigation: expect.arrayContaining([
         { id: 'account', label: '我的账号' },
-        { id: 'providers', label: 'Provider 与模型' },
+          { id: 'providers', label: '订阅账号' },
         { id: 'diagnostics', label: '系统诊断' }
       ])
     })

@@ -107,6 +107,9 @@ services:
       AI_EDITOR_PROVIDER_WORKER_GATEWAY_ID: gateway-preview-local
       AI_EDITOR_PROVIDER_WORKER_ID: worker-preview-local
       AI_EDITOR_PROVIDER_WORKER_REGION: preview-local
+      # Only the isolated Codex subscription-login child receives this egress.
+      # Gateway account/database traffic remains on its normal route.
+      AI_EDITOR_CHATGPT_LOGIN_HTTPS_PROXY: ${AI_EDITOR_CHATGPT_LOGIN_HTTPS_PROXY:-}
       CODEX_PROXY_MAX_BODY_MIB: ${CODEX_PROXY_MAX_BODY_MIB:-64}
       CODEX_PROXY_BODY_TIMEOUT_MS: ${CODEX_PROXY_BODY_TIMEOUT_MS:-60000}
     volumes:

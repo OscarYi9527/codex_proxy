@@ -56,7 +56,7 @@ function clientFor(role: AccountRole): ManagementApiClient {
       { id: 'invitations', label: '邀请码' },
       { id: 'credits', label: '组织额度' },
       { id: 'audit', label: '调用审计' },
-      { id: 'providers', label: 'Provider 与模型' },
+      { id: 'providers', label: '订阅账号' },
       { id: 'diagnostics', label: '系统诊断' }
     ]
   }
@@ -391,7 +391,7 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
       .toBe(seesOrganization)
     expect(Boolean(screen.queryByRole('button', { name: '调用审计' })))
       .toBe(seesAudit)
-    expect(Boolean(screen.queryByRole('button', { name: 'Provider 与模型' })))
+    expect(Boolean(screen.queryByRole('button', { name: '订阅账号' })))
       .toBe(seesProviders)
   })
 
@@ -463,11 +463,11 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
     bootstrap('providers', window.location.origin, 'embedded')
 
     expect(await screen.findByRole('navigation', { name: '管理导航' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Provider 与模型' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '订阅账号' })).toBeInTheDocument()
     expect(screen.getByText('ChatGPT 订阅池')).toBeInTheDocument()
     expect(document.body.textContent).not.toContain('ChatGPT ???')
     expect(screen.getByText('短周期')).toHaveTextContent('80%')
-    expect(screen.getByRole('link', { name: '在浏览器打开完整 Provider 管理' }))
+    expect(screen.getByRole('link', { name: '在浏览器打开账号管理' }))
       .toHaveAttribute(
         'href',
         'ai-editor-code://open-full-management?route=providers'
@@ -514,7 +514,7 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
       render(<App client={clientFor('level1')} />)
       expect(await screen.findByRole('navigation', { name: '管理导航' }))
         .toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Provider 与模型' }))
+      expect(screen.getByRole('button', { name: '订阅账号' }))
         .toHaveAttribute('aria-current', 'page')
       expect(window.location.hash).toBe('')
       expect(document.body.textContent).not.toContain('browser-one-time-ticket')
@@ -543,7 +543,7 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
       'aria-current',
       'page'
     )
-    expect(screen.queryByRole('button', { name: 'Provider 与模型' }))
+    expect(screen.queryByRole('button', { name: '订阅账号' }))
       .not.toBeInTheDocument()
     expect(client.organizations).not.toHaveBeenCalled()
     expect(client.organizationAccounts).not.toHaveBeenCalled()
@@ -650,14 +650,16 @@ describe('Gateway management shell role navigation (T050/T054/T055)', () => {
       .toHaveTextContent('密码未被修改')
   })
 
-  it('loads Provider and redacted diagnostics only for a Level-1 session', async () => {
+  it('hides non-subscription Provider data while retaining Level-1 diagnostics', async () => {
     const client = clientFor('level1')
     render(<App client={client} />)
     bootstrap('providers')
 
-    expect(await screen.findByRole('heading', { name: 'Local Relay' })).toBeInTheDocument()
-    expect(screen.getByText(/sk-\.\.\.abcd/)).toBeInTheDocument()
-    expect(screen.getByText(/plaintext-v1 is for loopback/)).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '订阅账号管理' })).toBeInTheDocument()
+    expect(screen.getByText('还没有订阅账号')).toBeInTheDocument()
+    expect(document.body.textContent).not.toContain('Local Relay')
+    expect(document.body.textContent).not.toContain('sk-...abcd')
+    expect(document.body.textContent).not.toContain('plaintext-v1 is for loopback')
     expect(document.body.textContent).not.toContain('diagnostic-secret')
 
     fireEvent.click(screen.getByRole('button', { name: '系统诊断' }))

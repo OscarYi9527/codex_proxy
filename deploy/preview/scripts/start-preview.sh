@@ -145,6 +145,7 @@ if [[ "${WITH_CLASH}" -eq 1 ]]; then
   fi
   chmod 600 "${PREVIEW_DIR}/state/mihomo/config.yaml"
   set_env AI_EDITOR_WORKER_HTTPS_PROXY http://127.0.0.1:7890
+  set_env AI_EDITOR_CHATGPT_LOGIN_HTTPS_PROXY http://127.0.0.1:7890
 elif [[ "${WITH_OPENVPN}" -eq 1 ]]; then
   OPENVPN_CONFIG="${PREVIEW_DIR}/secrets/openvpn/client.ovpn"
   OPENVPN_AUTH="${PREVIEW_DIR}/secrets/openvpn/auth"
@@ -164,8 +165,10 @@ elif [[ "${WITH_OPENVPN}" -eq 1 ]]; then
     exit 1
   fi
   set_env AI_EDITOR_WORKER_HTTPS_PROXY http://127.0.0.1:7891
+  set_env AI_EDITOR_CHATGPT_LOGIN_HTTPS_PROXY http://127.0.0.1:7891
 else
   set_env AI_EDITOR_WORKER_HTTPS_PROXY ""
+  set_env AI_EDITOR_CHATGPT_LOGIN_HTTPS_PROXY ""
 fi
 
 if [[ "${MODE}" == "quick" ]]; then

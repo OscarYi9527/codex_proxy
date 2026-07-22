@@ -350,7 +350,7 @@ describe('ProviderWorkerClient', () => {
         code: 'provider_relogin_required',
         statusCode: 409,
         retryable: false,
-        message: 'ChatGPT 订阅账号登录已失效，请一级管理员在“Provider 与模型”中重新登录。'
+        message: 'ChatGPT 订阅账号登录已失效，请一级管理员在“订阅账号”中重新登录。'
       })
     } finally {
       await close(worker)

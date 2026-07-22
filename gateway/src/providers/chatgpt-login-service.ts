@@ -1,7 +1,11 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { once } from 'node:events'
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import {
+  spawn,
+  spawnSync,
+  type ChildProcessWithoutNullStreams
+} from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { IdSource } from '../common/ids.js'
 import { SafeError } from '../common/errors.js'
@@ -100,6 +104,53 @@ function deviceAuthDetails(value: string): {
   return { verificationUrl, userCode }
 }
 
+function appendNoProxy(current: string | undefined): string {
+  const values = new Set(
+    String(current || '')
+      .split(',')
+      .map(value => value.trim())
+      .filter(Boolean)
+  )
+  for (const value of ['127.0.0.1', 'localhost', '::1']) values.add(value)
+  return [...values].join(',')
+}
+
+function loginProxyEnvironment(): NodeJS.ProcessEnv {
+  const proxy = process.env['AI_EDITOR_CHATGPT_LOGIN_HTTPS_PROXY']?.trim()
+  if (!proxy) return {}
+  try {
+    const parsed = new URL(proxy)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return {}
+  } catch {
+    return {}
+  }
+  return {
+    HTTP_PROXY: proxy,
+    HTTPS_PROXY: proxy,
+    NO_PROXY: appendNoProxy(process.env['NO_PROXY'])
+  }
+}
+
+function safeExitReason(output: string, code: number | null): string {
+  const text = output.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
+  if (/Missing optional dependency|Node\.js v\d+/i.test(text)) {
+    return 'Codex CLI 启动失败，请检查 CLI 安装是否完整。'
+  }
+  if (/expired|device code.*invalid|invalid.*device code/i.test(text)) {
+    return 'OpenAI 一次性登录代码已失效，请重新发起官方登录。'
+  }
+  if (/access_denied|authorization denied|authorization.*cancel/i.test(text)) {
+    return 'OpenAI 官方登录已取消或未授权。'
+  }
+  if (
+    /timed?\s*out|network|connection|connect|dns|tls|certificate|request error|error sending request|failed to send/i
+      .test(text)
+  ) {
+    return 'Gateway 无法完成 OpenAI 登录令牌交换，请检查订阅登录专用外网出口后重试。'
+  }
+  return `Codex device-auth 提前退出（code ${code ?? 'unknown'}）。`
+}
+
 export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
   #session: LoginSession | null = null
 
@@ -124,7 +175,7 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
     if (!launch.command) {
       throw new SafeError({
         code: 'codex_cli_unavailable',
-        message: `没有可用的 Codex app-server。${launch.error || '请安装或更新 Codex CLI。'}`,
+        message: `没有可用的 Codex CLI。${launch.error || '请安装或更新 Codex CLI。'}`,
         statusCode: 503
       })
     }
@@ -162,6 +213,7 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
         cwd: tempHome,
         env: {
           ...process.env,
+          ...loginProxyEnvironment(),
           CODEX_HOME: tempHome,
           HOME: tempHome,
           USERPROFILE: tempHome
@@ -185,7 +237,7 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
       this.finish(
         session,
         'error',
-        `无法启动 Codex app-server：${error instanceof Error ? error.message : '未知错误'}`
+        `无法启动 Codex CLI：${error instanceof Error ? error.message : '未知错误'}`
       )
       return publicSession(session)
     }
@@ -220,24 +272,24 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
       }
     }
     child.stdout.on('data', consume)
-    child.stderr.on('data', chunk => {
-      consume(Buffer.from(chunk))
-    })
+    child.stderr.on('data', chunk => consume(Buffer.from(chunk)))
     child.on('error', error => {
-      this.finish(session, 'error', `无法启动 Codex app-server：${error.message}`)
+      this.finish(session, 'error', `无法启动 Codex CLI：${error.message}`)
     })
     child.on('exit', code => {
       if (this.#session?.id !== session.id ||
           session.status !== 'waiting' ||
           session.finalizing) return
-      if (code === 0) {
+
+      // Some Codex CLI builds return code 1 after the browser reports success,
+      // even though the isolated auth.json was durably written. The credential
+      // file is the authoritative completion signal; import it before judging
+      // the process exit code.
+      if (fs.existsSync(session.authFile) || code === 0) {
         void this.importCompletedLogin(session)
         return
       }
-      const safeReason = /^Node\.js v\d+/im.test(output)
-        ? 'Codex CLI 启动失败，请检查 CLI 安装是否完整。'
-        : `Codex device-auth 提前退出（code ${code ?? 'unknown'}）。`
-      this.finish(session, 'error', safeReason)
+      this.finish(session, 'error', safeExitReason(output, code))
     })
   }
 
@@ -258,7 +310,7 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
       assertUsableAuthJson(raw)
       await session.importCredential(raw)
       await this.stopChild(session)
-      this.finish(session, 'success', 'OpenAI 官方登录成功，账号凭据已导入 Gateway。')
+      this.finish(session, 'success', 'OpenAI 官方登录成功，订阅账号已加入账号池。')
     } catch (error) {
       await this.stopChild(session)
       this.finish(
@@ -283,9 +335,6 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
       new Promise(resolve => setTimeout(resolve, 500))
     ])
     if (child.exitCode === null && process.platform === 'win32' && child.pid) {
-      // A Windows process can survive the regular Node signal briefly while
-      // retaining the isolated CODEX_HOME directory. It is our own child, so
-      // terminate its process tree before deleting credentials from that home.
       spawnSync('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], {
         windowsHide: true,
         stdio: 'ignore'
@@ -295,8 +344,6 @@ export class ProcessChatgptLoginService implements ChatgptLoginCoordinator {
         new Promise(resolve => setTimeout(resolve, 1000))
       ])
     }
-    // Let Windows release the exited process' file handles before finish()
-    // removes the per-login CODEX_HOME.
     if (child.exitCode !== null) {
       await new Promise(resolve => setTimeout(resolve, 25))
     }

@@ -593,6 +593,23 @@ dd {
   cursor: pointer;
 }
 
+.subscription-account-primary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.provider-primary-action.secondary {
+  color: #eaf3ff;
+  border-color: #8db8ea66;
+  background: #ffffff14;
+}
+
+.provider-primary-action:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
 .provider-summary-grid {
   z-index: 1;
   display: grid;
@@ -1023,6 +1040,10 @@ dd {
   margin-top: 13px;
 }
 
+.routing-fields.subscription-routing-fields {
+  grid-template-columns: minmax(180px, 1fr) minmax(120px, .35fr);
+}
+
 .routing-fields label {
   color: #4b5c73;
   font-size: 12px;
@@ -1080,6 +1101,14 @@ dd {
   color: #718096;
   text-align: center;
   background: #f8fafc;
+}
+
+.provider-empty strong {
+  color: #334f72;
+}
+
+.provider-empty p {
+  margin: 7px 0 0;
 }
 
 .provider-manual-credential {
@@ -1235,6 +1264,23 @@ dd {
 .account-login-status a {
   color: #135fbf;
   font-weight: 700;
+}
+
+.subscription-login-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+.subscription-login-actions button {
+  padding: 6px 9px;
+  border: 1px solid #9dbce2;
+  border-radius: 7px;
+  color: #174b84;
+  background: #fff;
+  cursor: pointer;
 }
 
 .device-auth-code {

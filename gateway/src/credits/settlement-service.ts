@@ -13,6 +13,15 @@ export interface TurnUsage {
   readonly outputTokens: number
 }
 
+export interface SettlementRecord {
+  readonly id: string
+  readonly turnId: string
+  readonly providerId: string
+  readonly inputTokens: number
+  readonly outputTokens: number
+  readonly completedAt: string
+}
+
 function validTokens(value: number): number {
   return Number.isSafeInteger(value) && value >= 0 ? value : 0
 }
@@ -29,9 +38,9 @@ export class SettlementService {
     providerId?: string
     usage?: TurnUsage
     routeErrorCode?: string | null
-  } = {}): Promise<UsageRecord | null> {
+  } = {}): Promise<SettlementRecord | null> {
     const initial = await this.repository.findTurnRisk(turnId)
-    if (!initial) return null
+    if (!initial) return this.settleExempt(turnId, result)
     return serializeCreditOperation(`account:${initial.accountId}`, async () => {
       const usageSource = result.usage ? 'upstream' : 'estimated'
       const inputTokens = result.usage
@@ -98,5 +107,70 @@ export class SettlementService {
         return usage
       })
     })
+  }
+
+  private async settleExempt(
+    turnId: string,
+    result: {
+      providerId?: string
+      usage?: TurnUsage
+    }
+  ): Promise<SettlementRecord | null> {
+    const initial = await this.repository.findExemptTurn(turnId)
+    if (!initial) return null
+    return serializeCreditOperation(`account:${initial.accountId}`, () =>
+      this.repository.inTransaction(async repository => {
+        const exemption = await repository.findExemptTurn(turnId)
+        if (!exemption || exemption.status === 'failed') return null
+        if (exemption.status === 'settled') {
+          if (
+            !exemption.providerId ||
+            exemption.inputTokens === null ||
+            exemption.outputTokens === null ||
+            !exemption.finishedAt
+          ) {
+            throw new Error('Exempt Turn settlement is incomplete')
+          }
+          return {
+            id: exemption.settlementId,
+            turnId,
+            providerId: exemption.providerId,
+            inputTokens: exemption.inputTokens,
+            outputTokens: exemption.outputTokens,
+            completedAt: exemption.finishedAt
+          }
+        }
+        const providerId = result.providerId ||
+          await repository.resolveProviderIdForModel(exemption.modelId)
+        if (!providerId) {
+          throw new SafeError({
+            code: 'provider_unavailable',
+            message: '无法确认本次免计费请求的结算 Provider。',
+            statusCode: 409
+          })
+        }
+        const now = this.clock.now().toISOString()
+        const inputTokens = result.usage
+          ? validTokens(result.usage.inputTokens)
+          : 0
+        const outputTokens = result.usage
+          ? validTokens(result.usage.outputTokens)
+          : 0
+        await repository.markExemptTurnSettled(turnId, {
+          providerId,
+          inputTokens,
+          outputTokens,
+          now
+        })
+        return {
+          id: exemption.settlementId,
+          turnId,
+          providerId,
+          inputTokens,
+          outputTokens,
+          completedAt: now
+        }
+      })
+    )
   }
 }

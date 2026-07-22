@@ -152,6 +152,94 @@ describe('Gateway authenticated model and Responses contract (T039/T043-T046)', 
 })
 
 describe('Gateway Responses stream compatibility', () => {
+  it('settles a Level 1 Turn as exempt and acknowledges its Worker receipt', async () => {
+    let acknowledgedSettlementId: string | undefined
+    const fixture = await createRealGatewayFixture({
+      providerAdapter: {
+        async listModels() {
+          return {
+            object: 'list',
+            data: [{ id: 'level1-model', object: 'model', owned_by: 'test' }]
+          }
+        },
+        async forwardResponses(_request, reply) {
+          await reply.status(200).send({
+            id: 'response_level1_exempt',
+            usage: { input_tokens: 7, output_tokens: 4 }
+          })
+          return {
+            providerId: 'provider_level1_exempt',
+            usage: { inputTokens: 7, outputTokens: 4 },
+            usageReceipt: {
+              schemaVersion: 1,
+              outboxId: 'outbox_level1_exempt',
+              executionId: 'exec_level1_exempt',
+              turnId: 'turn_level1_exempt_1234',
+              workerId: 'worker-local',
+              region: 'local-development',
+              providerId: 'provider_level1_exempt',
+              inputTokens: 7,
+              outputTokens: 4,
+              completedAt: '2026-07-22T00:00:00.000Z',
+              signature: `v1=${'a'.repeat(64)}`
+            }
+          }
+        },
+        async acknowledgeSettlement(_result, settlement) {
+          acknowledgedSettlementId = settlement.id
+        }
+      }
+    })
+    try {
+      const initial = await loginBootstrapAndExchange(fixture)
+      const changed = await fixture.gateway.app.inject({
+        method: 'POST',
+        url: '/api/v1/account/password/change',
+        headers: { authorization: `Bearer ${initial.accessToken}` },
+        payload: {
+          currentPassword: fixture.bootstrap.password,
+          newPassword: 'PermanentPassword123',
+          email: 'level1@example.test'
+        }
+      })
+      expect(changed.statusCode).toBe(200)
+      const tokens = changed.json()
+      const response = await fixture.gateway.app.inject({
+        method: 'POST',
+        url: '/v1/responses',
+        headers: {
+          authorization: `Bearer ${tokens.accessToken}`,
+          'x-ai-editor-device-session': tokens.deviceSessionId,
+          'x-ai-editor-turn-id': 'turn_level1_exempt_1234'
+        },
+        payload: { model: 'level1-model', input: 'hello' }
+      })
+
+      expect(response.statusCode).toBe(200)
+      const exemption = await fixture.database.db
+        .selectFrom('exempt_turns')
+        .selectAll()
+        .where('turn_id', '=', 'turn_level1_exempt_1234')
+        .executeTakeFirstOrThrow()
+      expect(exemption).toMatchObject({
+        status: 'settled',
+        provider_id: 'provider_level1_exempt',
+        input_tokens: 7,
+        output_tokens: 4
+      })
+      expect(exemption.settlement_id).toMatch(/^usage_exempt_[a-f0-9]{32}$/)
+      expect(acknowledgedSettlementId).toBe(exemption.settlement_id)
+      expect(await fixture.database.db.selectFrom('turn_risks')
+        .select(({ fn }) => fn.countAll<number>().as('count'))
+        .executeTakeFirstOrThrow()).toEqual({ count: 0 })
+      expect(await fixture.database.db.selectFrom('usage_records')
+        .select(({ fn }) => fn.countAll<number>().as('count'))
+        .executeTakeFirstOrThrow()).toEqual({ count: 0 })
+    } finally {
+      await fixture.gateway.close()
+    }
+  })
+
   it('reserves risk and settles upstream usage for an organization account', async () => {
     const now = '2026-07-17T00:00:00.000Z'
     let acknowledgedSettlementId: string | undefined
@@ -222,7 +310,7 @@ describe('Gateway Responses stream compatibility', () => {
         version: 1
       }).execute()
       await fixture.database.db.updateTable('accounts')
-        .set({ organization_id: 'org_billable', version: 2 })
+        .set({ organization_id: 'org_billable' })
         .where('id', '=', accountId)
         .execute()
       await fixture.database.db.insertInto('providers').values({
@@ -258,19 +346,8 @@ describe('Gateway Responses stream compatibility', () => {
         visible_to: 'level1'
       }).execute()
 
-      const refreshed = await fixture.gateway.app.inject({
-        method: 'POST',
-        url: '/api/v1/oauth/token',
-        payload: {
-          grantType: 'refresh_token',
-          clientId: 'ai-editor-edge',
-          refreshToken: changedTokens.refreshToken,
-          deviceSessionId: changedTokens.deviceSessionId
-        }
-      })
-      const tokens = refreshed.json()
       const adminHeaders = {
-        authorization: `Bearer ${tokens.accessToken}`
+        authorization: `Bearer ${changedTokens.accessToken}`
       }
       expect((await fixture.gateway.app.inject({
         method: 'PUT',
@@ -284,6 +361,26 @@ describe('Gateway Responses stream compatibility', () => {
         headers: adminHeaders,
         payload: { allocatedCredits: '100' }
       })).statusCode).toBe(204)
+      const accountVersion = (await fixture.database.db
+        .selectFrom('accounts')
+        .select('version')
+        .where('id', '=', accountId)
+        .executeTakeFirstOrThrow()).version
+      await fixture.database.db.updateTable('accounts')
+        .set({ role: 'user', version: accountVersion + 1 })
+        .where('id', '=', accountId)
+        .execute()
+      const refreshed = await fixture.gateway.app.inject({
+        method: 'POST',
+        url: '/api/v1/oauth/token',
+        payload: {
+          grantType: 'refresh_token',
+          clientId: 'ai-editor-edge',
+          refreshToken: changedTokens.refreshToken,
+          deviceSessionId: changedTokens.deviceSessionId
+        }
+      })
+      const tokens = refreshed.json()
       const response = await fixture.gateway.app.inject({
         method: 'POST',
         url: '/v1/responses',

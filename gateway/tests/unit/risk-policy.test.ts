@@ -3,6 +3,8 @@ import {
   evaluateRiskPolicy,
   TurnRiskService
 } from '../../src/credits/turn-risk-service.js'
+import { FixedClock } from '../../src/common/clock.js'
+import type { ExemptTurnRecord } from '../../src/db/repositories/credit-repository.js'
 
 describe('per-Turn and cumulative credit risk policy (T070/T076/T077)', () => {
   it('accepts the exact overdraft and cumulative boundaries', () => {
@@ -39,16 +41,25 @@ describe('per-Turn and cumulative credit risk policy (T070/T076/T077)', () => {
     )
   })
 
-  it('does not reserve or limit a Level 1 administrator Turn', async () => {
+  it('records but does not reserve or limit a Level 1 administrator Turn', async () => {
     const estimate = jest.fn()
+    let exemption: ExemptTurnRecord | null = null
+    const repository = {
+      inTransaction: jest.fn(async callback => callback(repository)),
+      findTurnRisk: jest.fn(async () => null),
+      findExemptTurn: jest.fn(async () => exemption),
+      insertExemptTurn: jest.fn(async record => {
+        exemption = record
+      })
+    }
     const service = new TurnRiskService(
-      {} as never,
+      repository as never,
       {} as never,
       { estimate } as never,
-      {} as never
+      new FixedClock(new Date('2026-07-22T00:00:00.000Z'))
     )
 
-    await expect(service.reserve({
+    const request = {
       identity: {
         accountId: 'acct_level1',
         deviceSessionId: 'ds_level1',
@@ -60,7 +71,23 @@ describe('per-Turn and cumulative credit risk policy (T070/T076/T077)', () => {
       turnId: 'turn_level1_unlimited',
       modelId: 'model',
       body: { input: 'hello' }
-    })).resolves.toBeNull()
+    } as const
+    await expect(service.reserve(request)).resolves.toEqual({
+      turnId: request.turnId,
+      billingMode: 'exempt'
+    })
+    const firstSettlementId = exemption?.settlementId
+    await expect(service.reserve(request)).resolves.toEqual({
+      turnId: request.turnId,
+      billingMode: 'exempt'
+    })
     expect(estimate).not.toHaveBeenCalled()
+    expect(repository.insertExemptTurn).toHaveBeenCalledTimes(1)
+    expect(firstSettlementId).toMatch(/^usage_exempt_[a-f0-9]{32}$/)
+    expect(exemption).toMatchObject({
+      accountId: 'acct_level1',
+      status: 'accepted',
+      settlementId: firstSettlementId
+    })
   })
 })

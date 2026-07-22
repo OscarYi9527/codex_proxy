@@ -1,7 +1,10 @@
 import { jest } from '@jest/globals'
 import { FixedClock } from '../../src/common/clock.js'
 import { SafeLogger, type LogRecord } from '../../src/common/logging.js'
-import type { SettlementService } from '../../src/credits/settlement-service.js'
+import type {
+  SettlementRecord,
+  SettlementService
+} from '../../src/credits/settlement-service.js'
 import type { UsageRecord } from '../../src/db/repositories/credit-repository.js'
 import type { ProviderWorkerClient } from '../../src/provider-worker/provider-worker-client.js'
 import { ProviderWorkerSettlementReconciler } from '../../src/provider-worker/settlement-reconciler.js'
@@ -117,5 +120,108 @@ describe('ProviderWorkerSettlementReconciler', () => {
     expect(logs.some(record =>
       record.event === 'provider_worker_outbox_turn_not_settleable'
     )).toBe(true)
+  })
+
+  it('acknowledges a valid Level 1 exempt Turn without creating billable usage', async () => {
+    const receipt: ProviderUsageReceipt = {
+      schemaVersion: 1,
+      outboxId: 'outbox_level1_exempt',
+      executionId: 'exec_level1_exempt',
+      turnId: 'turn_level1_exempt',
+      workerId: 'worker-local',
+      region: 'local-development',
+      providerId: 'provider-subscription',
+      inputTokens: 21,
+      outputTokens: 8,
+      completedAt: '2026-07-22T00:00:00.000Z',
+      signature: `v1=${'c'.repeat(64)}`
+    }
+    const exempt: SettlementRecord = {
+      id: 'usage_exempt_1234567890abcdef',
+      turnId: receipt.turnId,
+      providerId: receipt.providerId,
+      inputTokens: receipt.inputTokens,
+      outputTokens: receipt.outputTokens,
+      completedAt: '2026-07-22T00:00:01.000Z'
+    }
+    const client = {
+      listPendingUsage: jest.fn(async () => [receipt]),
+      acknowledgeUsage: jest.fn(async () => undefined)
+    } as unknown as ProviderWorkerClient
+    const settlements = {
+      settle: jest.fn(async () => exempt)
+    } as unknown as SettlementService
+    const reconciler = new ProviderWorkerSettlementReconciler(
+      client,
+      settlements,
+      new SafeLogger()
+    )
+
+    await reconciler.reconcileOnce()
+
+    expect(client.acknowledgeUsage).toHaveBeenCalledWith([{
+      outboxId: receipt.outboxId,
+      turnId: receipt.turnId,
+      settlementId: exempt.id,
+      settledAt: exempt.completedAt
+    }])
+  })
+
+  it('reuses the same settlement when acknowledgement is retried', async () => {
+    const receipt: ProviderUsageReceipt = {
+      schemaVersion: 1,
+      outboxId: 'outbox_retry',
+      executionId: 'exec_retry',
+      turnId: 'turn_retry',
+      workerId: 'worker-local',
+      region: 'local-development',
+      providerId: 'provider-subscription',
+      inputTokens: 5,
+      outputTokens: 3,
+      completedAt: '2026-07-22T00:00:00.000Z',
+      signature: `v1=${'d'.repeat(64)}`
+    }
+    const settlement: SettlementRecord = {
+      id: 'usage_exempt_retry',
+      turnId: receipt.turnId,
+      providerId: receipt.providerId,
+      inputTokens: receipt.inputTokens,
+      outputTokens: receipt.outputTokens,
+      completedAt: '2026-07-22T00:00:01.000Z'
+    }
+    let acknowledgementAttempts = 0
+    const client = {
+      listPendingUsage: jest.fn(async () => [receipt]),
+      acknowledgeUsage: jest.fn(async () => {
+        acknowledgementAttempts += 1
+        if (acknowledgementAttempts === 1) throw new Error('temporary failure')
+      })
+    } as unknown as ProviderWorkerClient
+    const settlements = {
+      settle: jest.fn(async () => settlement)
+    } as unknown as SettlementService
+    const reconciler = new ProviderWorkerSettlementReconciler(
+      client,
+      settlements,
+      new SafeLogger()
+    )
+
+    await reconciler.reconcileOnce()
+    await reconciler.reconcileOnce()
+
+    expect(settlements.settle).toHaveBeenCalledTimes(2)
+    expect(client.acknowledgeUsage).toHaveBeenCalledTimes(2)
+    expect(client.acknowledgeUsage).toHaveBeenNthCalledWith(1, [{
+      outboxId: receipt.outboxId,
+      turnId: receipt.turnId,
+      settlementId: settlement.id,
+      settledAt: settlement.completedAt
+    }])
+    expect(client.acknowledgeUsage).toHaveBeenNthCalledWith(2, [{
+      outboxId: receipt.outboxId,
+      turnId: receipt.turnId,
+      settlementId: settlement.id,
+      settledAt: settlement.completedAt
+    }])
   })
 })

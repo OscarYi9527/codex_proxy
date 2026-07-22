@@ -187,6 +187,22 @@ export interface TurnRiskTable {
   failure_code: string | null
 }
 
+export interface ExemptTurnTable {
+  turn_id: string
+  account_id: string
+  device_session_id: string
+  model_id: string
+  settlement_id: string
+  status: 'accepted' | 'streaming' | 'settled' | 'failed'
+  provider_id: string | null
+  input_tokens: number | null
+  output_tokens: number | null
+  created_at: Timestamp
+  started_at: NullableTimestamp
+  finished_at: NullableTimestamp
+  failure_code: string | null
+}
+
 export interface UsageRecordTable {
   id: string
   turn_id: string
@@ -298,6 +314,7 @@ export interface GatewayDatabase {
   user_credit_allocations: UserCreditAllocationTable
   risk_policies: RiskPolicyTable
   turn_risks: TurnRiskTable
+  exempt_turns: ExemptTurnTable
   usage_records: UsageRecordTable
   conversation_audits: ConversationAuditTable
   admin_audit_events: AdminAuditEventTable

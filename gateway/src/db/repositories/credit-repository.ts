@@ -80,6 +80,22 @@ export interface TurnRiskRecord {
   readonly failureCode: string | null
 }
 
+export interface ExemptTurnRecord {
+  readonly turnId: string
+  readonly accountId: string
+  readonly deviceSessionId: string
+  readonly modelId: string
+  readonly settlementId: string
+  readonly status: 'accepted' | 'streaming' | 'settled' | 'failed'
+  readonly providerId: string | null
+  readonly inputTokens: number | null
+  readonly outputTokens: number | null
+  readonly createdAt: string
+  readonly startedAt: string | null
+  readonly finishedAt: string | null
+  readonly failureCode: string | null
+}
+
 export interface UsageRecord {
   readonly id: string
   readonly turnId: string
@@ -173,6 +189,38 @@ function turnRisk(row: {
     startedAt: row.started_at,
     finishedAt: row.finished_at,
     usageRecordId: row.usage_record_id,
+    failureCode: row.failure_code
+  }
+}
+
+function exemptTurn(row: {
+  turn_id: string
+  account_id: string
+  device_session_id: string
+  model_id: string
+  settlement_id: string
+  status: ExemptTurnRecord['status']
+  provider_id: string | null
+  input_tokens: number | null
+  output_tokens: number | null
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+  failure_code: string | null
+}): ExemptTurnRecord {
+  return {
+    turnId: row.turn_id,
+    accountId: row.account_id,
+    deviceSessionId: row.device_session_id,
+    modelId: row.model_id,
+    settlementId: row.settlement_id,
+    status: row.status,
+    providerId: row.provider_id,
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
+    createdAt: row.created_at,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
     failureCode: row.failure_code
   }
 }
@@ -544,6 +592,79 @@ export class CreditRepository {
       usage_record_id: record.usageRecordId,
       failure_code: record.failureCode
     }).execute()
+  }
+
+  async findExemptTurn(turnId: string): Promise<ExemptTurnRecord | null> {
+    const row = await this.db.selectFrom('exempt_turns')
+      .selectAll()
+      .where('turn_id', '=', turnId)
+      .executeTakeFirst()
+    return row ? exemptTurn(row) : null
+  }
+
+  async insertExemptTurn(record: ExemptTurnRecord): Promise<void> {
+    await this.db.insertInto('exempt_turns').values({
+      turn_id: record.turnId,
+      account_id: record.accountId,
+      device_session_id: record.deviceSessionId,
+      model_id: record.modelId,
+      settlement_id: record.settlementId,
+      status: record.status,
+      provider_id: record.providerId,
+      input_tokens: record.inputTokens,
+      output_tokens: record.outputTokens,
+      created_at: record.createdAt,
+      started_at: record.startedAt,
+      finished_at: record.finishedAt,
+      failure_code: record.failureCode
+    }).execute()
+  }
+
+  async markExemptTurnStreaming(turnId: string, now: string): Promise<void> {
+    await this.db.updateTable('exempt_turns')
+      .set({ status: 'streaming', started_at: now })
+      .where('turn_id', '=', turnId)
+      .where('status', '=', 'accepted')
+      .execute()
+  }
+
+  async markExemptTurnFailed(
+    turnId: string,
+    now: string,
+    failureCode: string
+  ): Promise<void> {
+    await this.db.updateTable('exempt_turns')
+      .set({
+        status: 'failed',
+        finished_at: now,
+        failure_code: failureCode.slice(0, 120)
+      })
+      .where('turn_id', '=', turnId)
+      .where('status', 'in', ['accepted', 'streaming'])
+      .execute()
+  }
+
+  async markExemptTurnSettled(
+    turnId: string,
+    input: {
+      providerId: string
+      inputTokens: number
+      outputTokens: number
+      now: string
+    }
+  ): Promise<void> {
+    await this.db.updateTable('exempt_turns')
+      .set({
+        status: 'settled',
+        provider_id: input.providerId,
+        input_tokens: input.inputTokens,
+        output_tokens: input.outputTokens,
+        finished_at: input.now,
+        failure_code: null
+      })
+      .where('turn_id', '=', turnId)
+      .where('status', 'in', ['accepted', 'streaming'])
+      .execute()
   }
 
   async markTurnStreaming(turnId: string, now: string): Promise<void> {

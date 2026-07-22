@@ -10,7 +10,7 @@ import type {
   SafeAccountPoolSnapshot,
   SafeModelList
 } from '../routing/standalone-route-adapter.js'
-import type { UsageRecord } from '../db/repositories/credit-repository.js'
+import type { SettlementRecord } from '../credits/settlement-service.js'
 import type { ProviderWorkerGatewayConfig } from '../config.js'
 import {
   createProviderWorkerSignedHeaders,
@@ -308,7 +308,7 @@ export class ProviderWorkerClient implements ProviderRouteAdapter {
 
   async acknowledgeSettlement(
     result: ProviderForwardResult,
-    usage: UsageRecord
+    usage: SettlementRecord
   ): Promise<void> {
     if (!result.usageReceipt) return
     await this.acknowledgeUsage([{

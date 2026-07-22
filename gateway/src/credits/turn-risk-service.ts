@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto'
 import type { AccessIdentity } from '../auth/types.js'
 import type { Clock } from '../common/clock.js'
 import { SafeError } from '../common/errors.js'
 import {
   CreditRepository,
+  type ExemptTurnRecord,
   type TurnRiskRecord
 } from '../db/repositories/credit-repository.js'
 import { CreditService } from './credit-service.js'
@@ -13,6 +15,18 @@ import {
 import { RiskEstimator } from './risk-estimator.js'
 
 const operationQueues = new Map<string, Promise<void>>()
+
+export interface TurnReservation {
+  readonly turnId: string
+  readonly billingMode: 'billable' | 'exempt'
+}
+
+function exemptSettlementId(turnId: string): string {
+  return `usage_exempt_${createHash('sha256')
+    .update(turnId, 'utf8')
+    .digest('hex')
+    .slice(0, 32)}`
+}
 
 export async function serializeCreditOperation<T>(
   key: string,
@@ -79,7 +93,10 @@ export class TurnRiskService {
     turnId: string
     modelId: string
     body: Record<string, unknown>
-  }): Promise<TurnRiskRecord | null> {
+  }): Promise<TurnReservation | null> {
+    if (input.identity.role === 'level1') {
+      return this.recordLevel1Exemption(input)
+    }
     if (!input.identity.organizationId) return null
     const estimate = await this.estimator.estimate(input.modelId, input.body)
     const organizationId = input.identity.organizationId
@@ -95,6 +112,9 @@ export class TurnRiskService {
       }
       const policy = await this.credits.riskPolicy(organizationId)
       return this.repository.inTransaction(async repository => {
+        if (await repository.findExemptTurn(input.turnId)) {
+          throw this.turnConflict()
+        }
         const existing = await repository.findTurnRisk(input.turnId)
         if (existing) {
           if (
@@ -103,13 +123,9 @@ export class TurnRiskService {
             existing.deviceSessionId !== input.identity.deviceSessionId ||
             existing.modelId !== input.modelId
           ) {
-            throw new SafeError({
-              code: 'turn_id_conflict',
-              message: 'Turn ID 已绑定到其他请求。',
-              statusCode: 409
-            })
+            throw this.turnConflict()
           }
-          return existing
+          return { turnId: input.turnId, billingMode: 'billable' }
         }
         const activeRiskCredits =
           await repository.activeRiskCredits(input.identity.accountId)
@@ -137,24 +153,102 @@ export class TurnRiskService {
           failureCode: null
         }
         await repository.insertTurnRisk(record)
-        return record
+        return { turnId: input.turnId, billingMode: 'billable' }
       })
     })
   }
 
   async markStreaming(turnId: string): Promise<void> {
     const record = await this.repository.findTurnRisk(turnId)
-    if (!record) return
-    await serializeCreditOperation(`account:${record.accountId}`, () =>
-      this.repository.markTurnStreaming(turnId, this.clock.now().toISOString())
+    if (record) {
+      await serializeCreditOperation(`account:${record.accountId}`, () =>
+        this.repository.markTurnStreaming(turnId, this.clock.now().toISOString())
+      )
+      return
+    }
+    const exemption = await this.repository.findExemptTurn(turnId)
+    if (!exemption) return
+    await serializeCreditOperation(`account:${exemption.accountId}`, () =>
+      this.repository.markExemptTurnStreaming(turnId, this.clock.now().toISOString())
     )
   }
 
   async fail(turnId: string, code: string): Promise<void> {
     const record = await this.repository.findTurnRisk(turnId)
-    if (!record) return
-    await serializeCreditOperation(`account:${record.accountId}`, () =>
-      this.repository.markTurnFailed(turnId, this.clock.now().toISOString(), code)
+    if (record) {
+      await serializeCreditOperation(`account:${record.accountId}`, () =>
+        this.repository.markTurnFailed(turnId, this.clock.now().toISOString(), code)
+      )
+      return
+    }
+    const exemption = await this.repository.findExemptTurn(turnId)
+    if (!exemption) return
+    await serializeCreditOperation(`account:${exemption.accountId}`, () =>
+      this.repository.markExemptTurnFailed(
+        turnId,
+        this.clock.now().toISOString(),
+        code
+      )
     )
+  }
+
+  private async recordLevel1Exemption(input: {
+    identity: AccessIdentity
+    turnId: string
+    modelId: string
+  }): Promise<TurnReservation> {
+    return serializeCreditOperation(`account:${input.identity.accountId}`, () =>
+      this.repository.inTransaction(async repository => {
+        if (await repository.findTurnRisk(input.turnId)) {
+          throw this.turnConflict()
+        }
+        const existing = await repository.findExemptTurn(input.turnId)
+        if (existing) {
+          this.requireMatchingExemption(existing, input)
+          return { turnId: input.turnId, billingMode: 'exempt' }
+        }
+        const now = this.clock.now().toISOString()
+        await repository.insertExemptTurn({
+          turnId: input.turnId,
+          accountId: input.identity.accountId,
+          deviceSessionId: input.identity.deviceSessionId,
+          modelId: input.modelId,
+          settlementId: exemptSettlementId(input.turnId),
+          status: 'accepted',
+          providerId: null,
+          inputTokens: null,
+          outputTokens: null,
+          createdAt: now,
+          startedAt: null,
+          finishedAt: null,
+          failureCode: null
+        })
+        return { turnId: input.turnId, billingMode: 'exempt' }
+      })
+    )
+  }
+
+  private requireMatchingExemption(
+    existing: ExemptTurnRecord,
+    input: {
+      identity: AccessIdentity
+      modelId: string
+    }
+  ): void {
+    if (
+      existing.accountId !== input.identity.accountId ||
+      existing.deviceSessionId !== input.identity.deviceSessionId ||
+      existing.modelId !== input.modelId
+    ) {
+      throw this.turnConflict()
+    }
+  }
+
+  private turnConflict(): SafeError {
+    return new SafeError({
+      code: 'turn_id_conflict',
+      message: 'Turn ID 已绑定到其他请求。',
+      statusCode: 409
+    })
   }
 }

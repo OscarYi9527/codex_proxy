@@ -2,7 +2,7 @@ import { Readable, Writable } from 'node:stream'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { FastifyReply, FastifyRequest } from 'fastify'
-import type { UsageRecord } from '../db/repositories/credit-repository.js'
+import type { SettlementRecord } from '../credits/settlement-service.js'
 import type { ProviderUsageReceipt } from '../provider-worker/protocol.js'
 import { redactValue } from '../common/redaction.js'
 import { extractAssistantTextFromEvents } from '../audit/conversation-sanitizer.js'
@@ -108,7 +108,7 @@ export interface ProviderRouteAdapter {
 	refreshChatgptAccountUsage?(accountId: string): Promise<void>
 	acknowledgeSettlement?(
 		result: ProviderForwardResult,
-		usage: UsageRecord
+		usage: SettlementRecord
 	): Promise<void>
 }
 

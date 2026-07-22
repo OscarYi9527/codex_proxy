@@ -230,6 +230,33 @@ export class ProviderWorkerClient implements ProviderRouteAdapter {
     )
   }
 
+  async providerRuntimeStatus(): Promise<{
+    enabled: boolean
+    accountCount: number
+    modelCount: number
+  }> {
+    const value = await this.requestJson<Record<string, unknown>>(
+      'GET',
+      '/internal/v1/runtime/chatgpt-sub',
+      undefined,
+      'runtime_status'
+    )
+    if (
+      typeof value['enabled'] !== 'boolean' ||
+      !Number.isSafeInteger(value['accountCount']) ||
+      Number(value['accountCount']) < 0 ||
+      !Number.isSafeInteger(value['modelCount']) ||
+      Number(value['modelCount']) < 0
+    ) {
+      throw workerError('provider_worker_runtime_status_invalid', 502, true)
+    }
+    return {
+      enabled: value['enabled'],
+      accountCount: Number(value['accountCount']),
+      modelCount: Number(value['modelCount'])
+    }
+  }
+
   async safeAccountPool(): Promise<SafeAccountPoolSnapshot> {
     return this.requestJson<SafeAccountPoolSnapshot>(
       'GET',

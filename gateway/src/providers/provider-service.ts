@@ -522,6 +522,36 @@ export class ProviderService {
     }
   }
 
+  async recoverWorkerRuntimeConfiguration(): Promise<boolean> {
+    if (
+      !this.adapter.providerRuntimeStatus ||
+      !this.adapter.configureProviders
+    ) {
+      return false
+    }
+    const status = await this.adapter.providerRuntimeStatus()
+    if (status.enabled || status.accountCount > 0 || status.modelCount > 0) {
+      return false
+    }
+    const [providers, credentials] = await Promise.all([
+      this.repository.listProviders(),
+      this.repository.listCredentials()
+    ])
+    const activeChatgptProviderIds = new Set(providers
+      .filter(provider =>
+        provider.kind === 'chatgpt' &&
+        provider.status === 'active'
+      )
+      .map(provider => provider.id))
+    if (!credentials.some(credential =>
+      activeChatgptProviderIds.has(credential.providerId)
+    )) {
+      return false
+    }
+    await this.applyRuntimeConfiguration()
+    return true
+  }
+
 	async list(identity: AccessIdentity) {
 		await this.requireLevel1(identity, 'provider.list', null)
 		const [providers, credentials, accountPool, diagnostics, usage] = await Promise.all([

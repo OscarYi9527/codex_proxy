@@ -203,6 +203,14 @@ describe('ProviderWorkerClient', () => {
         turnId: String(request.headers['x-ai-editor-turn-id'] || '')
       })
       response.writeHead(200, { 'content-type': 'application/json' })
+      if (request.url === '/internal/v1/runtime/chatgpt-sub') {
+        response.end(JSON.stringify({
+          enabled: true,
+          accountCount: 1,
+          modelCount: 1
+        }))
+        return
+      }
       if (request.url === '/internal/v1/runtime/chatgpt-sub/accounts') {
         response.end(JSON.stringify({
           strategy: 'headroom',
@@ -274,6 +282,11 @@ describe('ProviderWorkerClient', () => {
       expect(JSON.stringify(configuration)).not.toContain('must-not-leave-gateway')
       expect(JSON.stringify(configuration)).toContain('subscription-access')
 
+      await expect(client.providerRuntimeStatus()).resolves.toEqual({
+        enabled: true,
+        accountCount: 1,
+        modelCount: 1
+      })
       await expect(client.safeAccountPool()).resolves.toMatchObject({
         strategy: 'headroom',
         accounts: []

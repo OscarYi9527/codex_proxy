@@ -224,4 +224,32 @@ describe('ProviderWorkerSettlementReconciler', () => {
       settledAt: settlement.completedAt
     }])
   })
+
+  it('recovers an empty Worker runtime before reconciling usage', async () => {
+    const client = {
+      listPendingUsage: jest.fn(async () => []),
+      acknowledgeUsage: jest.fn()
+    } as unknown as ProviderWorkerClient
+    const settlements = {
+      settle: jest.fn()
+    } as unknown as SettlementService
+    const recovery = jest.fn(async () => true)
+    const logs: LogRecord[] = []
+    const reconciler = new ProviderWorkerSettlementReconciler(
+      client,
+      settlements,
+      new SafeLogger({ sink: record => logs.push(record) }),
+      undefined,
+      recovery
+    )
+
+    await reconciler.reconcileOnce()
+
+    expect(recovery).toHaveBeenCalledTimes(1)
+    expect(client.listPendingUsage).toHaveBeenCalledTimes(1)
+    expect(logs).toContainEqual(expect.objectContaining({
+      level: 'info',
+      event: 'provider_worker_runtime_recovered'
+    }))
+  })
 })

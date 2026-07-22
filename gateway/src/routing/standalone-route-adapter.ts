@@ -103,6 +103,11 @@ export interface ProviderRouteAdapter {
     body: Record<string, unknown>
 	): Promise<void | ProviderForwardResult>
 	configureProviders?(configuration: GatewayProviderRuntimeConfiguration): Promise<void>
+	providerRuntimeStatus?(): Promise<{
+		readonly enabled: boolean
+		readonly accountCount: number
+		readonly modelCount: number
+	}>
 	safeDiagnostics?(): Promise<Record<string, unknown>>
 	safeAccountPool?(): Promise<SafeAccountPoolSnapshot>
 	refreshChatgptAccountUsage?(accountId: string): Promise<void>

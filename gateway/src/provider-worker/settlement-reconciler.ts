@@ -12,7 +12,8 @@ export class ProviderWorkerSettlementReconciler {
     private readonly client: ProviderWorkerClient,
     private readonly settlements: SettlementService,
     private readonly logger: SafeLogger,
-    private readonly intervalMs = DEFAULT_INTERVAL_MS
+    private readonly intervalMs = DEFAULT_INTERVAL_MS,
+    private readonly recoverRuntime?: () => Promise<boolean>
   ) {}
 
   start(): void {
@@ -39,6 +40,15 @@ export class ProviderWorkerSettlementReconciler {
   }
 
   async #run(): Promise<void> {
+    if (this.recoverRuntime) {
+      try {
+        if (await this.recoverRuntime()) {
+          this.logger.info('provider_worker_runtime_recovered')
+        }
+      } catch (error) {
+        this.logger.warn('provider_worker_runtime_recovery_failed', { error })
+      }
+    }
     let receipts
     try {
       receipts = await this.client.listPendingUsage(100)

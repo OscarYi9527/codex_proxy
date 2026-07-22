@@ -333,7 +333,9 @@ export async function createGatewayApp(options: {
       providerWorkerReconciler = new ProviderWorkerSettlementReconciler(
         providerAdapter,
         settlements,
-        logger
+        logger,
+        undefined,
+        () => providerService.recoverWorkerRuntimeConfiguration()
       )
       providerWorkerReconciler.start()
     }

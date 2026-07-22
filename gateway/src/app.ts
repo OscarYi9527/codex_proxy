@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import path from 'node:path'
 import Fastify, { type FastifyInstance } from 'fastify'
 import helmet from '@fastify/helmet'
 import formbody from '@fastify/formbody'
@@ -96,6 +97,25 @@ export function shouldMigrateGatewayDatabase(config: GatewayConfig): boolean {
     config.database.migrateOnStart !== false
 }
 
+/**
+ * The Gateway can lazily load the standalone routing runtime for diagnostics
+ * and compatibility helpers. That runtime resolves its statistics/config
+ * files from CODEX_PROXY_STORAGE_ROOT at module-load time, so bind it to the
+ * Gateway's isolated writable data root before any adapter can be imported.
+ *
+ * Always override an inherited value. A Gateway process must never write
+ * standalone runtime data into the immutable installation directory or into
+ * another Proxy instance's storage root.
+ */
+export function bindGatewayProxyStorageRoot(
+  config: GatewayConfig,
+  env: NodeJS.ProcessEnv = process.env
+): string {
+  const storageRoot = path.resolve(config.dataRoot)
+  env.CODEX_PROXY_STORAGE_ROOT = storageRoot
+  return storageRoot
+}
+
 export async function createGatewayApp(options: {
   config?: GatewayConfig
   clock?: Clock
@@ -110,6 +130,7 @@ export async function createGatewayApp(options: {
   credentialProtector?: CredentialProtector
 } = {}): Promise<GatewayApp> {
   const config = options.config || loadGatewayConfig()
+  bindGatewayProxyStorageRoot(config)
   const clock = options.clock || new SystemClock()
   const ids = options.ids || new CryptoIdSource()
   const logger = options.logger || new SafeLogger({ clock })

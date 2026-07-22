@@ -21,7 +21,8 @@ import { TurnStore } from '../src/provider-worker/turn-store.js'
 import { ExecutionStore } from '../src/provider-worker/execution-store.js'
 import { createProviderWorkerServer } from '../src/provider-worker/server.js'
 import {
-  ChatgptSubscriptionExecutor
+  ChatgptSubscriptionExecutor,
+  safeUpstreamFailureDetails
 } from '../src/provider-worker/chatgpt-sub-executor.js'
 import {
   DevelopmentWorkerCredentialVault,
@@ -31,6 +32,32 @@ import {
 const SIGNING_SECRET = 'provider-worker-test-secret-with-at-least-32-bytes'
 const openWorkers = new Set()
 const temporaryDirectories = new Set()
+
+describe('Provider Worker safe upstream diagnostics', () => {
+  it('classifies a rejected field without logging the rejected value', () => {
+    const secret = 'sk-sensitive-value-that-must-not-appear'
+    const body = Buffer.from(JSON.stringify({
+      error: {
+        code: 'invalid_request_error',
+        type: 'invalid_request_error',
+        param: 'instructions',
+        message: `Invalid instructions value '${secret}'`
+      }
+    }))
+    const bodyBytes = body.length
+    const details = safeUpstreamFailureDetails(400, body)
+    body.fill(0)
+    assert.deepEqual(details, {
+      statusCode: 400,
+      code: 'invalid_request_error',
+      type: 'invalid_request_error',
+      param: 'instructions',
+      category: 'invalid_value',
+      bodyBytes
+    })
+    assert.equal(JSON.stringify(details).includes(secret), false)
+  })
+})
 
 function certificate(options) {
   const keys = forge.pki.rsa.generateKeyPair(2048)

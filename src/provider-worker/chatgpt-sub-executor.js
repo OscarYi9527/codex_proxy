@@ -356,6 +356,60 @@ function exhaustedPoolRequiresRelogin(errorBody) {
   }
 }
 
+function safeDiagnosticIdentifier(value) {
+  const candidate = typeof value === 'string' ? value.trim() : ''
+  return /^[A-Za-z0-9._:[\]-]{1,120}$/.test(candidate)
+    ? candidate
+    : null
+}
+
+export function safeUpstreamFailureDetails(statusCode, errorBody) {
+  let payload = {}
+  try {
+    payload = object(JSON.parse(errorBody.toString('utf8')))
+  } catch {}
+  const root = object(payload.error)
+  const source = Object.keys(root).length ? root : payload
+  const message = [
+    source.message,
+    source.detail,
+    payload.detail,
+    source.error_description
+  ].find(value => typeof value === 'string') || ''
+  const knownFields = [
+    'instructions',
+    'input',
+    'model',
+    'stream',
+    'store',
+    'tools',
+    'reasoning',
+    'include',
+    'prompt_cache_key',
+    'previous_response_id'
+  ]
+  const messageField = knownFields.find(field =>
+    new RegExp(`\\b${field}\\b`, 'i').test(message)
+  ) || null
+  const category = /required|missing|must (?:be )?(?:provided|set)/i.test(message)
+    ? 'required_field'
+    : (/unknown|unrecognized|unsupported|not supported|extra field/i.test(message)
+        ? 'unsupported_field'
+        : (/invalid|must be|expected/i.test(message)
+            ? 'invalid_value'
+            : (/too (?:large|long|many)|limit|maximum/i.test(message)
+                ? 'request_limit'
+                : 'other')))
+  return {
+    statusCode: Number(statusCode) || 0,
+    code: safeDiagnosticIdentifier(source.code),
+    type: safeDiagnosticIdentifier(source.type),
+    param: safeDiagnosticIdentifier(source.param) || messageField,
+    category,
+    bodyBytes: Math.min(errorBody.length, MAX_ERROR_BODY_BYTES)
+  }
+}
+
 function safeUpstreamError(statusCode, errorBody) {
   if (statusCode === 503 && exhaustedPoolRequiresRelogin(errorBody)) {
     return providerReloginRequiredError()
@@ -384,12 +438,14 @@ function safeUpstreamError(statusCode, errorBody) {
       true
     )
   }
-  return safeError(
+  const error = safeError(
     'worker_provider_upstream_failed',
     'ChatGPT subscription upstream rejected the request',
     statusCode >= 500 ? 502 : 409,
     statusCode >= 500
   )
+  error.safeDiagnostic = safeUpstreamFailureDetails(statusCode, errorBody)
+  return error
 }
 
 function safeWindow(value) {

@@ -662,6 +662,13 @@ export function createProviderWorkerServer(options = {}) {
         throw error
       }
     } catch (error) {
+      if (error?.safeDiagnostic) {
+        console.warn(JSON.stringify({
+          event: 'provider_worker_upstream_rejected',
+          requestId,
+          diagnostic: error.safeDiagnostic
+        }))
+      }
       if (!res.headersSent && !res.writableEnded && !res.destroyed) {
         sendSafeError(res, error, requestId)
       }

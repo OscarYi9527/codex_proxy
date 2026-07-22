@@ -10,6 +10,21 @@ function contentBlockToText(content) {
   return ''
 }
 
+function serializeArguments(value) {
+  if (typeof value === 'string') return value
+  if (value === undefined) return '{}'
+  return JSON.stringify(value)
+}
+
+function appendToolCall(messages, toolCall) {
+  const previous = messages.at(-1)
+  if (previous?.role === 'assistant' && Array.isArray(previous.tool_calls) && previous.content == null) {
+    previous.tool_calls.push(toolCall)
+    return
+  }
+  messages.push({ role: 'assistant', content: null, tool_calls: [toolCall] })
+}
+
 function responsesInputToMessages(input) {
   const messages = []
   const items = typeof input === 'string'
@@ -19,7 +34,9 @@ function responsesInputToMessages(input) {
   for (const item of items) {
     if (!item || typeof item !== 'object') continue
     if (item.type === 'message' || (!item.type && item.role)) {
-      const role = item.role === 'assistant' ? 'assistant' : 'user'
+      const role = ['assistant', 'developer', 'system'].includes(item.role)
+        ? item.role
+        : 'user'
       let content
       if (typeof item.content === 'string') {
         content = item.content
@@ -32,26 +49,61 @@ function responsesInputToMessages(input) {
       continue
     }
     if (item.type === 'function_call') {
-      messages.push({
-        role: 'assistant',
-        content: null,
-        tool_calls: [{
-          id: item.call_id || item.id || id('call'),
-          type: 'function',
-          function: { name: item.name, arguments: JSON.stringify(item.arguments || {}) }
-        }]
+      appendToolCall(messages, {
+        id: item.call_id || item.id || id('call'),
+        type: 'function',
+        function: { name: item.name, arguments: serializeArguments(item.arguments) }
       })
       continue
     }
-    if (item.type === 'function_call_output') {
+    if (item.type === 'custom_tool_call') {
+      appendToolCall(messages, {
+        id: item.call_id || item.id || id('call'),
+        type: 'function',
+        function: {
+          name: item.name,
+          arguments: JSON.stringify({ input: typeof item.input === 'string' ? item.input : asText(item.input) })
+        }
+      })
+      continue
+    }
+    if (item.type === 'function_call_output' || item.type === 'custom_tool_call_output') {
       messages.push({
         role: 'tool',
-        tool_call_id: item.call_id || item.id || '',
+        tool_call_id: item.call_id || item.tool_call_id || item.id || '',
         content: typeof item.output === 'string' ? item.output : JSON.stringify(item.output || '')
       })
     }
   }
   return messages
+}
+
+export function customToolNames(body = {}) {
+  const names = new Set((body.tools || [])
+    .filter(tool => tool?.type === 'custom' && tool.name)
+    .map(tool => tool.name))
+  if (Array.isArray(body.input)) {
+    for (const item of body.input) {
+      if (item?.type === 'custom_tool_call' && item.name) names.add(item.name)
+    }
+  }
+  return names
+}
+
+export function customToolInput(value) {
+  if (value && typeof value === 'object') {
+    return asText(Object.hasOwn(value, 'input') ? value.input : value)
+  }
+  if (typeof value !== 'string') return asText(value)
+  try {
+    const parsed = JSON.parse(value)
+    if (parsed && typeof parsed === 'object' && Object.hasOwn(parsed, 'input')) {
+      return asText(parsed.input)
+    }
+    return typeof parsed === 'string' ? parsed : asText(parsed)
+  } catch {
+    return value
+  }
 }
 
 export function responsesToChatCompletions(body, upstreamModel) {
@@ -69,6 +121,7 @@ export function responsesToChatCompletions(body, upstreamModel) {
     max_tokens: body.max_output_tokens || 4096,
     stream: body.stream === true
   }
+  if (request.stream) request.stream_options = { include_usage: true }
   if (body.temperature != null) request.temperature = body.temperature
   if (body.top_p != null) request.top_p = body.top_p
 
@@ -112,15 +165,20 @@ export function responsesToChatCompletions(body, upstreamModel) {
 export function chatCompletionToResponse(data, originalBody) {
   const choice = data.choices?.[0] || {}
   const message = choice.message || {}
+  const incompleteReason = choice.finish_reason === 'length'
+    ? 'max_output_tokens'
+    : (choice.finish_reason === 'content_filter' ? 'content_filter' : null)
+  const customTools = customToolNames(originalBody)
   const response = {
     id: data.id || id('resp'),
     object: 'response',
     created_at: data.created || Math.floor(Date.now() / 1000),
-    status: 'completed',
+    status: incompleteReason ? 'incomplete' : 'completed',
     model: originalBody.model || data.model,
     output: [],
     usage: null
   }
+  if (incompleteReason) response.incomplete_details = { reason: incompleteReason }
 
   if (message.content) {
     response.output.push({
@@ -134,22 +192,36 @@ export function chatCompletionToResponse(data, originalBody) {
 
   if (message.tool_calls) {
     for (const tc of message.tool_calls) {
-      response.output.push({
-        id: tc.id || id('tool'),
-        type: 'function_call',
-        status: 'completed',
-        call_id: tc.id,
-        name: tc.function?.name || '',
-        arguments: tc.function?.arguments || '{}'
-      })
+      const name = tc.function?.name || ''
+      const isCustom = customTools.has(name)
+      const callId = tc.id || id('call')
+      response.output.push(isCustom
+        ? {
+            id: callId,
+            type: 'custom_tool_call',
+            status: 'completed',
+            call_id: callId,
+            name,
+            input: customToolInput(tc.function?.arguments)
+          }
+        : {
+            id: callId,
+            type: 'function_call',
+            status: 'completed',
+            call_id: callId,
+            name,
+            arguments: serializeArguments(tc.function?.arguments)
+          })
     }
   }
 
   if (data.usage) {
+    const inputTokens = data.usage.prompt_tokens || 0
+    const outputTokens = data.usage.completion_tokens || 0
     response.usage = {
-      input_tokens: data.usage.prompt_tokens || 0,
-      output_tokens: data.usage.completion_tokens || 0,
-      total_tokens: data.usage.total_tokens || 0
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      total_tokens: data.usage.total_tokens ?? (inputTokens + outputTokens)
     }
   }
 

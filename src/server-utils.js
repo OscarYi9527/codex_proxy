@@ -8,6 +8,7 @@ import { safeErrorText } from './logger.js'
 import { scanValueSecrets } from './secret-scan.js'
 
 const MAX_BODY_BYTES = 16 * 1024 * 1024
+export const RESPONSE_USAGE_TAIL_BYTES = 64 * 1024
 
 export function id(prefix = 'resp') {
   return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
@@ -190,24 +191,102 @@ export async function fetchWithRetry(fetchImpl, url, options, maxAttempts = 5) {
   throw lastError
 }
 
+class FixedTailBuffer {
+  constructor(limit) {
+    this.buffer = Buffer.allocUnsafe(limit)
+    this.limit = limit
+    this.length = 0
+    this.position = 0
+  }
+
+  append(value) {
+    const source = Buffer.isBuffer(value) ? value : Buffer.from(value)
+    if (source.length >= this.limit) {
+      source.copy(this.buffer, 0, source.length - this.limit)
+      this.length = this.limit
+      this.position = 0
+      return
+    }
+    const firstLength = Math.min(source.length, this.limit - this.position)
+    source.copy(this.buffer, this.position, 0, firstLength)
+    if (firstLength < source.length) {
+      source.copy(this.buffer, 0, firstLength)
+    }
+    this.position = (this.position + source.length) % this.limit
+    this.length = Math.min(this.limit, this.length + source.length)
+  }
+
+  toString() {
+    if (this.length === 0) return ''
+    if (this.length < this.limit) return this.buffer.subarray(0, this.length).toString('utf8')
+    if (this.position === 0) return this.buffer.toString('utf8')
+    return Buffer.concat([
+      this.buffer.subarray(this.position),
+      this.buffer.subarray(0, this.position)
+    ], this.limit).toString('utf8')
+  }
+}
+
+function usageFromPayload(payload) {
+  if (!payload || typeof payload !== 'object') return null
+  if (payload.usage && typeof payload.usage === 'object') return payload.usage
+  if (payload.response?.usage && typeof payload.response.usage === 'object') {
+    return payload.response.usage
+  }
+  return null
+}
+
+function extractLastSseUsage(text) {
+  let usage = null
+  let dataLines = []
+  const consumeEvent = () => {
+    if (!dataLines.length) return
+    const data = dataLines.join('\n').trim()
+    dataLines = []
+    if (!data || data === '[DONE]') return
+    try {
+      usage = usageFromPayload(JSON.parse(data)) || usage
+    } catch {}
+  }
+  for (const line of text.split(/\r\n|\n|\r/)) {
+    if (line === '') {
+      consumeEvent()
+      continue
+    }
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).replace(/^ /, ''))
+    }
+  }
+  consumeEvent()
+  return usage
+}
+
 // Scans back from the last `"usage":` key and walks brace depth to find its
-// true matching close brace, so usage objects containing nested fields (e.g.
-// output_tokens_details: {...}) parse correctly. A naive non-nesting regex
-// would stop at the first inner `}` and silently fail to parse.
+// true matching close brace. Quoted braces and escaped quotes are ignored, so
+// nested detail objects and string values cannot terminate the object early.
 function extractLastUsageObject(text) {
-  const key = '"usage":'
-  let searchFrom = text.length
-  while (true) {
-    const idx = text.lastIndexOf(key, searchFrom - 1)
-    if (idx === -1) return null
-    let i = idx + key.length
+  const matches = [...text.matchAll(/"usage"\s*:/g)]
+  for (let matchIndex = matches.length - 1; matchIndex >= 0; matchIndex--) {
+    let i = matches[matchIndex].index + matches[matchIndex][0].length
     while (i < text.length && /\s/.test(text[i])) i++
     if (text[i] === '{') {
       let depth = 0
       const start = i
+      let inString = false
+      let escaped = false
       for (; i < text.length; i++) {
-        if (text[i] === '{') depth++
-        else if (text[i] === '}') {
+        const char = text[i]
+        if (inString) {
+          if (escaped) escaped = false
+          else if (char === '\\') escaped = true
+          else if (char === '"') inString = false
+          continue
+        }
+        if (char === '"') {
+          inString = true
+        } else if (char === '{') {
+          depth++
+        } else if (char === '}') {
           depth--
           if (depth === 0) {
             try { return JSON.parse(text.slice(start, i + 1)) } catch {}
@@ -216,8 +295,65 @@ function extractLastUsageObject(text) {
         }
       }
     }
-    searchFrom = idx
   }
+  return null
+}
+
+function extractUsageFromTail(text) {
+  try {
+    const usage = usageFromPayload(JSON.parse(text.trim()))
+    if (usage) return usage
+  } catch {}
+  return extractLastSseUsage(text) || extractLastUsageObject(text)
+}
+
+function responseWritable(res, state) {
+  return state.open &&
+    res.destroyed !== true &&
+    res.writableEnded !== true &&
+    res.closed !== true
+}
+
+function trackResponse(res) {
+  const state = { open: true }
+  const markClosed = () => { state.open = false }
+  for (const event of ['close', 'error', 'finish']) res.on?.(event, markClosed)
+  if (res.destroyed === true || res.writableEnded === true || res.closed === true) markClosed()
+  return {
+    state,
+    cleanup() {
+      for (const event of ['close', 'error', 'finish']) res.removeListener?.(event, markClosed)
+    }
+  }
+}
+
+function waitForDrainOrClose(res, state) {
+  if (!responseWritable(res, state) || typeof res.once !== 'function') {
+    state.open = false
+    return Promise.resolve(false)
+  }
+  return new Promise(resolve => {
+    let settled = false
+    const done = writable => {
+      if (settled) return
+      settled = true
+      res.removeListener?.('drain', onDrain)
+      res.removeListener?.('close', onClosed)
+      res.removeListener?.('error', onClosed)
+      res.removeListener?.('finish', onClosed)
+      resolve(writable)
+    }
+    const onDrain = () => done(responseWritable(res, state))
+    const onClosed = () => {
+      state.open = false
+      done(false)
+    }
+    res.once('drain', onDrain)
+    res.once('close', onClosed)
+    res.once('error', onClosed)
+    res.once('finish', onClosed)
+    if (!responseWritable(res, state)) onClosed()
+  })
 }
 
 export async function pipeResponsesUpstream(upstream, res, { onBody = null } = {}) {
@@ -227,23 +363,26 @@ export async function pipeResponsesUpstream(upstream, res, { onBody = null } = {
     if (value) headers[name] = value
   }
   Object.assign(headers, proxyMetaHeaders(res))
-  res.writeHead(upstream.status, headers)
-  let bodyText = ''
-  if (upstream.body) {
-    for await (const chunk of upstream.body) {
-      const buf = Buffer.from(chunk)
-      bodyText += buf.toString('utf8')
-      res.write(buf)
+  const downstream = trackResponse(res)
+  const usageTail = onBody ? new FixedTailBuffer(RESPONSE_USAGE_TAIL_BYTES) : null
+  try {
+    if (responseWritable(res, downstream.state)) res.writeHead(upstream.status, headers)
+    if (upstream.body) {
+      for await (const chunk of upstream.body) {
+        const buf = Buffer.from(chunk)
+        usageTail?.append(buf)
+        if (!responseWritable(res, downstream.state)) continue
+        if (res.write(buf) === false) {
+          await waitForDrainOrClose(res, downstream.state)
+        }
+      }
     }
-  }
-  res.end()
-  if (onBody && bodyText) {
-    let usage = null
-    try {
-      const data = JSON.parse(bodyText)
-      usage = data.usage || data.response?.usage || null
-    } catch {}
-    if (!usage) usage = extractLastUsageObject(bodyText)
-    if (usage) onBody(usage)
+    if (responseWritable(res, downstream.state)) res.end()
+    if (onBody && usageTail.length) {
+      const usage = extractUsageFromTail(usageTail.toString())
+      if (usage) await onBody(usage)
+    }
+  } finally {
+    downstream.cleanup()
   }
 }

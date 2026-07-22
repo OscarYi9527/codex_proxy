@@ -495,6 +495,91 @@ describe('ChatGPT 账号状态检查', () => {
     }, account).state, 'permission_denied')
   })
 
+  it('账号正在路由时跳过额外探测，不误报暂时不可达或覆盖既有健康状态', async () => {
+    const originalAccounts = proxyConfig.chatgptAccounts
+    const account = {
+      id: 'status-check-busy',
+      account_id: 'upstream-status-check-busy',
+      access_token: 'access',
+      refresh_token: 'refresh',
+      expires_at: Date.now() + 60_000,
+      credential_mode: 'refreshable',
+      credential_compatibility: 'codex_subscription',
+      status: 'active',
+      routing_enabled: true,
+      health_check: {
+        state: 'healthy',
+        label: '基础检查正常',
+        checked_at: '2026-07-21T00:00:00.000Z'
+      }
+    }
+    proxyConfig.chatgptAccounts = [account]
+    resetAccountRequestCounts()
+    assert.strictEqual(reserveAccountRequest(account.id, 'running-model-request'), true)
+    let fetchCalls = 0
+    try {
+      const check = await checkChatgptAccountStatus(account, async () => {
+        fetchCalls++
+        throw new Error('health probe must not compete with routing')
+      })
+      assert.strictEqual(check.state, 'busy')
+      assert.strictEqual(check.deferred, true)
+      assert.strictEqual(check.active_requests, 1)
+      assert.match(check.reason, /正在运行/)
+      assert.strictEqual(fetchCalls, 0)
+      assert.strictEqual(proxyConfig.chatgptAccounts[0].health_check.state, 'healthy')
+    } finally {
+      releaseAccountRequest(account.id, 'running-model-request')
+      resetAccountRequestCounts()
+      proxyConfig.chatgptAccounts = originalAccounts
+    }
+  })
+
+  it('短请求完整发生在检查期间时也不会把用量端点故障误判为账号不可达', async () => {
+    const originalAccounts = proxyConfig.chatgptAccounts
+    const originalUrl = proxyConfig.chatgptResponsesUrl
+    const account = {
+      id: 'status-check-race',
+      account_id: 'upstream-status-check-race',
+      access_token: 'access',
+      refresh_token: 'refresh',
+      expires_at: Date.now() + 60_000,
+      credential_mode: 'refreshable',
+      credential_compatibility: 'codex_subscription',
+      status: 'active',
+      routing_enabled: true,
+      health_check: {
+        state: 'healthy',
+        label: '基础检查正常',
+        checked_at: '2026-07-21T00:00:00.000Z'
+      }
+    }
+    proxyConfig.chatgptAccounts = [account]
+    proxyConfig.chatgptResponsesUrl = 'https://chatgpt.com/backend-api/codex/responses'
+    resetAccountRequestCounts()
+    const mockFetch = async url => {
+      if (String(url).endsWith('/backend-api/wham/usage')) {
+        assert.strictEqual(reserveAccountRequest(account.id, 'short-model-request'), true)
+        releaseAccountRequest(account.id, 'short-model-request')
+        return new Response('temporary usage failure', { status: 503 })
+      }
+      return new Response(JSON.stringify({
+        reset_credits: { available_count: 0, credits: [] }
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    try {
+      const check = await checkChatgptAccountStatus(account, mockFetch)
+      assert.strictEqual(check.state, 'busy')
+      assert.strictEqual(check.active_requests, 0)
+      assert.match(check.reason, /并发竞态/)
+      assert.strictEqual(proxyConfig.chatgptAccounts[0].health_check.state, 'healthy')
+    } finally {
+      resetAccountRequestCounts()
+      proxyConfig.chatgptAccounts = originalAccounts
+      proxyConfig.chatgptResponsesUrl = originalUrl
+    }
+  })
+
   it('全账号检查同步用量和次数，并把零额度归类为额度不足', async () => {
     const originalAccounts = proxyConfig.chatgptAccounts
     const originalUrl = proxyConfig.chatgptResponsesUrl

@@ -33,19 +33,20 @@ const RESET_CREDITS_REFRESH_MS = 6 * 60 * 60 * 1000
 const RESET_CREDITS_FRESH_MS = 12 * 60 * 60 * 1000
 // Multiple VS Code windows can legitimately overlap a foreground turn and
 // helper requests. Keep a modest cap and queue anything above it.
-const MAX_ACCOUNT_CONCURRENT_REQUESTS = 3
+export const DEFAULT_ACCOUNT_CONCURRENCY_LIMIT = 3
+export const MAX_CONFIGURABLE_ACCOUNT_CONCURRENCY = 20
 const LOW_QUOTA_THRESHOLD_PERCENT = 10
 const SESSION_STICKY_TTL_MS = 30 * 60 * 1000
 const MAX_STICKY_SESSIONS = 1000
 const REQUEST_LEASE_TTL_MS = 6 * 60 * 1000
 const ADAPTIVE_MIN_CONCURRENCY = 1
-const ADAPTIVE_MAX_CONCURRENCY = MAX_ACCOUNT_CONCURRENT_REQUESTS
 const ADAPTIVE_SUCCESS_STEP = 8
 const DISPOSABLE_RESET_GRACE_MS = 7 * 24 * 60 * 60 * 1000
 const TRANSIENT_HEALTH_QUARANTINE_FAILURES = 3
 const TRANSIENT_HEALTH_QUARANTINE_BASE_MS = 5 * 60 * 1000
 const stickyAccounts = new Map()
 const accountRequestLeases = new Map()
+const accountRequestActivityVersions = new Map()
 const adaptiveConcurrency = new Map()
 const usageRefreshFailures = new Map()
 const tokenRefreshInFlight = new Map()
@@ -486,6 +487,12 @@ const ACCOUNT_CHECK_STATE_DETAILS = {
     retryable: false,
     reason: '登录凭据和用量接口均可访问；本次检查不会发送模型请求或消耗额度。'
   },
+  busy: {
+    label: '正在处理请求',
+    severity: 'healthy',
+    retryable: true,
+    reason: '账号当前正在处理模型请求；为避免状态检查与真实请求争抢连接，本轮不发起额外探测。'
+  },
   quota_low: {
     label: '额度接近保护线',
     severity: 'warning',
@@ -724,16 +731,51 @@ export function advanceAccountHealthState(previous, result, {
   }
 }
 
+export function accountConcurrencyPolicy(accountOrId) {
+  const account = typeof accountOrId === 'object' && accountOrId
+    ? accountOrId
+    : (proxyConfig.chatgptAccounts || []).find(item => item.id === accountOrId)
+  const configured = Number(account?.concurrency_limit)
+  return {
+    configured_limit: Number.isInteger(configured)
+      ? Math.max(1, Math.min(MAX_CONFIGURABLE_ACCOUNT_CONCURRENCY, configured))
+      : DEFAULT_ACCOUNT_CONCURRENCY_LIMIT,
+    adaptive_enabled: account?.adaptive_concurrency_enabled !== false
+  }
+}
+
 function adaptiveState(accountId) {
+  const policy = accountConcurrencyPolicy(accountId)
   if (!adaptiveConcurrency.has(accountId)) {
     adaptiveConcurrency.set(accountId, {
-      limit: ADAPTIVE_MAX_CONCURRENCY,
+      limit: policy.configured_limit,
+      configuredLimit: policy.configured_limit,
+      adaptiveEnabled: policy.adaptive_enabled,
       successStreak: 0,
       lastReducedAt: null,
-      lastReason: null
+      lastReason: policy.adaptive_enabled ? null : 'fixed'
     })
   }
-  return adaptiveConcurrency.get(accountId)
+  const state = adaptiveConcurrency.get(accountId)
+  if (
+    state.configuredLimit !== policy.configured_limit ||
+    state.adaptiveEnabled !== policy.adaptive_enabled
+  ) {
+    state.limit = policy.configured_limit
+    state.configuredLimit = policy.configured_limit
+    state.adaptiveEnabled = policy.adaptive_enabled
+    state.successStreak = 0
+    state.lastReason = policy.adaptive_enabled ? 'configuration_changed' : 'fixed'
+  } else if (!policy.adaptive_enabled) {
+    state.limit = policy.configured_limit
+    state.lastReason = 'fixed'
+  } else {
+    state.limit = Math.max(
+      ADAPTIVE_MIN_CONCURRENCY,
+      Math.min(policy.configured_limit, state.limit)
+    )
+  }
+  return state
 }
 
 function reapExpiredLeases(accountId = null, now = Date.now()) {
@@ -743,7 +785,10 @@ function reapExpiredLeases(accountId = null, now = Date.now()) {
   for (const [id, leases] of entries) {
     if (!leases) continue
     for (const [leaseId, lease] of leases) {
-      if (Number(lease.expiresAt) <= now) leases.delete(leaseId)
+      if (Number(lease.expiresAt) <= now) {
+        leases.delete(leaseId)
+        accountRequestActivityVersions.set(id, (accountRequestActivityVersions.get(id) || 0) + 1)
+      }
     }
     if (!leases.size) accountRequestLeases.delete(id)
   }
@@ -752,6 +797,11 @@ function reapExpiredLeases(accountId = null, now = Date.now()) {
 export function accountActiveRequestCount(accountId) {
   reapExpiredLeases(accountId)
   return accountRequestLeases.get(accountId)?.size || 0
+}
+
+export function accountRequestActivityVersion(accountId) {
+  reapExpiredLeases(accountId)
+  return accountRequestActivityVersions.get(accountId) || 0
 }
 
 export function accountConcurrencyLimit(accountId) {
@@ -768,6 +818,7 @@ export function reserveAccountRequest(accountId, leaseId = id('lease')) {
     expiresAt: Date.now() + REQUEST_LEASE_TTL_MS
   })
   accountRequestLeases.set(accountId, leases)
+  accountRequestActivityVersions.set(accountId, (accountRequestActivityVersions.get(accountId) || 0) + 1)
   return true
 }
 
@@ -781,16 +832,24 @@ export function renewAccountRequestLease(accountId, leaseId) {
 export function releaseAccountRequest(accountId, leaseId = null) {
   const leases = accountRequestLeases.get(accountId)
   if (!leases) return
-  if (leaseId) leases.delete(leaseId)
+  let released = false
+  if (leaseId) released = leases.delete(leaseId)
   else {
     const oldest = [...leases.values()].sort((a, b) => a.startedAt - b.startedAt)[0]
-    if (oldest) leases.delete(oldest.leaseId)
+    if (oldest) released = leases.delete(oldest.leaseId)
+  }
+  if (released) {
+    accountRequestActivityVersions.set(
+      accountId,
+      (accountRequestActivityVersions.get(accountId) || 0) + 1
+    )
   }
   if (!leases.size) accountRequestLeases.delete(accountId)
 }
 
 export function resetAccountRequestCounts() {
   accountRequestLeases.clear()
+  accountRequestActivityVersions.clear()
   adaptiveConcurrency.clear()
 }
 
@@ -801,6 +860,7 @@ export function noteAccountAdaptiveOutcome(accountId, {
 } = {}) {
   if (!accountId) return
   const state = adaptiveState(accountId)
+  if (!state.adaptiveEnabled) return
   const shouldReduce = status === 429 || errorType === 'network' || errorType === 'timeout' || latencyMs > 120_000
   if (shouldReduce) {
     state.limit = Math.max(ADAPTIVE_MIN_CONCURRENCY, state.limit - 1)
@@ -811,7 +871,7 @@ export function noteAccountAdaptiveOutcome(accountId, {
   }
   if (status >= 200 && status < 400) {
     state.successStreak++
-    if (state.successStreak >= ADAPTIVE_SUCCESS_STEP && state.limit < ADAPTIVE_MAX_CONCURRENCY) {
+    if (state.successStreak >= ADAPTIVE_SUCCESS_STEP && state.limit < state.configuredLimit) {
       state.limit++
       state.successStreak = 0
       state.lastReason = 'recovered'
@@ -1909,11 +1969,50 @@ export async function checkChatgptAccountStatus(account, fetchImpl = fetch) {
     if (credential.expired) {
       return persistAccountCheck(account.id, accountCheckResult('token_expired', { checkedAt }))
     }
+    if (
+      currentAccount.health_check?.source === 'model_request' &&
+      ['banned', 'auth_invalid', 'token_expired', 'incompatible', 'permission_denied'].includes(
+        currentAccount.health_check.state
+      )
+    ) {
+      return structuredClone(currentAccount.health_check)
+    }
+    const activityBeforeCheck = accountRequestActivityVersion(account.id)
+    const activeBeforeCheck = accountActiveRequestCount(account.id)
+    if (activeBeforeCheck > 0) {
+      return {
+        ...accountCheckResult('busy', {
+          checkedAt,
+          reason: `账号当前有 ${activeBeforeCheck} 个模型请求正在运行；为避免检查干扰路由，本轮已跳过，待请求完成后可重新检查。`
+        }),
+        deferred: true,
+        active_requests: activeBeforeCheck,
+        concurrency_limit: accountConcurrencyLimit(account.id)
+      }
+    }
 
     const latestBeforeRefresh = (proxyConfig.chatgptAccounts || []).find(item => item.id === account.id) || currentAccount
     const snapshot = await refreshAccountQuotaSnapshot(latestBeforeRefresh, fetchImpl)
     if (!snapshot.usage_synced) {
       const result = classifyAccountCheckFailure(snapshot.usage_error, snapshot.account)
+      const activeAfterFailure = accountActiveRequestCount(account.id)
+      const activityChanged = accountRequestActivityVersion(account.id) !== activityBeforeCheck
+      if (
+        (activeAfterFailure > 0 || activityChanged) &&
+        ['temporary_unavailable', 'unknown_error', 'rate_limited'].includes(result.state)
+      ) {
+        return {
+          ...accountCheckResult('busy', {
+            checkedAt,
+            reason: activeAfterFailure > 0
+              ? `状态检查与 ${activeAfterFailure} 个模型请求发生重叠，暂时无法获得独立检查结果；未将账号标记为不可达。`
+              : '检查期间账号完成了模型请求，独立用量探测失败可能是并发竞态；本轮已延后，未将账号标记为不可达。'
+          }),
+          deferred: true,
+          active_requests: activeAfterFailure,
+          concurrency_limit: accountConcurrencyLimit(account.id)
+        }
+      }
       result.checked_at = checkedAt
       result.reset_credits_synced = snapshot.reset_credits_synced
       result.reset_credit_status = snapshot.reset_credit_status
@@ -1926,6 +2025,23 @@ export async function checkChatgptAccountStatus(account, fetchImpl = fetch) {
         ).toISOString()
       }
       return persistAccountCheck(account.id, result)
+    }
+    const activeAfterSuccess = accountActiveRequestCount(account.id)
+    if (
+      activeAfterSuccess > 0 ||
+      accountRequestActivityVersion(account.id) !== activityBeforeCheck
+    ) {
+      return {
+        ...accountCheckResult('busy', {
+          checkedAt,
+          reason: activeAfterSuccess > 0
+            ? `用量同步成功，但账号仍有 ${activeAfterSuccess} 个模型请求运行；为避免覆盖更晚的真实路由状态，本轮健康结论已延后。`
+            : '检查期间发生了模型请求；用量已同步，但本轮不覆盖真实路由健康状态。'
+        }),
+        deferred: true,
+        active_requests: activeAfterSuccess,
+        concurrency_limit: accountConcurrencyLimit(account.id)
+      }
     }
     return persistAccountCheck(
       account.id,
@@ -2107,7 +2223,9 @@ export function getAccountRuntimeDiagnostics() {
       status: account.status || 'active',
       routing_enabled: account.routing_enabled !== false,
       active_requests: accountActiveRequestCount(account.id),
-      concurrency_limit: adaptive.limit,
+      concurrency_limit: accountConcurrencyLimit(account.id),
+      configured_concurrency_limit: adaptive.configuredLimit,
+      adaptive_concurrency_enabled: adaptive.adaptiveEnabled,
       adaptive_reason: adaptive.lastReason,
       token_refresh_in_flight: tokenRefreshInFlight.has(account.id),
       usage_refresh_in_flight: usageRefreshInFlight.has(account.id),

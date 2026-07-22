@@ -1,11 +1,72 @@
 import crypto from 'node:crypto'
-import { Readable } from 'node:stream'
 
 const ACCESS_REFRESH_SKEW_MS = 30_000
 const JSON_LIMIT = 1024 * 1024
+export const EDGE_DISCONNECTED_DRAIN_TIMEOUT_MS = 300_000
 
 function edgeError(code, message, statusCode = 401, retryable = false) {
   return Object.assign(new Error(message), { code, statusCode, retryable })
+}
+
+function responseWritable(response, state) {
+  return state.open &&
+    response.destroyed !== true &&
+    response.writableEnded !== true &&
+    response.closed !== true
+}
+
+function trackResponse(response, onClosed) {
+  const state = { open: true }
+  const markClosed = () => {
+    if (!state.open) return
+    state.open = false
+    onClosed?.()
+  }
+  for (const event of ['close', 'error', 'finish']) response.on?.(event, markClosed)
+  if (
+    response.destroyed === true ||
+    response.writableEnded === true ||
+    response.closed === true
+  ) {
+    markClosed()
+  }
+  return {
+    state,
+    cleanup() {
+      for (const event of ['close', 'error', 'finish']) {
+        response.removeListener?.(event, markClosed)
+      }
+    }
+  }
+}
+
+function waitForDrainOrClose(response, state) {
+  if (!responseWritable(response, state) || typeof response.once !== 'function') {
+    state.open = false
+    return Promise.resolve(false)
+  }
+  return new Promise(resolve => {
+    let settled = false
+    const done = writable => {
+      if (settled) return
+      settled = true
+      response.removeListener?.('drain', onDrain)
+      response.removeListener?.('close', onClosed)
+      response.removeListener?.('error', onClosed)
+      response.removeListener?.('finish', onClosed)
+      resolve(writable)
+    }
+    const onDrain = () => done(responseWritable(response, state))
+    const onClosed = () => {
+      state.open = false
+      done(false)
+    }
+    response.once('drain', onDrain)
+    response.once('close', onClosed)
+    response.once('error', onClosed)
+    response.once('finish', onClosed)
+    if (!responseWritable(response, state)) onClosed()
+  })
 }
 
 async function readJsonResponse(response) {
@@ -39,6 +100,9 @@ export class GatewayClient {
     this.bindingStore = options.bindingStore
     this.fetchImpl = options.fetchImpl || fetch
     this.now = options.now || (() => Date.now())
+    this.disconnectedDrainTimeoutMs = Number.isFinite(options.disconnectedDrainTimeoutMs)
+      ? Math.max(1, options.disconnectedDrainTimeoutMs)
+      : EDGE_DISCONNECTED_DRAIN_TIMEOUT_MS
     this.refreshFlight = null
   }
 
@@ -139,12 +203,25 @@ export class GatewayClient {
   }
 
   async forward(path, localRequest, localResponse, body) {
-    const snapshot = await this.getAuthenticatedSnapshot()
-    const turnId = String(localRequest.headers['x-ai-editor-turn-id'] || '')
-      || `turn_${crypto.randomUUID().replaceAll('-', '')}`
+    const drainController = new AbortController()
+    let drainTimer = null
+    const downstream = trackResponse(localResponse, () => {
+      drainTimer ||= setTimeout(() => {
+        drainController.abort(new Error('Disconnected Edge response drain timed out'))
+      }, this.disconnectedDrainTimeoutMs)
+      drainTimer.unref?.()
+    })
     let requestBody
     try {
+      const snapshot = await this.getAuthenticatedSnapshot()
+      // A request that disappeared before dispatch has no upstream work or
+      // usage to reconcile. Once fetch starts, however, the response is still
+      // drained below so the Gateway can finish settlement.
+      if (!responseWritable(localResponse, downstream.state)) return
+      const turnId = String(localRequest.headers['x-ai-editor-turn-id'] || '')
+        || `turn_${crypto.randomUUID().replaceAll('-', '')}`
       requestBody = body === undefined ? undefined : Buffer.from(JSON.stringify(body), 'utf8')
+      if (!responseWritable(localResponse, downstream.state)) return
       const response = await this.fetchImpl(new URL(path, this.gatewayOrigin), {
         method: localRequest.method,
         headers: {
@@ -155,7 +232,8 @@ export class GatewayClient {
           'x-ai-editor-turn-id': turnId,
           'x-ai-editor-client': 'edge/2.x'
         },
-        body: requestBody
+        body: requestBody,
+        signal: drainController.signal
       })
       const headers = {
         'cache-control': 'no-store',
@@ -165,19 +243,26 @@ export class GatewayClient {
         const value = response.headers.get(name)
         if (value) headers[name] = value
       }
-      localResponse.writeHead(response.status, headers)
+      if (responseWritable(localResponse, downstream.state)) {
+        localResponse.writeHead(response.status, headers)
+      }
       if (!response.body) {
-        localResponse.end()
+        if (responseWritable(localResponse, downstream.state)) localResponse.end()
         return
       }
-      await new Promise((resolve, reject) => {
-        const stream = Readable.fromWeb(response.body)
-        stream.on('error', reject)
-        localResponse.on('error', reject)
-        localResponse.on('finish', resolve)
-        stream.pipe(localResponse)
-      })
+      for await (const chunk of response.body) {
+        if (!responseWritable(localResponse, downstream.state)) continue
+        if (localResponse.write(Buffer.from(chunk)) === false) {
+          await waitForDrainOrClose(localResponse, downstream.state)
+        }
+      }
+      if (responseWritable(localResponse, downstream.state)) localResponse.end()
+    } catch (error) {
+      if (drainController.signal.aborted && !downstream.state.open) return
+      throw error
     } finally {
+      clearTimeout(drainTimer)
+      downstream.cleanup()
       requestBody?.fill(0)
     }
   }

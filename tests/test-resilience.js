@@ -8,7 +8,7 @@ import path from 'node:path'
 import { resolveCodexModel, isChatGptSubModel, isOpenAIApiModel, isRelayModel, parseRelayModel, buildModelsResponse, getThreadId } from '../src/models.js'
 import { recordUsage, recordAccountOutcome, recordOperationalEvent, getStats, resetStats, saveStats, statsDayKey } from '../src/stats.js'
 import { ACCOUNT_ROUTING_STRATEGIES, accountActiveRequestCount, accountConcurrencyLimit, accountCredentialLifecycle, accountPolicyState, accountRemainingPercent, accountUsageIsFresh, calculateUsageForecast, consumeAccountResetCredit, cooldownMsFromResponseText, ensureFreshToken, extractResetCredits, extractUsageFromBody, extractUsageFromHeaders, mergeAccountUsageWindows, normalizeAccountRoutingStrategy, noteAccountAdaptiveOutcome, noteAccountSuccess, pickActiveAccount, refreshAccountResetCredits, refreshAccountUsage, releaseAccountRequest, renewAccountRequestLease, reserveAccountRequest, resetAccountRequestCounts, resetAccountStickiness } from '../src/chatgpt-accounts.js'
-import { proxyConfig, atomicWriteJson, configForSettingsSnapshot, mergeAccountBackup, mergeSettingsSnapshot, orderChatgptAccounts, renameChatgptAccountInList } from '../src/config.js'
+import { proxyConfig, atomicWriteJson, configForSettingsSnapshot, mergeAccountBackup, mergeSettingsSnapshot, orderChatgptAccounts, renameChatgptAccountInList, setChatgptAccountRouting } from '../src/config.js'
 import { assertCircuitAvailable, getCircuitStates, recordCircuitResult, resetCircuits } from '../src/circuit-breaker.js'
 import { fetchWithRetry, proxyMetaHeaders, retryAfterMs } from '../src/server-utils.js'
 import { redactSecrets } from '../src/logger.js'
@@ -265,6 +265,62 @@ describe('稳定重试策略', () => {
     }
   })
 
+  it('客户端取消不会降低账号并发或继续轮换账号', async () => {
+    const original = proxyConfig.chatgptAccounts
+    const account = {
+      id: 'cancel-no-reduce',
+      account_id: 'cancel-upstream',
+      access_token: 'access',
+      status: 'active',
+      routing_enabled: true,
+      concurrency_limit: 6,
+      adaptive_concurrency_enabled: true
+    }
+    proxyConfig.chatgptAccounts = [account]
+    resetAccountRequestCounts()
+    const controller = new AbortController()
+    let acquireCalls = 0
+    let fetchCalls = 0
+    const released = []
+    try {
+      await assert.rejects(
+        sendWithAccountRotation(
+          Object.assign(new EventEmitter(), {
+            headers: {},
+            requestId: 'client-cancel-no-reduce',
+            accountLeaseId: 'lease-client-cancel',
+            clientAbortSignal: controller.signal,
+            aborted: false
+          }),
+          async () => {},
+          '{}',
+          { model: 'gpt-test', tryResponsesLite: false },
+          {
+            acquireAccount: async () => {
+              acquireCalls++
+              return acquireCalls === 1 ? account : null
+            },
+            ensureToken: async () => {},
+            fetchRetry: async () => {
+              fetchCalls++
+              controller.abort(new Error('Client disconnected'))
+              throw controller.signal.reason
+            },
+            releaseAccount: id => released.push(id)
+          }
+        ),
+        /Client disconnected/
+      )
+      assert.strictEqual(fetchCalls, 1)
+      assert.strictEqual(acquireCalls, 1)
+      assert.deepStrictEqual(released, [account.id])
+      assert.strictEqual(accountConcurrencyLimit(account.id), 6)
+    } finally {
+      resetAccountRequestCounts()
+      proxyConfig.chatgptAccounts = original
+    }
+  })
+
   it('两次账号失败后返回包含账号分类和最后错误的可诊断 503', async () => {
     const original = proxyConfig.chatgptAccounts
     proxyConfig.chatgptAccounts = [
@@ -446,6 +502,80 @@ describe('自适应并发、租约和刷新单飞', () => {
     }
     assert.strictEqual(accountConcurrencyLimit('adaptive'), 3)
     resetAccountRequestCounts()
+  })
+
+  it('单账号并发可配置为 1–20，并可切换固定或自适应模式', () => {
+    const original = proxyConfig.chatgptAccounts
+    const account = {
+      id: 'configured-concurrency',
+      status: 'active',
+      routing_enabled: true,
+      concurrency_limit: 6,
+      adaptive_concurrency_enabled: true
+    }
+    proxyConfig.chatgptAccounts = [account]
+    resetAccountRequestCounts()
+    try {
+      assert.strictEqual(accountConcurrencyLimit(account.id), 6)
+      for (let index = 0; index < 6; index++) {
+        assert.strictEqual(reserveAccountRequest(account.id, `adaptive-${index}`), true)
+      }
+      assert.strictEqual(reserveAccountRequest(account.id, 'adaptive-overflow'), false)
+      for (let index = 0; index < 6; index++) {
+        releaseAccountRequest(account.id, `adaptive-${index}`)
+      }
+
+      noteAccountAdaptiveOutcome(account.id, { status: 429 })
+      assert.strictEqual(accountConcurrencyLimit(account.id), 5)
+
+      account.concurrency_limit = 8
+      account.adaptive_concurrency_enabled = false
+      assert.strictEqual(accountConcurrencyLimit(account.id), 8)
+      noteAccountAdaptiveOutcome(account.id, { status: 429 })
+      assert.strictEqual(accountConcurrencyLimit(account.id), 8)
+
+      account.concurrency_limit = 99
+      assert.strictEqual(accountConcurrencyLimit(account.id), 20)
+      account.concurrency_limit = 0
+      assert.strictEqual(accountConcurrencyLimit(account.id), 1)
+    } finally {
+      resetAccountRequestCounts()
+      proxyConfig.chatgptAccounts = original
+    }
+  })
+
+  it('账号并发配置严格拒绝越界、非整数和非布尔参数', () => {
+    const original = proxyConfig.chatgptAccounts
+    proxyConfig.chatgptAccounts = [{
+      id: 'strict-concurrency-config',
+      status: 'active',
+      routing_enabled: true
+    }]
+    try {
+      for (const invalid of [0, 21, 1.5, '', '6', null]) {
+        assert.throws(
+          () => setChatgptAccountRouting('strict-concurrency-config', {
+            concurrencyLimit: invalid
+          }),
+          /integer between 1 and 20/
+        )
+      }
+      assert.throws(
+        () => setChatgptAccountRouting('strict-concurrency-config', {
+          adaptiveConcurrencyEnabled: 'false'
+        }),
+        /must be boolean/
+      )
+      const saved = setChatgptAccountRouting('strict-concurrency-config', {
+        concurrencyLimit: 7,
+        adaptiveConcurrencyEnabled: false
+      })
+      const account = saved.chatgptAccounts.find(item => item.id === 'strict-concurrency-config')
+      assert.strictEqual(account.concurrency_limit, 7)
+      assert.strictEqual(account.adaptive_concurrency_enabled, false)
+    } finally {
+      proxyConfig.chatgptAccounts = original
+    }
   })
 
   it('租约支持续期和按请求精确释放', () => {

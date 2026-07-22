@@ -1,9 +1,10 @@
 $ErrorActionPreference = 'Stop'
 
-# Single entry point shared by codex-safe.ps1, codex-proxy-watchdog.ps1's
-# recovery path, and the VS Code launcher (codex-vscode-launcher.exe). Keeps
-# "is the proxy up, in sync, and being watched" logic in one place instead of
-# duplicated (or missing) across each caller.
+# Single runtime recovery entry point shared by codex-safe.ps1,
+# codex-proxy-watchdog.ps1, and the VS Code launcher. Deployment is deliberately
+# excluded: a health-check failure must never publish an arbitrary source
+# branch or restart a healthy installed version. Use update-codex-proxy.ps1
+# explicitly when deployment is intended.
 
 $proxyDir = $PSScriptRoot
 $healthUrl = 'http://127.0.0.1:47892/live'
@@ -44,50 +45,19 @@ function Test-ProxyHealthy {
     }
 }
 
-# Figure out whether this run has a usable source workspace distinct from
-# the install directory, so any code changes can be synced before we rely
-# on the installed copy.
-$sourceDir = $null
-if (Test-Path -LiteralPath (Join-Path $proxyDir '.git')) {
-    $sourceDir = $proxyDir
-} else {
-    $releaseManifest = Join-Path $installDir '.release-manifest.json'
-    if (Test-Path -LiteralPath $releaseManifest) {
-        try {
-            $manifest = Get-Content -LiteralPath $releaseManifest -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ($manifest.source_root -and (Test-Path -LiteralPath $manifest.source_root)) {
-                $sourceDir = [IO.Path]::GetFullPath($manifest.source_root)
-            }
-        } catch {}
-    }
-}
-
-if ($sourceDir -and (Test-Path -LiteralPath $installDir) -and
-    ([IO.Path]::GetFullPath($sourceDir).TrimEnd('\') -ine [IO.Path]::GetFullPath($installDir).TrimEnd('\'))) {
-    $updateScript = Join-Path $sourceDir 'update-codex-proxy.ps1'
-    if (Test-Path -LiteralPath $updateScript) {
-        Write-Host "[ensure-codex-proxy] checking sync: source=$sourceDir install=$installDir"
-        try {
-            & $updateScript -SourceDir $sourceDir -InstallDir $installDir
-        } catch {
-            Write-Warning "[ensure-codex-proxy] sync/deploy failed, continuing with installed copy: $($_.Exception.Message)"
-        }
-    }
-}
-
 if (-not (Test-ProxyHealthy) -and $env:CODEX_SAFE_NO_START -ne '1') {
     $startScript = if (Test-Path -LiteralPath (Join-Path $installDir 'start-codex-proxy.ps1')) {
         Join-Path $installDir 'start-codex-proxy.ps1'
     } else {
         Join-Path $proxyDir 'start-codex-proxy.ps1'
     }
-    if (Test-Path -LiteralPath $startScript) {
-        Write-Host "[ensure-codex-proxy] proxy not healthy; starting via $startScript"
-        try {
-            & $startScript
-        } catch {
-            Write-Warning "[ensure-codex-proxy] failed to start proxy: $($_.Exception.Message)"
-        }
+    if (-not (Test-Path -LiteralPath $startScript)) {
+        throw "[ensure-codex-proxy] start script not found: $startScript"
+    }
+    Write-Host "[ensure-codex-proxy] proxy not healthy; starting installed runtime via $startScript"
+    & $startScript
+    if (-not (Test-ProxyHealthy)) {
+        throw '[ensure-codex-proxy] proxy start returned without a healthy /live endpoint'
     }
 }
 

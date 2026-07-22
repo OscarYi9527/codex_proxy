@@ -21,8 +21,8 @@ import { handleOpenAIApi, handleOpenAIApiChatCompletions } from './routes/openai
 import { handleDeepSeek, handleDeepSeekChatCompletions } from './routes/deepseek.js'
 import { handleRelay, handleRelayChatCompletions } from './routes/relay.js'
 import { handlePing, handlePingAll } from './routes/ping.js'
-import { saveStats } from './stats.js'
-import { initializeProviderHealth, saveProviderHealth } from './provider-health.js'
+import { flushStats, saveStats } from './stats.js'
+import { flushProviderHealth, initializeProviderHealth, saveProviderHealth } from './provider-health.js'
 import { listHttpErrorGuides } from './error-guide.js'
 import { executeRoutingPlan, VIRTUAL_MODELS } from './smart-routing.js'
 import { getAdminHtml, getAdminAppJs, isLocalAdminRequest, handleAdminConfigGet, handleAdminConfigPut, handleStatsGet, handleStatsDelete, handleRelayAdd, handleRelayDelete, handleChatgptAccountAdd, handleChatgptAccountsImport, handleChatgptAccountImportCurrent, handleChatgptAccountDelete, handleChatgptAccountsReorder, handleChatgptAccountRename, handleChatgptAccountRouting, handleChatgptLoginStart, handleChatgptLoginStatus, handleChatgptLoginPreflight, handleChatgptLoginCancel, handleChatgptAccountRefreshUsage, handleChatgptAccountsRefreshAll, handleChatgptAccountsCheckAll, handleChatgptAccountCheckTasksList, handleChatgptAccountCheckTaskGet, handleChatgptAccountCheckTaskCancel, handleChatgptAccountCheckTaskResume, handleChatgptAccountHealthEventsGet, handleChatgptAccountResetCreditsGet, handleChatgptAccountsRefreshResetCreditsAll, handleChatgptAccountResetQuota, handleChatgptAccountSwitch, handleCodexRestart, handleDiagnosticsGet, handleAutomaticDiagnosisGet, handlePriceCatalogGet, handlePriceCatalogPut, handleCostReportGet, handleRuntimeInfoGet, handleDeployUpdate, handleAccountBackupsGet, handleConfigSnapshotsGet, handleAccountBackupRestore, handleConfigRollback, handleProviderHealthReset, handleRuntimeRepair, handleProxyRestart } from './admin.js'
@@ -464,8 +464,9 @@ export function startStandaloneServer() {
     releaseInstanceLock()
     saveStats()
     saveProviderHealth()
-    server.close(error => {
+    server.close(async error => {
       if (error) console.error('[codex-proxy] graceful shutdown error:', safeErrorText(error))
+      await Promise.allSettled([flushStats(), flushProviderHealth()])
       process.exit(error ? 1 : 0)
     })
     setTimeout(() => {

@@ -361,6 +361,10 @@ export async function sendWithAccountRotation(
       }
     } catch (error) {
       releaseAccount(account.id, req.accountLeaseId)
+      if (req.aborted || req.clientAbortSignal?.aborted) {
+        requestLog(req, `chatgpt-account=${account.id} client_cancelled=1`)
+        throw error
+      }
       lastError = error
       const errorType = error.code === 'CIRCUIT_OPEN'
         ? 'circuit_open'

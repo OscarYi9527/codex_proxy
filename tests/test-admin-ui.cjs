@@ -97,6 +97,9 @@ describe('admin error guide and login polling behavior', () => {
     assert.match(accountSource, /检查所有账号/)
     assert.match(accountSource, /检查异常/)
     assert.match(accountSource, /同步全部额度\/次数/)
+    assert.match(appSource, /policy_concurrency/)
+    assert.match(appSource, /adaptiveConcurrencyEnabled/)
+    assert.match(appSource, /正在处理模型请求的账号会安全跳过/)
   })
 
   const guides = [

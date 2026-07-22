@@ -266,6 +266,8 @@ export function handleChatgptAccountRouting(req, res, accountId, body) {
       lowQuotaThreshold: body?.lowQuotaThreshold,
       dailyRequestLimit: body?.dailyRequestLimit,
       dailyTokenLimit: body?.dailyTokenLimit,
+      concurrencyLimit: body?.concurrencyLimit,
+      adaptiveConcurrencyEnabled: body?.adaptiveConcurrencyEnabled,
       reservedModels: body?.reservedModels,
       reservedSessionIds: body?.reservedSessionIds,
       emergencyContinueMinutes: body?.emergencyContinueMinutes,
@@ -417,7 +419,7 @@ export function handleChatgptAccountCheckTaskGet(
     result: task,
     ...(terminal ? { config: publicProxyConfig(proxyConfig) } : {}),
     message: task.status === 'completed'
-      ? `状态检查完成：基础正常 ${task.healthy}，需要关注 ${task.issues}`
+      ? `状态检查完成：基础正常 ${task.healthy}，运行中跳过 ${task.deferred || 0}，需要关注 ${task.issues}`
       : `状态检查进度：${task.processed}/${task.total}`
   })
 }

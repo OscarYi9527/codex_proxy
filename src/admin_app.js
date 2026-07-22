@@ -1028,6 +1028,8 @@ function openAccountPolicy(id){
     <div class="field"><label>安全余量 <span class="hint">稳定池账号独立阈值</span></label><input class="input" id="policy_reserve" type="number" min="0" max="100" value="${Number(account.low_quota_threshold??globalReserve)}"></div>
     <div class="field"><label>每日请求上限 <span class="hint">0 为不限</span></label><input class="input" id="policy_requests" type="number" min="0" value="${Number(account.daily_request_limit||0)}"></div>
     <div class="field full"><label>每日 Token 上限 <span class="hint">输入 + 输出，0 为不限</span></label><input class="input" id="policy_tokens" type="number" min="0" value="${Number(account.daily_token_limit||0)}"></div>
+    <div class="field"><label>单账号最大并发 <span class="hint">1–20</span></label><input class="input" id="policy_concurrency" type="number" min="1" max="20" value="${Number(account.concurrency_limit||3)}"></div>
+    <div class="field"><label style="display:flex;align-items:center;gap:8px"><input id="policy_adaptive_concurrency" type="checkbox" ${account.adaptive_concurrency_enabled===false?'':'checked'}> 根据 429、网络错误和延迟自适应降并发</label><span class="hint">关闭后固定使用上面的并发值；提高并发可能更容易触发官方限流。</span></div>
     <div class="field full"><label>预留模型 <span class="hint">逗号分隔；设置后普通模型不能使用该账号</span></label><input class="input" id="policy_models" value="${esc((account.reserved_models||[]).join(', '))}" placeholder="gpt-important"></div>
     <div class="field full"><label>预留会话 ID <span class="hint">逗号分隔；匹配 session-id / thread-id</span></label><input class="input" id="policy_sessions" value="${esc((account.reserved_session_ids||[]).join(', '))}" placeholder="重要会话 ID"></div>
     <div class="field full"><div class="help-note"><b style="color:var(--red)">紧急继续使用</b><p>临时绕过安全余量和每日上限，最长 24 小时，到期自动恢复。可能耗尽当前额度，仅在重要任务中使用。</p>${emergencyActive?`<p>当前有效至 ${esc(new Date(emergencyUntil).toLocaleString('zh-CN'))}</p>`:''}</div></div>
@@ -1037,7 +1039,7 @@ function openAccountPolicy(id){
   updateAccountPoolTierPolicyForm()
 }
 function accountCheckTone(state){
-  if(state==='healthy')return ''
+  if(['healthy','busy'].includes(state))return ''
   if(['quota_low','quota_exhausted','rate_limited','temporary_unavailable'].includes(state))return 'warn'
   return 'off'
 }
@@ -1057,7 +1059,7 @@ function accountCheckResultsHtml(result){
       <div><span class="status ${accountCheckTone(item.state)}"><i></i><b>${esc(item.label||item.state)}</b></span><div class="cell-sub" style="margin-top:5px">${esc(item.reason||'没有返回具体原因')}</div></div>
     </div>`
   }).join('')
-  return `<div class="help-note"><b>非消耗式状态检查</b><p>只验证凭据、账号用量和重置次数端点，不发送模型请求，因此“基础检查正常”不代表所有模型权限都一定可用。</p><p>${esc(summaryText||'没有账号')}</p></div><div style="display:grid;gap:7px;margin-top:12px;max-height:58vh;overflow:auto">${rows||'<span class="cell-sub">账号池为空</span>'}</div>`
+  return `<div class="help-note"><b>非消耗式状态检查</b><p>只验证凭据、账号用量和重置次数端点，不发送模型请求。正在处理模型请求的账号会安全跳过，避免因并发争抢被误报为“暂时不可达”。</p><p>${esc(summaryText||'没有账号')}</p></div><div style="display:grid;gap:7px;margin-top:12px;max-height:58vh;overflow:auto">${rows||'<span class="cell-sub">账号池为空</span>'}</div>`
 }
 function accountCheckTaskHtml(task){
   const statusLabels={queued:'排队中',running:'检查中',cancelling:'正在取消',cancelled:'已取消',completed:'已完成',failed:'失败',interrupted:'等待恢复'}
@@ -1162,6 +1164,8 @@ async function saveAccountPolicy(id){
     ...(selectedTier==='disposable'?{}:{lowQuotaThreshold:Number(document.getElementById('policy_reserve')?.value)}),
     dailyRequestLimit:Number(document.getElementById('policy_requests')?.value),
     dailyTokenLimit:Number(document.getElementById('policy_tokens')?.value),
+    concurrencyLimit:Number(document.getElementById('policy_concurrency')?.value),
+    adaptiveConcurrencyEnabled:document.getElementById('policy_adaptive_concurrency')?.checked===true,
     reservedModels:split('policy_models'),
     reservedSessionIds:split('policy_sessions'),
     ...(emergencyMinutes===null?{}:{emergencyContinueMinutes:emergencyMinutes,confirmedEmergencyRisk})

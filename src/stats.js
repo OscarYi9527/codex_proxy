@@ -1,14 +1,21 @@
 // Usage statistics accumulator
 import fs from 'fs'
 import path from 'path'
-import { STORAGE_ROOT, atomicWriteJson } from './config.js'
+import { STORAGE_ROOT, atomicWriteJson, atomicWriteJsonAsync } from './config.js'
 import { estimateRequestCost } from './pricing.js'
 import { backupBeforeMigration, CURRENT_STATS_SCHEMA, migrateStatsDocument } from './migrations.js'
 import { safeErrorText } from './logger.js'
 
 const STATS_FILE = path.join(STORAGE_ROOT, 'codex-proxy-stats.json')
 const DAILY_RETENTION_DAYS = 370
+const MAX_RECENT_EVENTS = 1000
+const SAVE_DELAY_MS = 5000
+const MAX_SAVE_RETRY_MS = 60000
 let stats = { schema_version: CURRENT_STATS_SCHEMA, updated: new Date().toISOString(), providers: {}, accounts: {}, daily: {}, operational_events: [] }
+let saveTimer = null
+let saveInFlight = null
+let saveQueued = false
+let saveFailures = 0
 
 export function statsDayKey(value = Date.now()) {
   const date = value instanceof Date ? value : new Date(value)
@@ -46,6 +53,10 @@ function loadStats() {
       stats.accounts ||= {}
       stats.daily ||= {}
       stats.operational_events ||= []
+      for (const account of Object.values(stats.accounts)) {
+        account.recent_events = (account.recent_events || []).slice(-MAX_RECENT_EVENTS)
+      }
+      stats.operational_events = stats.operational_events.slice(-MAX_RECENT_EVENTS)
       pruneDaily()
       return
     }
@@ -55,15 +66,54 @@ function loadStats() {
 loadStats()
 
 export function saveStats() {
+  saveQueued = true
+  scheduleStatsSave()
+  return true
+}
+
+function scheduleStatsSave(delayMs = SAVE_DELAY_MS) {
+  if (saveTimer || saveInFlight) return
+  saveTimer = setTimeout(() => {
+    saveTimer = null
+    void flushStats()
+  }, delayMs)
+  saveTimer.unref?.()
+}
+
+export async function flushStats() {
+  if (saveInFlight) {
+    saveQueued = true
+    return saveInFlight
+  }
+  if (saveTimer) {
+    clearTimeout(saveTimer)
+    saveTimer = null
+  }
+  saveQueued = false
   stats.updated = new Date().toISOString()
   pruneDaily()
-  try {
-    atomicWriteJson(STATS_FILE, stats)
-    return true
-  } catch (error) {
-    console.error('[codex-proxy] failed to persist statistics:', safeErrorText(error))
-    return false
-  }
+  const snapshot = structuredClone(stats)
+  saveInFlight = atomicWriteJsonAsync(STATS_FILE, snapshot)
+    .then(() => {
+      saveFailures = 0
+      return true
+    })
+    .catch(error => {
+      saveFailures++
+      saveQueued = true
+      console.error('[codex-proxy] failed to persist statistics:', safeErrorText(error))
+      return false
+    })
+    .finally(() => {
+      saveInFlight = null
+      if (saveQueued) {
+        const retryDelay = saveFailures
+          ? Math.min(MAX_SAVE_RETRY_MS, SAVE_DELAY_MS * (2 ** Math.min(saveFailures, 4)))
+          : SAVE_DELAY_MS
+        scheduleStatsSave(retryDelay)
+      }
+    })
+  return saveInFlight
 }
 
 function ensureProvider(p) {
@@ -216,7 +266,7 @@ export function recordAccountOutcome(accountId, {
   const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000
   account.recent_events = account.recent_events
     .filter(event => new Date(event.at).getTime() >= cutoff)
-    .slice(-10000)
+    .slice(-MAX_RECENT_EVENTS)
 
   const day = statsDayKey(account.last_request_at)
   const daily = ensureDaily(day)
@@ -248,7 +298,7 @@ export function recordOperationalEvent(type, {
   const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000
   stats.operational_events = stats.operational_events
     .filter(item => Date.parse(item.at) >= cutoff)
-    .slice(-10000)
+    .slice(-MAX_RECENT_EVENTS)
   const daily = ensureDaily(statsDayKey(event.at))
   if (type === 'account_switch') daily.account_switches = Number(daily.account_switches || 0) + 1
   if (type === 'circuit_open') daily.circuit_opens = Number(daily.circuit_opens || 0) + 1

@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 $proxyDir = $PSScriptRoot
 $pidFile = Join-Path $proxyDir '.codex-proxy.pid'
 $logFile = Join-Path $proxyDir 'codex-proxy.log'
+$errorLogFile = Join-Path $proxyDir 'codex-proxy.error.log'
 $port = 47892
 
 try {
@@ -12,6 +13,14 @@ try {
         return
     }
 } catch {}
+
+foreach ($path in @($logFile, $errorLogFile)) {
+    if (Test-Path -LiteralPath $path) {
+        $rotatedPath = "$path.1"
+        Remove-Item -LiteralPath $rotatedPath -Force -ErrorAction SilentlyContinue
+        Move-Item -LiteralPath $path -Destination $rotatedPath -Force
+    }
+}
 
 & (Join-Path $env:SystemRoot 'System32\cscript.exe') //nologo (Join-Path $proxyDir 'start-codex-proxy.vbs')
 

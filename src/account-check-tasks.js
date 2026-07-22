@@ -111,14 +111,16 @@ function summarize(results) {
   const summary = {}
   for (const result of results) summary[result.state] = (summary[result.state] || 0) + 1
   const healthy = Number(summary.healthy || 0)
+  const deferred = Number(summary.busy || 0)
   const issues = results.filter(result =>
-    result.state !== 'healthy' ||
+    !['healthy', 'busy'].includes(result.state) ||
     (
       result.reset_credits_synced !== true &&
-      result.reset_credit_status !== 'unsupported'
+      result.reset_credit_status !== 'unsupported' &&
+      result.state !== 'busy'
     )
   ).length
-  return { summary, healthy, issues }
+  return { summary, healthy, deferred, issues }
 }
 
 function readTaskDocument(filePath) {
@@ -148,6 +150,8 @@ export class AccountCheckTaskManager {
     accountTimeoutMs = 45_000,
     jitterMinMs = 150,
     jitterMaxMs = 600,
+    busyRetryLimit = 2,
+    busyRetryDelayMs = 1500,
     random = Math.random,
     delay = ms => new Promise(resolve => setTimeout(resolve, ms)),
     maxTasks = 20
@@ -167,6 +171,8 @@ export class AccountCheckTaskManager {
     this.accountTimeoutMs = Math.max(1000, Math.floor(accountTimeoutMs))
     this.jitterMinMs = Math.max(0, Math.floor(jitterMinMs))
     this.jitterMaxMs = Math.max(this.jitterMinMs, Math.floor(jitterMaxMs))
+    this.busyRetryLimit = Math.max(0, Math.floor(busyRetryLimit))
+    this.busyRetryDelayMs = Math.max(0, Math.floor(busyRetryDelayMs))
     this.random = random
     this.delay = delay
     this.maxTasks = Math.max(1, Math.floor(maxTasks))
@@ -237,6 +243,7 @@ export class AccountCheckTaskManager {
       account_ids: accounts.map(account => account.id),
       pending_account_ids: accounts.map(account => account.id),
       results: [],
+      deferred_attempts: {},
       in_flight_account_ids: [],
       cancel_requested: false,
       error: null,
@@ -403,6 +410,19 @@ export class AccountCheckTaskManager {
                   currentId => currentId !== accountId
                 )
               }
+              if (result?.state === 'busy' && result?.deferred === true) {
+                task.deferred_attempts ||= {}
+                const deferredAttempts = Number(task.deferred_attempts[accountId]) || 0
+                if (deferredAttempts < this.busyRetryLimit) {
+                  task.deferred_attempts[accountId] = deferredAttempts + 1
+                  task.updated_at = iso(this.now())
+                  if (!task.cancel_requested && this.busyRetryDelayMs > 0) {
+                    await this.delay(this.busyRetryDelayMs)
+                  }
+                  continue
+                }
+              }
+              if (task.deferred_attempts) delete task.deferred_attempts[accountId]
               processedIds.push(accountId)
               batchResults.push(result)
               if (!task.cancel_requested && cursor < candidateIds.length) await this.#jitter()
@@ -412,7 +432,7 @@ export class AccountCheckTaskManager {
             Array.from({ length: Math.min(this.concurrency, candidateIds.length) }, worker)
           )
           store.appendHealthEvents(batchResults
-            .filter(result => !result.first_seen_at)
+            .filter(result => !result.first_seen_at && result.state !== 'busy')
             .map(result => ({
             id: `${task.id}:${result.id}:${result.checked_at}`,
             account_id: result.id,
@@ -463,7 +483,7 @@ export class AccountCheckTaskManager {
   }
 
   #publicTask(task) {
-    const { summary, healthy, issues } = summarize(task.results || [])
+    const { summary, healthy, deferred, issues } = summarize(task.results || [])
     const processed = (task.results || []).length
     const currentAccounts = (task.in_flight_account_ids || []).map(accountId => {
       const account = this.getAccounts().find(item => item.id === accountId)
@@ -487,6 +507,7 @@ export class AccountCheckTaskManager {
         ? Number((processed / task.total * 100).toFixed(1))
         : 100,
       healthy,
+      deferred,
       issues,
       summary,
       current_accounts: currentAccounts,

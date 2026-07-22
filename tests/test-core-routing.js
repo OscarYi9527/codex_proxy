@@ -385,7 +385,12 @@ describe('显式跨 Provider 与虚拟模型路由', () => {
           providers.push(target.provider)
           if (target.provider === 'chatgpt-sub') {
             response.writeHead(503, { 'content-type': 'application/json' })
-            response.end(JSON.stringify({ error: { type: 'upstream_error' } }))
+            response.end(JSON.stringify({
+              error: {
+                type: 'upstream_error',
+                message: 'x'.repeat(70 * 1024)
+              }
+            }))
           } else {
             response.writeHead(200, { 'content-type': 'application/json' })
             response.end('{"ok":true}')

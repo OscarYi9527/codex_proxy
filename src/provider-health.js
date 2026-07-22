@@ -1,19 +1,18 @@
 import fs from 'fs'
 import path from 'path'
+import { atomicWriteJsonAsync } from './config.js'
 import { safeErrorText } from './logger.js'
 
-const MAX_EVENTS_PER_PROVIDER = 10000
+const MAX_EVENTS_PER_PROVIDER = 1000
 const EVENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+const SAVE_DELAY_MS = 5000
+const MAX_SAVE_RETRY_MS = 60000
 let healthFile = null
 let saveTimer = null
+let saveInFlight = null
+let saveQueued = false
+let saveFailures = 0
 let state = { updated_at: null, providers: {} }
-
-function atomicWrite(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  const temp = `${file}.${process.pid}.${Date.now()}.tmp`
-  fs.writeFileSync(temp, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600 })
-  fs.renameSync(temp, file)
-}
 
 export function initializeProviderHealth(baseDir) {
   healthFile = path.join(baseDir, 'codex-proxy-provider-health.json')
@@ -21,6 +20,9 @@ export function initializeProviderHealth(baseDir) {
     const parsed = JSON.parse(fs.readFileSync(healthFile, 'utf8'))
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       state = { updated_at: parsed.updated_at || null, providers: parsed.providers || {} }
+      for (const provider of Object.values(state.providers)) {
+        provider.recent_events = (provider.recent_events || []).slice(-MAX_EVENTS_PER_PROVIDER)
+      }
     }
   } catch {}
   return getProviderHealth()
@@ -35,11 +37,12 @@ function classify(status, error) {
 }
 
 function scheduleSave() {
-  if (!healthFile || saveTimer) return
+  saveQueued = true
+  if (!healthFile || saveTimer || saveInFlight) return
   saveTimer = setTimeout(() => {
     saveTimer = null
-    saveProviderHealth()
-  }, 250)
+    void flushProviderHealth()
+  }, SAVE_DELAY_MS)
   saveTimer.unref?.()
 }
 
@@ -146,12 +149,45 @@ export function resetProviderHealth() {
 }
 
 export function saveProviderHealth() {
+  scheduleSave()
+  return Boolean(healthFile)
+}
+
+export async function flushProviderHealth() {
   if (!healthFile) return false
-  try {
-    atomicWrite(healthFile, state)
-    return true
-  } catch (error) {
-    console.error('[codex-proxy] failed to persist provider health:', safeErrorText(error))
-    return false
+  if (saveInFlight) {
+    saveQueued = true
+    return saveInFlight
   }
+  if (saveTimer) {
+    clearTimeout(saveTimer)
+    saveTimer = null
+  }
+  saveQueued = false
+  const snapshot = structuredClone(state)
+  saveInFlight = atomicWriteJsonAsync(healthFile, snapshot)
+    .then(() => {
+      saveFailures = 0
+      return true
+    })
+    .catch(error => {
+      saveFailures++
+      saveQueued = true
+      console.error('[codex-proxy] failed to persist provider health:', safeErrorText(error))
+      return false
+    })
+    .finally(() => {
+      saveInFlight = null
+      if (saveQueued) {
+        const retryDelay = saveFailures
+          ? Math.min(MAX_SAVE_RETRY_MS, SAVE_DELAY_MS * (2 ** Math.min(saveFailures, 4)))
+          : SAVE_DELAY_MS
+        saveTimer = setTimeout(() => {
+          saveTimer = null
+          void flushProviderHealth()
+        }, retryDelay)
+        saveTimer.unref?.()
+      }
+    })
+  return saveInFlight
 }

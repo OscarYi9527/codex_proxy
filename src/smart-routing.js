@@ -4,6 +4,9 @@ import { getProviderHealth } from './provider-health.js'
 import { requestLog, safeErrorText } from './logger.js'
 import { budgetDecision, BudgetExceededError, targetUnitCost } from './cost-governance.js'
 
+export const DEFERRED_ERROR_BODY_LIMIT_BYTES = 64 * 1024
+const DEFERRED_BODY_TOO_LARGE = 'UPSTREAM_ERROR_BODY_TOO_LARGE'
+
 export const VIRTUAL_MODELS = [
   { id: 'auto', name: 'Auto · 综合质量与可用性', profile: 'balanced' },
   { id: 'auto-fast', name: 'Auto Fast · 优先低延迟', profile: 'fast' },
@@ -163,7 +166,9 @@ export class DeferredErrorResponse {
     this.proxyMeta = { ...initialMeta }
     this.statusCode = 200
     this.headers = new Map()
-    this.chunks = []
+    this.bodyBuffer = null
+    this.bufferedBytes = 0
+    this.bodyTruncated = false
     this.passthrough = false
     this.bufferedEnded = false
   }
@@ -176,6 +181,13 @@ export class DeferredErrorResponse {
   removeHeader(name) { this.headers.delete(String(name).toLowerCase()) }
   once(...args) { this.real.once(...args); return this }
   on(...args) { this.real.on(...args); return this }
+  off(...args) { this.real.off?.(...args); return this }
+  removeListener(...args) { this.real.removeListener?.(...args); return this }
+  get chunks() {
+    return this.bodyBuffer && this.bufferedBytes
+      ? [this.bodyBuffer.subarray(0, this.bufferedBytes)]
+      : []
+  }
 
   writeHead(status, headers = {}) {
     this.statusCode = Number(status) || 500
@@ -190,8 +202,32 @@ export class DeferredErrorResponse {
 
   write(chunk) {
     if (this.passthrough) return this.real.write(chunk)
-    this.chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)))
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))
+    if (buffer.length === 0) return true
+    this.bodyBuffer ||= Buffer.allocUnsafe(DEFERRED_ERROR_BODY_LIMIT_BYTES)
+    const remaining = DEFERRED_ERROR_BODY_LIMIT_BYTES - this.bufferedBytes
+    if (remaining <= 0) {
+      this.bodyTruncated = true
+      throw this.bodyTooLargeError()
+    }
+    const keptLength = Math.min(buffer.length, remaining)
+    buffer.copy(this.bodyBuffer, this.bufferedBytes, 0, keptLength)
+    this.bufferedBytes += keptLength
+    if (keptLength < buffer.length) {
+      this.bodyTruncated = true
+      throw this.bodyTooLargeError()
+    }
     return true
+  }
+
+  bodyTooLargeError() {
+    return Object.assign(new Error(
+      `Upstream error response exceeded ${DEFERRED_ERROR_BODY_LIMIT_BYTES} bytes`
+    ), {
+      code: DEFERRED_BODY_TOO_LARGE,
+      status: this.statusCode,
+      statusCode: this.statusCode
+    })
   }
 
   end(chunk) {
@@ -202,18 +238,42 @@ export class DeferredErrorResponse {
   }
 
   errorType() {
+    const text = Buffer.concat(this.chunks, this.bufferedBytes).toString('utf8')
     try {
-      const payload = JSON.parse(Buffer.concat(this.chunks).toString('utf8'))
+      const payload = JSON.parse(text)
       return String(payload?.error?.type || '')
     } catch {
-      return ''
+      const errorStart = text.search(/"error"\s*:/)
+      const match = errorStart >= 0
+        ? text.slice(errorStart).match(/"type"\s*:\s*"((?:\\.|[^"\\])*)"/)
+        : null
+      if (!match) return ''
+      try {
+        return String(JSON.parse(`"${match[1]}"`))
+      } catch {
+        return match[1]
+      }
     }
   }
 
   replay() {
     if (this.real.headersSent || this.real.writableEnded) return
+    let replayChunks = this.chunks
+    if (this.bodyTruncated) {
+      const payload = Buffer.from(JSON.stringify({
+        error: {
+          type: this.errorType() || 'upstream_error_body_too_large',
+          message: `Upstream error response exceeded ${DEFERRED_ERROR_BODY_LIMIT_BYTES} bytes and was truncated.`
+        }
+      }))
+      replayChunks = [payload]
+      this.headers.set('content-type', 'application/json; charset=utf-8')
+      this.headers.set('content-length', String(payload.length))
+      this.headers.delete('content-encoding')
+      this.headers.delete('transfer-encoding')
+    }
     this.real.writeHead(this.statusCode, Object.fromEntries(this.headers))
-    for (const chunk of this.chunks) this.real.write(chunk)
+    for (const chunk of replayChunks) this.real.write(chunk)
     this.real.end()
   }
 }
@@ -270,6 +330,16 @@ export async function executeRoutingPlan(req, res, body, resolved, dispatch) {
     } catch (error) {
       lastError = error
       if (attemptRes.passthrough || res.headersSent) throw error
+      if (error?.code === DEFERRED_BODY_TOO_LARGE) {
+        lastBuffered = attemptRes
+        const errorType = attemptRes.errorType()
+        if (index < plan.length - 1 && shouldFallbackResponse(attemptRes.statusCode, errorType)) {
+          requestLog(req, `cross_provider_fallback from=${target.provider} status=${attemptRes.statusCode} reason=error_body_too_large to=${plan[index + 1].provider}`)
+          continue
+        }
+        attemptRes.replay()
+        return { target, attempts: index + 1, status: attemptRes.statusCode }
+      }
       const status = statusForThrownError(error)
       if (index < plan.length - 1 && shouldFallbackResponse(status, error.code || '')) {
         requestLog(req, `cross_provider_fallback from=${target.provider} error=${safeErrorText(error.code || error)} to=${plan[index + 1].provider}`)

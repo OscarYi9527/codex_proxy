@@ -76,6 +76,20 @@ export function atomicWriteJson(filePath, value) {
   }
 }
 
+export async function atomicWriteJsonAsync(filePath, value) {
+  const dir = path.dirname(filePath)
+  await fs.promises.mkdir(dir, { recursive: true })
+  const tempPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`)
+  const text = JSON.stringify(value, null, 2)
+  try {
+    await fs.promises.writeFile(tempPath, text, { encoding: 'utf8', mode: 0o600 })
+    await fs.promises.rename(tempPath, filePath)
+  } catch (error) {
+    try { await fs.promises.rm(tempPath, { force: true }) } catch {}
+    throw error
+  }
+}
+
 function readStoredJson(filePath) {
   return decryptConfigSecrets(JSON.parse(fs.readFileSync(filePath, 'utf8')))
 }
@@ -509,7 +523,7 @@ export function upsertChatgptAccount(account) {
     { chatgptAccounts: accounts },
     idx < 0 ? { snapshot: true, reason: 'account-add' } : undefined
   )
-  reloadProxyConfig()
+  proxyConfig = newCfg
   return newCfg
 }
 
@@ -543,8 +557,8 @@ export function patchChatgptAccounts(updates, { onlyExisting = true } = {}) {
   }
   if (!changed) return proxyConfig
 
-  saveProxyConfig({ chatgptAccounts: accounts })
-  return reloadProxyConfig()
+  proxyConfig = saveProxyConfig({ chatgptAccounts: accounts })
+  return proxyConfig
 }
 
 export function deleteChatgptAccount(accountId) {
@@ -608,6 +622,8 @@ export function setChatgptAccountRouting(accountId, {
   lowQuotaThreshold,
   dailyRequestLimit,
   dailyTokenLimit,
+  concurrencyLimit,
+  adaptiveConcurrencyEnabled,
   reservedModels,
   reservedSessionIds,
   emergencyContinueMinutes,
@@ -627,6 +643,23 @@ export function setChatgptAccountRouting(accountId, {
     const requestedTier = poolTier === undefined ? null : String(poolTier).trim().toLowerCase()
     if (requestedTier !== null && !['stable', 'disposable'].includes(requestedTier)) {
       throw new Error('Account pool tier must be stable or disposable')
+    }
+    if (
+      concurrencyLimit !== undefined &&
+      (
+        typeof concurrencyLimit !== 'number' ||
+        !Number.isInteger(concurrencyLimit) ||
+        concurrencyLimit < 1 ||
+        concurrencyLimit > 20
+      )
+    ) {
+      throw new Error('Account concurrency limit must be an integer between 1 and 20')
+    }
+    if (
+      adaptiveConcurrencyEnabled !== undefined &&
+      typeof adaptiveConcurrencyEnabled !== 'boolean'
+    ) {
+      throw new Error('Adaptive concurrency flag must be boolean')
     }
     const tierChanged = requestedTier !== null && requestedTier !== currentTier
     const tierFields = requestedTier === null
@@ -661,6 +694,12 @@ export function setChatgptAccountRouting(accountId, {
       }),
       ...(dailyTokenLimit === undefined ? {} : {
         daily_token_limit: Math.max(0, Math.floor(Number(dailyTokenLimit) || 0))
+      }),
+      ...(concurrencyLimit === undefined ? {} : {
+        concurrency_limit: Number(concurrencyLimit)
+      }),
+      ...(adaptiveConcurrencyEnabled === undefined ? {} : {
+        adaptive_concurrency_enabled: Boolean(adaptiveConcurrencyEnabled)
       }),
       ...(reservedModels === undefined ? {} : { reserved_models: normalizeList(reservedModels) }),
       ...(reservedSessionIds === undefined ? {} : { reserved_session_ids: normalizeList(reservedSessionIds) }),

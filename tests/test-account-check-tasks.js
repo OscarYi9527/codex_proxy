@@ -50,6 +50,7 @@ function temporaryManager(options = {}) {
       stateFile,
       jitterMinMs: 0,
       jitterMaxMs: 0,
+      busyRetryDelayMs: 0,
       ...options
     })
   }
@@ -96,6 +97,45 @@ describe('后台账号检查任务', () => {
       assert.strictEqual(completed.status, 'completed')
       assert.strictEqual(completed.healthy, 1)
       assert.strictEqual(completed.issues, 0)
+    } finally {
+      fs.rmSync(fixture.directory, { recursive: true, force: true })
+    }
+  })
+
+  it('运行中跳过的账号单独计数且不视为检查故障', async () => {
+    const accounts = [{ id: 'busy-account' }]
+    let checks = 0
+    let appendedHealthEvents = 0
+    const fixture = temporaryManager({
+      getAccounts: () => accounts,
+      createStore: () => ({
+        captureAccount() {},
+        appendHealthEvents(events) { appendedHealthEvents += events.length },
+        async flush() {}
+      }),
+      checkAccount: async account => {
+        checks++
+        return {
+          ...healthyResult(account),
+          state: 'busy',
+          label: '正在处理请求',
+          deferred: true,
+          usage_synced: false,
+          reset_credits_synced: false,
+          reset_credit_status: 'failed'
+        }
+      }
+    })
+    try {
+      const started = fixture.manager.start()
+      const completed = await fixture.manager.wait(started.task.id)
+      assert.strictEqual(completed.status, 'completed')
+      assert.strictEqual(completed.healthy, 0)
+      assert.strictEqual(completed.deferred, 1)
+      assert.strictEqual(completed.issues, 0)
+      assert.deepStrictEqual(completed.summary, { busy: 1 })
+      assert.strictEqual(checks, 3)
+      assert.strictEqual(appendedHealthEvents, 0)
     } finally {
       fs.rmSync(fixture.directory, { recursive: true, force: true })
     }

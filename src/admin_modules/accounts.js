@@ -58,12 +58,16 @@ function renderAccounts(){
     const successRate=rangeHealth.requests?`${Number(rangeHealth.success_rate||0).toFixed(1)}%`:'—'
     const requestCount=rangeHealth.requests?fmt(rangeHealth.requests):'—'
     const p95=rangeHealth.requests?`${fmt(rangeHealth.p95_latency_ms)} ms`:'—'
-    const concurrency=`${runtime.active_requests||0}/${runtime.concurrency_limit||3}`
-    const checkedRouteLabel={banned:'疑似封禁',auth_invalid:'登录失效',token_expired:'令牌到期',incompatible:'凭据不兼容',permission_denied:'权限不足',temporary_unavailable:'暂时不可达',quota_exhausted:'额度不足',quota_low:'额度保护',rate_limited:'短时限流',discarded:'已弃号'}[check?.state]
+    const effectiveConcurrency=Number(runtime.concurrency_limit||a.concurrency_limit||3)
+    const configuredConcurrency=Number(runtime.configured_concurrency_limit||a.concurrency_limit||3)
+    const adaptiveConcurrency=runtime.adaptive_concurrency_enabled??(a.adaptive_concurrency_enabled!==false)
+    const concurrency=`${runtime.active_requests||0}/${effectiveConcurrency}${adaptiveConcurrency?`（自适应上限 ${configuredConcurrency}）`:'（固定）'}`
+    const activelyRouting=Number(runtime.active_requests||0)>0
+    const checkedRouteLabel={busy:'请求运行中',banned:'疑似封禁',auth_invalid:'登录失效',token_expired:'令牌到期',incompatible:'凭据不兼容',permission_denied:'权限不足',temporary_unavailable:'暂时不可达',quota_exhausted:'额度不足',quota_low:'额度保护',rate_limited:'短时限流',discarded:'已弃号'}[check?.state]
     const checkedCritical=['banned','auth_invalid','token_expired','incompatible','permission_denied','discarded'].includes(check?.state)
     const checkedWarning=['temporary_unavailable','quota_exhausted','quota_low','rate_limited','checking'].includes(check?.state)
-    const routeLabel=pool.discarded?'已弃号':checkedRouteLabel||(!credential.compatible?'凭据不兼容':credential.expired?'令牌到期':!routeEnabled?'仅保存':a.status==='cooldown'?'冷却中':a.status==='auth_error'?'登录失效':pool.exhausted?'等待周额度重置':atReserve?'额度保护':'参与路由')
-    const routeTone=pool.discarded||checkedCritical||!credential.compatible||credential.expired||!routeEnabled||a.status==='auth_error'?'off':checkedWarning||pool.exhausted||a.status==='cooldown'||atReserve||credential.expiringSoon?'warn':'ok'
+    const routeLabel=activelyRouting?`请求运行中（${Number(runtime.active_requests)}）`:pool.discarded?'已弃号':checkedRouteLabel||(!credential.compatible?'凭据不兼容':credential.expired?'令牌到期':!routeEnabled?'仅保存':a.status==='cooldown'?'冷却中':a.status==='auth_error'?'登录失效':pool.exhausted?'等待周额度重置':atReserve?'额度保护':'参与路由')
+    const routeTone=activelyRouting?'ok':pool.discarded||checkedCritical||!credential.compatible||credential.expired||!routeEnabled||a.status==='auth_error'?'off':checkedWarning||pool.exhausted||a.status==='cooldown'||atReserve||credential.expiringSoon?'warn':'ok'
     const reset=a.reset_credits
     const resetStatus=a.reset_credit_status||(reset?.updated_at?'synced':'stale')
     const resetCount=reset?Number(reset.available_count||0):null
@@ -168,11 +172,12 @@ function renderAccounts(){
     const health=(statsData.accounts||{})[a.id]||{}
     const check=a.health_check||runtime.health_check||null
     const rangeHealth=health.windows?.[healthRange]||health
-    const checkedRouteLabel={banned:'疑似封禁',auth_invalid:'登录失效',token_expired:'令牌到期',incompatible:'凭据不兼容',permission_denied:'权限不足',temporary_unavailable:'暂时不可达',quota_exhausted:'额度不足',quota_low:'额度保护',rate_limited:'短时限流',discarded:'已弃号'}[check?.state]
+    const activelyRouting=Number(runtime.active_requests||0)>0
+    const checkedRouteLabel={busy:'请求运行中',banned:'疑似封禁',auth_invalid:'登录失效',token_expired:'令牌到期',incompatible:'凭据不兼容',permission_denied:'权限不足',temporary_unavailable:'暂时不可达',quota_exhausted:'额度不足',quota_low:'额度保护',rate_limited:'短时限流',discarded:'已弃号'}[check?.state]
     const checkedCritical=['banned','auth_invalid','token_expired','incompatible','permission_denied','discarded'].includes(check?.state)
     const checkedWarning=['temporary_unavailable','quota_exhausted','quota_low','rate_limited','checking'].includes(check?.state)
-    const routeLabel=pool.discarded?'已弃号':checkedRouteLabel||(!credential.compatible?'凭据不兼容':credential.expired?'令牌到期':!routeEnabled?'仅保存':a.status==='cooldown'?'冷却中':a.status==='auth_error'?'登录失效':pool.exhausted?'等待重置':atReserve?'额度保护':'参与路由')
-    const routeTone=pool.discarded||checkedCritical||!credential.compatible||credential.expired||!routeEnabled||a.status==='auth_error'?'off':checkedWarning||pool.exhausted||a.status==='cooldown'||atReserve||credential.expiringSoon?'warn':'ok'
+    const routeLabel=activelyRouting?`请求运行中（${Number(runtime.active_requests)}）`:pool.discarded?'已弃号':checkedRouteLabel||(!credential.compatible?'凭据不兼容':credential.expired?'令牌到期':!routeEnabled?'仅保存':a.status==='cooldown'?'冷却中':a.status==='auth_error'?'登录失效':pool.exhausted?'等待重置':atReserve?'额度保护':'参与路由')
+    const routeTone=activelyRouting?'ok':pool.discarded||checkedCritical||!credential.compatible||credential.expired||!routeEnabled||a.status==='auth_error'?'off':checkedWarning||pool.exhausted||a.status==='cooldown'||atReserve||credential.expiringSoon?'warn':'ok'
     const resetCount=a.reset_credits?Number(a.reset_credits.available_count||0):null
     const quotaResetText=window=>{
       if(!window)return '重置时间待同步'
@@ -200,7 +205,7 @@ function renderAccounts(){
       <div class="compact-health">
         <div><small>${healthRange} 成功率</small><strong>${rangeHealth.requests?Number(rangeHealth.success_rate||0).toFixed(1)+'%':'—'}</strong></div>
         <div><small>P95 延迟</small><strong>${rangeHealth.requests?fmt(rangeHealth.p95_latency_ms)+' ms':'—'}</strong></div>
-        <div><small>并发</small><strong>${runtime.active_requests||0}/${runtime.concurrency_limit||3}</strong></div>
+        <div><small>并发</small><strong>${runtime.active_requests||0}/${runtime.concurrency_limit||a.concurrency_limit||3}</strong></div>
       </div>
       <div class="compact-status">
         <span class="account-state ${routeTone}"><i></i>${routeLabel}</span>

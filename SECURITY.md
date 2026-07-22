@@ -9,6 +9,8 @@
   Administrators。
 - Windows 使用 DPAPI（CurrentUser）保护随机 AES-256-GCM 数据密钥；配置和账号
   备份中的 Token/API Key 均以认证密文保存。
+- Windows RK3588 客户端 Key 由 DPAPI（CurrentUser）直接保护并使用受限 ACL；Codex
+  通过 command-backed auth helper 按需读取，Key 不写入 TOML、环境变量或命令参数。
 - 日志会脱敏常见 Token、API Key 和 JWT，但仍不应公开上传运行日志。
 
 ## 敏感文件

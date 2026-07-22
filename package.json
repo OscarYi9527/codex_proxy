@@ -28,6 +28,7 @@
     "test": "node --test tests/*.js tests/*.cjs",
     "test:gateway-stack": "npm run gateway:test && npm run admin:test",
     "test:dev-scripts": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test-dev-scripts.ps1",
+    "test:rk3588-windows": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/test-rk3588-windows-client.ps1",
     "secret:scan": "node scripts/secret-scan.mjs",
     "release:check": "node scripts/release-check.mjs"
   },

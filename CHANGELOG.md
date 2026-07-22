@@ -29,6 +29,9 @@
   TLS/正文/超时/并发门禁，以及到日本 Responses 兼容节点的 SSE 流式透传。
 - 新增 RK3588 只读、无 capability 的 Docker Compose 部署，以及私域名、Codex 自定义
   provider、日本两跳节点、真实验收和安全回滚文档。
+- 新增 Windows RK3588 同事端：Tailscale 状态/peer/模型目录门禁、DPAPI CurrentUser
+  Key、Codex command-backed auth、原子轮换、配置哈希回滚及保守卸载；生命周期测试
+  证明 Key 不进入 argv、TOML、日志或安装制品。
 - Gateway/Edge 合同测试开始共同消费 My_Code 的 `edge-code-contract.json` fixture。
 - 新增 Level-1 Provider、凭据、模型路由和安全诊断 API，以及 Provider/诊断 React 页面。
 - 新增 Gateway 隔离 `CODEX_HOME` 的 OpenAI 官方登录端点；认证临时目录在导入后删除。

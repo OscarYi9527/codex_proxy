@@ -92,6 +92,7 @@ for (const [script, label] of [
   ['gateway:test', 'Gateway tests'],
   ['admin:test', 'admin-web tests'],
   ['test:dev-scripts', 'isolated development script tests'],
+  ['test:rk3588-windows', 'RK3588 Windows client security and lifecycle tests'],
   ['check', 'workspace type and syntax checks'],
   ['gateway:build', 'Gateway production build'],
   ['admin:build', 'admin-web production build']

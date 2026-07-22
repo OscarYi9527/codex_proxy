@@ -155,6 +155,24 @@ Tailscale Serve 参考：
 
 ## 6. 同事接入
 
+### 6.1 Windows（推荐）
+
+Windows 同事端使用仓库提供的 DPAPI + Codex command-backed auth 安装器。Key 通过安全
+提示输入，不进入环境变量、命令参数或 `config.toml`：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\windows\rk3588\install-rk3588-client.ps1 `
+  -BaseUrl 'https://rk3588-relay.<你的-tailnet>.ts.net/v1' `
+  -Model '<日本节点实际提供的模型 ID>'
+```
+
+安装器默认检查 Tailscale 登录状态、peer 可达性和 `/v1/models`，并提供 Key 轮换、
+配置备份/回滚、诊断和卸载。完整说明及 GitHub 开源方案参考见
+[`WINDOWS_RK3588_CLIENT.md`](WINDOWS_RK3588_CLIENT.md)。
+
+### 6.2 其他客户端
+
 先用专用 Key 验证模型目录：
 
 ```bash
@@ -166,8 +184,9 @@ curl --fail-with-body \
   "$RK3588_BASE_URL/models"
 ```
 
-Codex 的自定义 provider 应写在用户级 `~/.codex/config.toml`，不要把 provider 和 Key
-提交到项目级 `.codex/config.toml`：
+非 Windows 平台可用平台自己的密码管理器把 Key 注入当前进程环境。Codex 的自定义
+provider 应写在用户级 `~/.codex/config.toml`，不要把 provider 和 Key 提交到项目级
+`.codex/config.toml`：
 
 ```toml
 model = "由日本节点实际提供的模型 ID"
@@ -180,8 +199,8 @@ env_key = "RK3588_CLIENT_API_KEY"
 wire_api = "responses"
 ```
 
-Codex 当前手册的 Custom model providers 说明了 `base_url`、`env_key` 和
-`wire_api = "responses"` 的配置方式：
+Codex 当前手册的 Custom model providers 说明了 `base_url`、`env_key`、
+`wire_api = "responses"` 和 command-backed auth 的配置方式：
 <https://developers.openai.com/codex/codex-manual.md#configuration-auth-and-models>
 
 每位同事最好使用独立 Key。当前第一版使用一个文件 Key；若需要逐人撤销、审计和速率

@@ -9,6 +9,18 @@ const escapeWorkflowCommand = value => String(value)
   .replaceAll('%', '%25')
   .replaceAll('\r', '%0D')
   .replaceAll('\n', '%0A')
+const stripAnsi = value => String(value).replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
+const summarizeFailure = result => {
+  const lines = stripAnsi([result.stdout, result.stderr].filter(Boolean).join('\n'))
+    .split(/\r?\n/)
+    .map(line => line.trimEnd())
+    .filter(Boolean)
+  const failureIndex = lines.findIndex(line => /^\s*(?:FAIL\b|●\s)/.test(line))
+  const details = failureIndex >= 0
+    ? [...lines.slice(failureIndex, failureIndex + 40), ...lines.slice(-6)]
+    : lines.slice(-30)
+  return details.join('\n').slice(0, 6000)
+}
 const fail = message => {
   console.error(`[release-check] ${message}`)
   if (process.env.GITHUB_ACTIONS === 'true') {
@@ -19,19 +31,25 @@ const fail = message => {
 
 function run(command, args, label, options = {}) {
   console.log(`[release-check] ${label}`)
+  const captureOutput = process.env.GITHUB_ACTIONS === 'true'
   const result = spawnSync(command, args, {
     cwd: root,
     encoding: 'utf8',
-    stdio: 'inherit',
+    stdio: captureOutput ? ['ignore', 'pipe', 'pipe'] : 'inherit',
     shell: false,
     env: options.env || process.env
   })
+  if (captureOutput) {
+    if (result.stdout) process.stdout.write(result.stdout)
+    if (result.stderr) process.stderr.write(result.stderr)
+  }
   if (result.error) {
     fail(`${label}: ${result.error.message}`)
     return false
   }
   if (result.status !== 0) {
-    fail(`${label} failed with exit code ${result.status}`)
+    const details = captureOutput ? summarizeFailure(result) : ''
+    fail(`${label} failed with exit code ${result.status}${details ? `\n${details}` : ''}`)
     return false
   }
   return true

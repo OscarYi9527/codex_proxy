@@ -111,7 +111,6 @@ export function readBody(req, {
       )),
       timeout
     )
-    timer.unref?.()
     req.on('data', onData)
     req.once('end', onEnd)
     req.once('error', onError)

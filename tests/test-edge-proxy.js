@@ -153,7 +153,9 @@ describe('in-flight binding identity (T040)', () => {
           status: 200,
           headers: {
             'content-type': 'text/event-stream',
-            'x-ai-editor-provider-id': 'chatgpt-sub'
+            'x-ai-editor-provider-id': 'chatgpt-sub',
+            'x-ai-editor-worker-id': 'worker-preprod-sg',
+            'x-ai-editor-worker-region': 'ap-singapore'
           }
         })
       }
@@ -192,6 +194,8 @@ describe('in-flight binding identity (T040)', () => {
     assert.equal(capturedHeaders['x-ai-editor-turn-id'], 'turn_identity_1234')
     assert.match(Buffer.concat(chunks).toString('utf8'), /response\.completed/)
     assert.equal(output.headers['x-ai-editor-provider-id'], 'chatgpt-sub')
+    assert.equal(output.headers['x-ai-editor-worker-id'], 'worker-preprod-sg')
+    assert.equal(output.headers['x-ai-editor-worker-region'], 'ap-singapore')
     assert.equal(binding.snapshot().deviceSessionId, 'ds_new')
   })
 })

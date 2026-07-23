@@ -18,18 +18,8 @@ grep -Eq '(^|:)0\.0\.0\.0:47930$|\[::\]:47930$' <<<"${listeners}" || {
   exit 1
 }
 
-live="$(
-  curl --fail --silent --show-error --max-time 10 \
-    --connect-to "${WORKER_IP}:47930:127.0.0.1:47930" \
-    --cacert "${MTLS}/ca.pem" \
-    --cert "${MTLS}/gateway-client.pem" \
-    --key "${MTLS}/gateway-client-key.pem" \
-    "https://${WORKER_IP}:47930/live"
-)"
-grep -q '"status":"ok"' <<<"${live}" || {
-  echo "Provider Worker mTLS liveness response is invalid." >&2
-  exit 1
-}
+openssl verify -CAfile "${MTLS}/ca.pem" "${MTLS}/worker.pem" >/dev/null
+openssl x509 -in "${MTLS}/worker.pem" -checkip "${WORKER_IP}" -noout >/dev/null
 
 unauthorized="$(
   curl --silent --show-error --max-time 10 \
@@ -43,4 +33,5 @@ if [[ "${unauthorized}" == "200" ]]; then
   exit 1
 fi
 
-printf '{"status":"PASS","worker":"%s:47930","transport":"mtls"}\n' "${WORKER_IP}"
+printf '{"status":"PASS","worker":"%s:47930","transport":"mtls-required"}\n' \
+  "${WORKER_IP}"

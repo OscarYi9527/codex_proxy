@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   managementErrorMessage,
   type ManagementApiClient
@@ -41,6 +41,11 @@ function accountLabel(
     : 'ChatGPT 订阅账号'
 }
 
+interface CompactNotice {
+  readonly kind: 'success' | 'error'
+  readonly message: string
+}
+
 export function CompactManagementPage({
   client,
   providers,
@@ -53,12 +58,33 @@ export function CompactManagementPage({
   readonly onRefresh: () => Promise<void>
 }) {
   const [busyId, setBusyId] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
+  const [notice, setNotice] = useState<CompactNotice | null>(null)
+  const previousProviders = useRef(providers)
   const subscriptionAccounts = (providers?.providers || [])
     .filter(provider => provider.kind === 'chatgpt')
     .flatMap(provider => provider.credentials.map(credential => ({ provider, credential })))
   const fullManagementUrl =
     `ai-editor-code://open-full-management?route=${encodeURIComponent(fullRoute)}`
+
+  // A failed quota/provider operation must not leave a recovered channel
+  // looking permanently unavailable. Clear an old error when fresh provider
+  // data arrives, while retaining successful confirmations until the next
+  // user action.
+  useEffect(() => {
+    if (previousProviders.current === providers) return
+    previousProviders.current = providers
+    setNotice(current => current?.kind === 'error' ? null : current)
+  }, [providers])
+
+  // Error notices are transient status feedback, not the source of truth for
+  // provider health. The account rows and the next refresh are authoritative.
+  useEffect(() => {
+    if (notice?.kind !== 'error') return
+    const timeout = window.setTimeout(() => {
+      setNotice(current => current?.kind === 'error' ? null : current)
+    }, 8_000)
+    return () => window.clearTimeout(timeout)
+  }, [notice])
 
   const run = async (id: string, operation: () => Promise<unknown>, message: string) => {
     if (busyId) return
@@ -67,12 +93,15 @@ export function CompactManagementPage({
     try {
       await operation()
       await onRefresh()
-      setNotice(message)
+      setNotice({ kind: 'success', message })
     } catch (error) {
-      setNotice(managementErrorMessage(
-        error,
-        '操作失败，请稍后重试或打开完整管理页面查看。'
-      ))
+      setNotice({
+        kind: 'error',
+        message: managementErrorMessage(
+          error,
+          '操作失败，请稍后重试或打开完整管理页面查看。'
+        )
+      })
     } finally {
       setBusyId(null)
     }
@@ -91,7 +120,7 @@ export function CompactManagementPage({
         </a>
       </header>
 
-      {notice && <p className="compact-notice" role="status">{notice}</p>}
+      {notice && <p className="compact-notice" role="status">{notice.message}</p>}
 
       <section className="compact-account-list" aria-labelledby="compact-routing-title">
         <div className="compact-section-title">

@@ -151,7 +151,10 @@ describe('in-flight binding identity (T040)', () => {
         await fetchRelease
         return new Response('event: response.completed\ndata: {}\n\n', {
           status: 200,
-          headers: { 'content-type': 'text/event-stream' }
+          headers: {
+            'content-type': 'text/event-stream',
+            'x-ai-editor-provider-id': 'chatgpt-sub'
+          }
         })
       }
     })
@@ -188,6 +191,7 @@ describe('in-flight binding identity (T040)', () => {
     assert.equal(capturedHeaders['x-ai-editor-device-session'], 'ds_old')
     assert.equal(capturedHeaders['x-ai-editor-turn-id'], 'turn_identity_1234')
     assert.match(Buffer.concat(chunks).toString('utf8'), /response\.completed/)
+    assert.equal(output.headers['x-ai-editor-provider-id'], 'chatgpt-sub')
     assert.equal(binding.snapshot().deviceSessionId, 'ds_new')
   })
 })

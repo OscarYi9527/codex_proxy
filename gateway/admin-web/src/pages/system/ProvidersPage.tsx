@@ -272,6 +272,7 @@ export function ProvidersPage({
   const authFileRef = useRef<HTMLInputElement>(null)
   const loginPollPending = useRef(false)
   const importAuthJsonRef = useRef<(raw: string) => Promise<void>>(async () => undefined)
+  const previousProviders = useRef(providers)
 
   const chatgptProviders = providers.providers.filter(provider => provider.kind === 'chatgpt')
   const accounts = chatgptProviders.flatMap(provider =>
@@ -284,6 +285,18 @@ export function ProvidersPage({
     item => item.credential.status === 'auth_error'
   )
   const primaryProvider = chatgptProviders[0]
+
+  useEffect(() => {
+    if (previousProviders.current === providers) return
+    previousProviders.current = providers
+    setError(null)
+  }, [providers])
+
+  useEffect(() => {
+    if (!error) return
+    const timeout = window.setTimeout(() => setError(null), 8_000)
+    return () => window.clearTimeout(timeout)
+  }, [error])
 
   const run = async (
     operation: () => Promise<unknown>,

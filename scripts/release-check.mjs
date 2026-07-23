@@ -5,8 +5,15 @@ import process from 'node:process'
 
 const root = path.resolve(import.meta.dirname, '..')
 const readJson = file => JSON.parse(fs.readFileSync(path.join(root, file), 'utf8'))
+const escapeWorkflowCommand = value => String(value)
+  .replaceAll('%', '%25')
+  .replaceAll('\r', '%0D')
+  .replaceAll('\n', '%0A')
 const fail = message => {
   console.error(`[release-check] ${message}`)
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    console.error(`::error title=Release gate::${escapeWorkflowCommand(message)}`)
+  }
   process.exitCode = 1
 }
 

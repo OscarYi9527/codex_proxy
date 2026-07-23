@@ -47,7 +47,15 @@ function Ensure-Directory([string]$Path) {
 
 function Get-FileHashText([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
-    return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash
+    $stream = [IO.File]::OpenRead($Path)
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = $sha256.ComputeHash($stream)
+        return ([BitConverter]::ToString($hash)).Replace('-', '')
+    } finally {
+        $sha256.Dispose()
+        $stream.Dispose()
+    }
 }
 
 function Backup-And-Copy([string]$RelativePath, [string]$BackupRoot) {

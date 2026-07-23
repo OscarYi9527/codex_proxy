@@ -40,6 +40,8 @@ public_live="$(
 )"
 worker_live="$(
   curl --fail --silent --show-error --max-time 15 \
+    --cert-type PEM \
+    --key-type PEM \
     --cacert "${MTLS}/ca.pem" \
     --cert "${MTLS}/gateway-client.pem" \
     --key "${MTLS}/gateway-client-key.pem" \

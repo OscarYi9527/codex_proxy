@@ -1,7 +1,10 @@
 FROM node:24.16.0-bookworm-slim AS build
 
+ARG DEBIAN_MIRROR=deb.debian.org
 WORKDIR /opt/ai-editor
-RUN apt-get update \
+RUN sed -i "s|deb.debian.org|${DEBIAN_MIRROR}|g" \
+    /etc/apt/sources.list.d/debian.sources \
+  && apt-get update \
   && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 
@@ -19,9 +22,12 @@ RUN npm run gateway:build \
 
 FROM node:24.16.0-bookworm-slim AS runtime
 
+ARG DEBIAN_MIRROR=deb.debian.org
 ENV NODE_ENV=preproduction
 WORKDIR /opt/ai-editor
-RUN apt-get update \
+RUN sed -i "s|deb.debian.org|${DEBIAN_MIRROR}|g" \
+    /etc/apt/sources.list.d/debian.sources \
+  && apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates tini \
   && rm -rf /var/lib/apt/lists/*
 

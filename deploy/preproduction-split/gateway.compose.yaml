@@ -5,6 +5,8 @@ services:
     build:
       context: ../..
       dockerfile: deploy/preproduction-split/Dockerfile
+      args:
+        DEBIAN_MIRROR: ${AI_EDITOR_DEBIAN_MIRROR:-deb.debian.org}
     image: torvye-ai-runtime:preproduction
     command:
       - node

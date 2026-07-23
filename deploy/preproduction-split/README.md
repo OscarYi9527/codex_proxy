@@ -39,6 +39,10 @@ certificate and CA; it never receives the Gateway private key. The CA private
 key must be retained only in offline operator storage after certificates are
 issued.
 
+`AI_EDITOR_DEBIAN_MIRROR` defaults to `deb.debian.org`. The China host may set
+it to an operator-approved mirror such as `mirrors.cloud.tencent.com`; it
+changes only Debian packages downloaded while building the pinned image.
+
 ## Host lifecycle
 
 ```bash

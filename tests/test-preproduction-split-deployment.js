@@ -14,6 +14,7 @@ function text(file) {
 describe('split preproduction deployment boundary', () => {
   it('pins the application runtime and keeps generated state out of Git', () => {
     assert.match(text('Dockerfile'), /FROM node:24\.16\.0-bookworm-slim/)
+    assert.match(text('Dockerfile'), /ARG DEBIAN_MIRROR=deb\.debian\.org/)
     const ignore = fs.readFileSync(path.join(root, '.gitignore'), 'utf8')
     const dockerIgnore = fs.readFileSync(path.join(root, '.dockerignore'), 'utf8')
     for (const value of [
@@ -49,6 +50,7 @@ describe('split preproduction deployment boundary', () => {
     assert.match(gateway, /AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_KEY:/)
     assert.match(gateway, /AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_CERT:/)
     assert.match(gateway, /AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_CA:/)
+    assert.match(gateway, /DEBIAN_MIRROR: \$\{AI_EDITOR_DEBIAN_MIRROR:-deb\.debian\.org\}/)
     assert.doesNotMatch(`${worker}\n${gateway}`, /47892/)
   })
 

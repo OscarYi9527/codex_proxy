@@ -1,7 +1,9 @@
 import {
   filterGatewayModels,
+  type ProviderRouteAdapter,
   type SafeModel
 } from '../../src/routing/standalone-route-adapter.js'
+import { ModelCatalog } from '../../src/routing/model-catalog.js'
 
 const model = (id: string): SafeModel => ({
   id,
@@ -60,5 +62,33 @@ describe('AI Editor Gateway model catalog', () => {
       'auto',
       'deepseek-v4-pro'
     ])
+  })
+
+  it('keeps account status independent from a transient Worker catalog failure', async () => {
+    let fail = false
+    const adapter = {
+      listModels: async () => {
+        if (fail) throw new Error('temporary worker timeout')
+        return {
+          object: 'list' as const,
+          data: [model('gpt-5.6-terra')]
+        }
+      }
+    } as ProviderRouteAdapter
+    const catalog = new ModelCatalog(adapter)
+
+    await expect(catalog.currentModel()).resolves.toBe('gpt-5.6-terra')
+    fail = true
+    await expect(catalog.currentModel()).resolves.toBe('gpt-5.6-terra')
+  })
+
+  it('omits the informational current model when the first Worker probe fails', async () => {
+    const catalog = new ModelCatalog({
+      listModels: async () => {
+        throw new Error('temporary worker timeout')
+      }
+    } as ProviderRouteAdapter)
+
+    await expect(catalog.currentModel()).resolves.toBeNull()
   })
 })

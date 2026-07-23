@@ -6,6 +6,8 @@ import type {
 } from './standalone-route-adapter.js'
 
 export class ModelCatalog {
+  private lastKnownCurrentModel: string | null = null
+
   constructor(private readonly adapter: ProviderRouteAdapter) {}
 
   async list(): Promise<SafeModelList> {
@@ -21,6 +23,7 @@ export class ModelCatalog {
         object: 'model',
         owned_by: 'ai-editor'
       }))
+    this.lastKnownCurrentModel = data[0]?.id || null
     return { object: 'list', data }
   }
 
@@ -39,6 +42,16 @@ export class ModelCatalog {
   }
 
   async currentModel(): Promise<string | null> {
-    return (await this.list()).data[0]?.id || null
+    try {
+      return (await this.list()).data[0]?.id || null
+    } catch {
+      // Account readiness is an authentication/entitlement gate, not a
+      // Provider Worker health probe. A transient model-catalog timeout must
+      // not turn a valid product account into account_service_unavailable or
+      // block a new Turn before the actual model request gets its own precise
+      // routing error. Preserve a previously confirmed model when available;
+      // otherwise omit the informational field.
+      return this.lastKnownCurrentModel
+    }
   }
 }

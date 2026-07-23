@@ -52,7 +52,7 @@ describe('CompactManagementPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '刷新额度' }))
     await waitFor(() => {
       expect(screen.getByRole('status')).toHaveTextContent(
-        '境外模型通道暂时不可用，请稍后重试。'
+        '额度刷新暂时失败；账号路由状态仍以账号卡片为准，这不表示 AI 请求已改走本机 Proxy。'
       )
     })
 

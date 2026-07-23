@@ -181,6 +181,8 @@ export class GatewayClient {
         'x-request-id',
         'x-codex-proxy-request-id',
         'x-ai-editor-provider-id',
+        'x-ai-editor-worker-id',
+        'x-ai-editor-worker-region',
         'x-ai-editor-idempotent-replay'
       ]) {
         const value = response.headers.get(name)

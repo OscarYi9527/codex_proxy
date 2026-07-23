@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  ManagementRequestError,
   managementErrorMessage,
   type ManagementApiClient
 } from '../../app/api-client'
@@ -44,6 +45,21 @@ function accountLabel(
 interface CompactNotice {
   readonly kind: 'success' | 'error'
   readonly message: string
+}
+
+function compactOperationError(id: string, error: unknown): string {
+  if (
+    error instanceof ManagementRequestError &&
+    error.code.startsWith('provider_worker_')
+  ) {
+    return id.endsWith(':quota')
+      ? '额度刷新暂时失败；账号路由状态仍以账号卡片为准，这不表示 AI 请求已改走本机 Proxy。'
+      : '服务器状态刷新暂时失败；这不表示模型已切换到本机 Proxy，请稍后重试。'
+  }
+  return managementErrorMessage(
+    error,
+    '操作失败，请稍后重试或打开完整管理页面查看。'
+  )
 }
 
 export function CompactManagementPage({
@@ -97,10 +113,7 @@ export function CompactManagementPage({
     } catch (error) {
       setNotice({
         kind: 'error',
-        message: managementErrorMessage(
-          error,
-          '操作失败，请稍后重试或打开完整管理页面查看。'
-        )
+        message: compactOperationError(id, error)
       })
     } finally {
       setBusyId(null)

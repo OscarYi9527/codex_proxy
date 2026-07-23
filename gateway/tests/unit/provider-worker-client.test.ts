@@ -165,6 +165,8 @@ describe('ProviderWorkerClient', () => {
       })
       expect(response.status).toBe(200)
       expect(response.headers['x-ai-editor-provider-id']).toBe('provider-worker-mock')
+      expect(response.headers['x-ai-editor-worker-id']).toBe('worker-local')
+      expect(response.headers['x-ai-editor-worker-region']).toBe('local-development')
       expect(response.body).toContain('response.completed')
       expect(capturedTurnId).toBe('turn_gateway_worker')
       expect(JSON.parse(capturedBody)).toEqual({

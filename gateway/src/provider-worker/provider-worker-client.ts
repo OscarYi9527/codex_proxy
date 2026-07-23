@@ -445,7 +445,13 @@ export class ProviderWorkerClient implements ProviderRouteAdapter {
           'text/event-stream; charset=utf-8',
         'cache-control': 'no-store',
         'x-content-type-options': 'nosniff',
-        'x-request-id': safeHeader(response.headers, 'x-request-id') || requestId
+        'x-request-id': safeHeader(response.headers, 'x-request-id') || requestId,
+        // These values come from the Gateway's validated deployment config,
+        // not from an arbitrary upstream header. Together with the successful
+        // mTLS Worker response they provide a non-secret, authoritative route
+        // proof for local product diagnostics.
+        'x-ai-editor-worker-id': this.config.workerId,
+        'x-ai-editor-worker-region': this.config.region
       }
       const providerId = safeHeader(response.headers, 'x-ai-editor-provider-id')
       const outboxId = safeHeader(response.headers, 'x-ai-editor-outbox-id')

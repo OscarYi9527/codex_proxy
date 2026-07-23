@@ -61,6 +61,7 @@ describe('cross-provider tool call IDs', () => {
     assert.equal(upstream.input[0].id, 'fc_tool_mrrmem914mxsqfk7')
     assert.equal(upstream.input[0].call_id, 'tool_mrrmem914mxsqfk7')
     assert.equal(upstream.model, 'gpt-5.6-sol')
+    assert.equal(upstream.store, false)
     assert.equal(upstream.reasoning.effort, 'high')
   })
 

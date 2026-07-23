@@ -26,6 +26,7 @@ export function buildChatGptResponsesBody(body, resolved) {
   return {
     ...normalizedBody,
     model: resolved.model,
+    store: typeof normalizedBody.store === 'boolean' ? normalizedBody.store : false,
     ...(resolved.reasoningEffort
       ? { reasoning: { ...(normalizedBody.reasoning || {}), effort: resolved.reasoningEffort } }
       : {})

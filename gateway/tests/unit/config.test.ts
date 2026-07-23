@@ -153,6 +153,68 @@ describe('Gateway fixed development configuration', () => {
     }, { repositoryRoot })).toThrow(/Mock authentication is forbidden/)
   })
 
+  it('supports an mTLS remote Worker with SQLite in preproduction', () => {
+    const dataRoot = path.join(
+      repositoryRoot,
+      '.ai-editor-dev',
+      'preproduction',
+      'gateway'
+    )
+    const base = {
+      NODE_ENV: 'preproduction',
+      AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: 'https://preprod.torvye.com',
+      AI_EDITOR_GATEWAY_DATA_ROOT: dataRoot,
+      AI_EDITOR_PROVIDER_WORKER_ORIGIN: 'https://43.156.27.252:47930',
+      AI_EDITOR_PROVIDER_WORKER_GATEWAY_ID: 'gateway-preprod-cn',
+      AI_EDITOR_PROVIDER_WORKER_ID: 'worker-preprod-sg',
+      AI_EDITOR_PROVIDER_WORKER_REGION: 'ap-singapore',
+      AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET:
+        'provider-worker-preprod-secret-32bytes-minimum',
+      AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_KEY: postgresKeyFile,
+      AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_CERT: postgresCertFile,
+      AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_CA: postgresCaFile
+    }
+    const preproduction = loadGatewayConfig(base, { repositoryRoot })
+    expect(preproduction).toMatchObject({
+      environment: 'preproduction',
+      host: '127.0.0.1',
+      port: 47920,
+      publicOrigin: 'https://preprod.torvye.com',
+      dataRoot,
+      authMode: 'real',
+      database: {
+        dialect: 'sqlite',
+        sqliteFile: path.join(dataRoot, 'gateway.sqlite'),
+        migrateOnStart: true
+      },
+      providerWorker: {
+        origin: 'https://43.156.27.252:47930',
+        gatewayId: 'gateway-preprod-cn',
+        workerId: 'worker-preprod-sg',
+        region: 'ap-singapore',
+        tls: {
+          keyFile: postgresKeyFile,
+          certFile: postgresCertFile,
+          caFile: postgresCaFile
+        }
+      }
+    })
+    expect(() => loadGatewayConfig({
+      ...base,
+      AI_EDITOR_PROVIDER_WORKER_ORIGIN: 'http://43.156.27.252:47930'
+    }, { repositoryRoot })).toThrow(/HTTPS origin/)
+    expect(() => loadGatewayConfig({
+      ...base,
+      AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_KEY: undefined,
+      AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_CERT: undefined,
+      AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_CA: undefined
+    }, { repositoryRoot })).toThrow(/mTLS client credentials/)
+    expect(() => loadGatewayConfig({
+      ...base,
+      AI_EDITOR_GATEWAY_AUTH_MODE: 'mock'
+    }, { repositoryRoot })).toThrow(/Mock authentication is forbidden/)
+  })
+
   it('requires HTTPS and mTLS client credentials for a production Worker', () => {
     const dataRoot = path.resolve('F:/production-gateway-data')
     const base = {

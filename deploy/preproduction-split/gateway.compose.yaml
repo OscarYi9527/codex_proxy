@@ -1,0 +1,59 @@
+name: torvye-preproduction-gateway
+
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: deploy/preproduction-split/Dockerfile
+    image: torvye-ai-runtime:preproduction
+    command:
+      - node
+      - gateway/dist/server.js
+    network_mode: host
+    user: ${AI_EDITOR_PREPRODUCTION_UID:-1000}:${AI_EDITOR_PREPRODUCTION_GID:-1000}
+    env_file:
+      - .gateway.runtime.env
+    environment:
+      NODE_ENV: preproduction
+      AI_EDITOR_GATEWAY_HOST: 127.0.0.1
+      AI_EDITOR_GATEWAY_PORT: "47920"
+      AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: ${AI_EDITOR_PREPRODUCTION_PUBLIC_ORIGIN:?Set by start-gateway.sh}
+      AI_EDITOR_GATEWAY_DATA_ROOT: /opt/ai-editor/.ai-editor-dev/preproduction/gateway
+      AI_EDITOR_GATEWAY_AUTH_MODE: real
+      AI_EDITOR_PROVIDER_WORKER_ORIGIN: ${AI_EDITOR_PREPRODUCTION_WORKER_ORIGIN:?Configure the Singapore Worker origin}
+      AI_EDITOR_PROVIDER_WORKER_GATEWAY_ID: gateway-preprod-cn
+      AI_EDITOR_PROVIDER_WORKER_ID: worker-preprod-sg
+      AI_EDITOR_PROVIDER_WORKER_REGION: ap-singapore
+      AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_KEY: /run/torvye-mtls/gateway-client-key.pem
+      AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_CERT: /run/torvye-mtls/gateway-client.pem
+      AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_CA: /run/torvye-mtls/ca.pem
+      AI_EDITOR_CHATGPT_LOGIN_HTTPS_PROXY: ${AI_EDITOR_CHATGPT_LOGIN_HTTPS_PROXY:-}
+      CODEX_PROXY_MAX_BODY_MIB: ${CODEX_PROXY_MAX_BODY_MIB:-64}
+      CODEX_PROXY_BODY_TIMEOUT_MS: ${CODEX_PROXY_BODY_TIMEOUT_MS:-60000}
+    volumes:
+      - ./state/gateway:/opt/ai-editor/.ai-editor-dev/preproduction/gateway
+      - ./secrets/gateway-mtls:/run/torvye-mtls:ro
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  cloudflared-quick:
+    image: ${AI_EDITOR_CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}
+    network_mode: host
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --protocol
+      - ${AI_EDITOR_CLOUDFLARED_PROTOCOL:-http2}
+      - --url
+      - http://127.0.0.1:47920

@@ -1,0 +1,69 @@
+import { describe, it } from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+
+const root = path.resolve()
+const deployment = path.join(root, 'deploy', 'preproduction-split')
+
+function text(file) {
+  return fs.readFileSync(path.join(deployment, file), 'utf8')
+    .replace(/\r\n/g, '\n')
+}
+
+describe('split preproduction deployment boundary', () => {
+  it('pins the application runtime and keeps generated state out of Git', () => {
+    assert.match(text('Dockerfile'), /FROM node:24\.16\.0-bookworm-slim/)
+    const ignore = fs.readFileSync(path.join(root, '.gitignore'), 'utf8')
+    const dockerIgnore = fs.readFileSync(path.join(root, '.dockerignore'), 'utf8')
+    for (const value of [
+      'deploy/preproduction-split/.worker.runtime.env',
+      'deploy/preproduction-split/.gateway.runtime.env',
+      'deploy/preproduction-split/state/',
+      'deploy/preproduction-split/secrets/'
+    ]) {
+      assert.match(ignore, new RegExp(value.replace(/[./]/g, '\\$&')))
+    }
+    assert.match(dockerIgnore, /deploy\/preproduction-split\/secrets/)
+    assert.equal(fs.existsSync(path.join(deployment, '.worker.runtime.env')), false)
+    assert.equal(fs.existsSync(path.join(deployment, '.gateway.runtime.env')), false)
+  })
+
+  it('exposes only the mTLS Worker and keeps Gateway on loopback', () => {
+    const worker = text('worker.compose.yaml')
+    const gateway = text('gateway.compose.yaml')
+    assert.match(worker, /NODE_ENV: preproduction/)
+    assert.match(worker, /AI_EDITOR_PROVIDER_WORKER_HOST: 0\.0\.0\.0/)
+    assert.match(worker, /AI_EDITOR_PROVIDER_WORKER_PORT: "47930"/)
+    assert.match(worker, /AI_EDITOR_PROVIDER_WORKER_TLS_KEY:/)
+    assert.match(worker, /AI_EDITOR_PROVIDER_WORKER_TLS_CERT:/)
+    assert.match(worker, /AI_EDITOR_PROVIDER_WORKER_TLS_CA:/)
+    assert.match(worker, /AI_EDITOR_PROVIDER_WORKER_EXECUTOR: chatgpt-sub/)
+    assert.doesNotMatch(worker, /HTTPS_PROXY|HTTP_PROXY|openvpn|mihomo|vpn-egress/i)
+    assert.doesNotMatch(worker, /gateway-client-key\.pem/)
+
+    assert.match(gateway, /NODE_ENV: preproduction/)
+    assert.match(gateway, /AI_EDITOR_GATEWAY_HOST: 127\.0\.0\.1/)
+    assert.match(gateway, /AI_EDITOR_GATEWAY_PORT: "47920"/)
+    assert.match(gateway, /AI_EDITOR_PROVIDER_WORKER_ORIGIN:/)
+    assert.match(gateway, /AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_KEY:/)
+    assert.match(gateway, /AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_CERT:/)
+    assert.match(gateway, /AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_CA:/)
+    assert.doesNotMatch(`${worker}\n${gateway}`, /47892/)
+  })
+
+  it('verifies certificate identity, unauthorized rejection and split liveness', () => {
+    const generate = text(path.join('scripts', 'generate-mtls.sh'))
+    const verifyWorker = text(path.join('scripts', 'verify-worker.sh'))
+    const verifyGateway = text(path.join('scripts', 'verify-gateway.sh'))
+    assert.match(generate, /extendedKeyUsage=serverAuth/)
+    assert.match(generate, /extendedKeyUsage=clientAuth/)
+    assert.match(generate, /subjectAltName=IP:\$\{WORKER_IP\},IP:127\.0\.0\.1/)
+    assert.match(verifyWorker, /--cert/)
+    assert.match(verifyWorker, /--key/)
+    assert.match(verifyWorker, /accepted a client without an mTLS certificate/)
+    assert.match(verifyGateway, /127\.0\.0\.1:47920/)
+    assert.match(verifyGateway, /worker_origin/)
+    assert.match(verifyGateway, /public_origin/)
+  })
+})

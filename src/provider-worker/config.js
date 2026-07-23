@@ -7,7 +7,13 @@ export const PROVIDER_WORKER_DEVELOPMENT_PORT = 47930
 
 function parseEnvironment(value) {
   const environment = value || 'development'
-  if (!['development', 'test', 'preview', 'production'].includes(environment)) {
+  if (![
+    'development',
+    'test',
+    'preview',
+    'preproduction',
+    'production'
+  ].includes(environment)) {
     throw new Error(`Unsupported Provider Worker environment: ${environment}`)
   }
   return environment
@@ -36,8 +42,19 @@ function parsePort(value, environment) {
 
 function parseHost(value, environment) {
   const host = value || PROVIDER_WORKER_DEVELOPMENT_HOST
-  if (environment !== 'production' && host !== PROVIDER_WORKER_DEVELOPMENT_HOST) {
+  if (
+    environment !== 'preproduction' &&
+    environment !== 'production' &&
+    host !== PROVIDER_WORKER_DEVELOPMENT_HOST
+  ) {
     throw new Error('Development Provider Worker must bind to 127.0.0.1')
+  }
+  if (
+    environment === 'preproduction' &&
+    host !== '0.0.0.0' &&
+    host !== PROVIDER_WORKER_DEVELOPMENT_HOST
+  ) {
+    throw new Error('Preproduction Provider Worker must bind to 0.0.0.0 or 127.0.0.1')
   }
   return host
 }
@@ -89,8 +106,13 @@ function readTlsConfig(env, environment) {
   if (supplied !== 0 && supplied !== 3) {
     throw new Error('Provider Worker TLS key, certificate, and CA must be configured together')
   }
-  if (environment === 'production' && supplied !== 3) {
-    throw new Error('Production Provider Worker requires mTLS key, certificate, and CA')
+  if (
+    (environment === 'preproduction' || environment === 'production') &&
+    supplied !== 3
+  ) {
+    throw new Error(
+      'Preproduction/production Provider Worker requires mTLS key, certificate, and CA'
+    )
   }
   if (supplied === 0) return null
   for (const [name, file] of Object.entries(paths)) {

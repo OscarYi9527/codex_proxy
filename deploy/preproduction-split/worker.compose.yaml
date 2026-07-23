@@ -1,0 +1,42 @@
+name: torvye-preproduction-worker
+
+services:
+  provider-worker:
+    build:
+      context: ../..
+      dockerfile: deploy/preproduction-split/Dockerfile
+    image: torvye-ai-runtime:preproduction
+    command:
+      - node
+      - src/launcher.js
+      - --mode
+      - provider-worker
+    network_mode: host
+    user: ${AI_EDITOR_PREPRODUCTION_UID:-1000}:${AI_EDITOR_PREPRODUCTION_GID:-1000}
+    env_file:
+      - .worker.runtime.env
+    environment:
+      NODE_ENV: preproduction
+      AI_EDITOR_PROVIDER_WORKER_HOST: 0.0.0.0
+      AI_EDITOR_PROVIDER_WORKER_PORT: "47930"
+      AI_EDITOR_PROVIDER_WORKER_DATA_ROOT: /opt/ai-editor/.ai-editor-dev/preproduction/provider-worker
+      AI_EDITOR_PROVIDER_WORKER_ID: worker-preprod-sg
+      AI_EDITOR_PROVIDER_WORKER_REGION: ap-singapore
+      AI_EDITOR_PROVIDER_WORKER_GATEWAY_IDS: gateway-preprod-cn
+      AI_EDITOR_PROVIDER_WORKER_EXECUTOR: chatgpt-sub
+      AI_EDITOR_PROVIDER_WORKER_TLS_KEY: /run/torvye-mtls/worker-key.pem
+      AI_EDITOR_PROVIDER_WORKER_TLS_CERT: /run/torvye-mtls/worker.pem
+      AI_EDITOR_PROVIDER_WORKER_TLS_CA: /run/torvye-mtls/ca.pem
+      CODEX_PROXY_MAX_BODY_MIB: ${CODEX_PROXY_MAX_BODY_MIB:-64}
+      CODEX_PROXY_BODY_TIMEOUT_MS: ${CODEX_PROXY_BODY_TIMEOUT_MS:-60000}
+    volumes:
+      - ./state/worker:/opt/ai-editor/.ai-editor-dev/preproduction/provider-worker
+      - ./secrets/worker-mtls:/run/torvye-mtls:ro
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

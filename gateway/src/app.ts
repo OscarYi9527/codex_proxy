@@ -239,7 +239,9 @@ export async function createGatewayApp(options: {
       clock,
       ids,
       publicOrigin,
-      config.environment === 'preview' || config.environment === 'production'
+      config.environment === 'preview' ||
+        config.environment === 'preproduction' ||
+        config.environment === 'production'
     )
     const authenticateBearer = requireAccessToken(verifier)
     const authenticateManagement = managementSessionAuthenticator(webviews)

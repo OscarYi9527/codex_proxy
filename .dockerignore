@@ -23,3 +23,7 @@ gateway/admin-web/dist
 deploy/preview/.runtime.env
 deploy/preview/state
 deploy/preview/secrets
+deploy/preproduction-split/.worker.runtime.env
+deploy/preproduction-split/.gateway.runtime.env
+deploy/preproduction-split/state
+deploy/preproduction-split/secrets

@@ -9,6 +9,13 @@ export const PROVIDER_WORKER_DEVELOPMENT_PORT = 47930
 export const DEFAULT_REQUEST_BODY_MAX_MIB = 64
 export const DEFAULT_REQUEST_BODY_TIMEOUT_MS = 60_000
 
+export type GatewayEnvironment =
+  | 'development'
+  | 'test'
+  | 'preview'
+  | 'preproduction'
+  | 'production'
+
 export interface ProviderWorkerGatewayConfig {
   readonly origin: string
   readonly gatewayId: string
@@ -30,7 +37,7 @@ export interface PostgresTlsConfig {
 }
 
 export interface GatewayConfig {
-  readonly environment: 'development' | 'test' | 'preview' | 'production'
+  readonly environment: GatewayEnvironment
   readonly host: string
   readonly port: number
   readonly publicOrigin?: string
@@ -65,6 +72,16 @@ const allowedMockStates = new Set<MockAccountState>([
   'service_unavailable',
   'password_change_required'
 ])
+
+function usesRemoteProviderWorker(environment: GatewayEnvironment): boolean {
+  return environment === 'preproduction' || environment === 'production'
+}
+
+function requiresPublicHttps(environment: GatewayEnvironment): boolean {
+  return environment === 'preview' ||
+    environment === 'preproduction' ||
+    environment === 'production'
+}
 
 function assertTlsVerificationEnabled(env: NodeJS.ProcessEnv): void {
   if (env.NODE_TLS_REJECT_UNAUTHORIZED !== '0') return
@@ -146,14 +163,14 @@ function parseProviderWorker(
     url.hash ||
     url.username ||
     url.password ||
-    (environment === 'production' && url.protocol !== 'https:') ||
+    (usesRemoteProviderWorker(environment) && url.protocol !== 'https:') ||
     (
-      environment !== 'production' &&
+      !usesRemoteProviderWorker(environment) &&
       url.origin !== `http://127.0.0.1:${PROVIDER_WORKER_DEVELOPMENT_PORT}`
     )
   ) {
-    throw new Error(environment === 'production'
-      ? 'Production Provider Worker origin must be an HTTPS origin'
+    throw new Error(usesRemoteProviderWorker(environment)
+      ? 'Preproduction/production Provider Worker origin must be an HTTPS origin'
       : `Development Provider Worker origin must be http://127.0.0.1:${PROVIDER_WORKER_DEVELOPMENT_PORT}`)
   }
   const signingSecret = String(env.AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET || '')
@@ -183,8 +200,10 @@ function parseProviderWorker(
   if (supplied !== 0 && supplied !== 3) {
     throw new Error('Provider Worker client TLS key, certificate, and CA must be configured together')
   }
-  if (environment === 'production' && supplied !== 3) {
-    throw new Error('Production Gateway requires Provider Worker mTLS client credentials')
+  if (usesRemoteProviderWorker(environment) && supplied !== 3) {
+    throw new Error(
+      'Preproduction/production Gateway requires Provider Worker mTLS client credentials'
+    )
   }
   const tls = supplied === 3
     ? {
@@ -311,7 +330,7 @@ export function loadGatewayConfig(
   const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
   const repositoryRoot = path.resolve(options.repositoryRoot || sourceRoot)
   const environment = (env.NODE_ENV || 'development') as GatewayConfig['environment']
-  if (!['development', 'test', 'preview', 'production'].includes(environment)) {
+  if (!['development', 'test', 'preview', 'preproduction', 'production'].includes(environment)) {
     throw new Error(`Unsupported Gateway environment: ${environment}`)
   }
   assertTlsVerificationEnabled(env)
@@ -336,10 +355,12 @@ export function loadGatewayConfig(
     requestedMigrateOnStart !== 'false'
   const authMode = env.AI_EDITOR_GATEWAY_AUTH_MODE === 'mock' ? 'mock' : 'real'
   if (
-    (environment === 'preview' || environment === 'production') &&
+    requiresPublicHttps(environment) &&
     authMode === 'mock'
   ) {
-    throw new Error('Mock authentication is forbidden in preview/production Gateway mode')
+    throw new Error(
+      'Mock authentication is forbidden in preview/preproduction/production Gateway mode'
+    )
   }
   const host = parseHost(env.AI_EDITOR_GATEWAY_HOST, environment)
   const port = parsePort(env.AI_EDITOR_GATEWAY_PORT, GATEWAY_DEVELOPMENT_PORT, environment)
@@ -354,18 +375,17 @@ export function loadGatewayConfig(
     publicUrl.username ||
     publicUrl.password ||
     (
-      (environment === 'preview' || environment === 'production') &&
+      requiresPublicHttps(environment) &&
       publicUrl.protocol !== 'https:'
     ) ||
     (
-      environment !== 'preview' &&
-      environment !== 'production' &&
+      !requiresPublicHttps(environment) &&
       publicUrl.origin !== `http://${host}:${port}`
     )
   ) {
     throw new Error(
-      environment === 'preview' || environment === 'production'
-        ? 'Preview/production Gateway public origin must be an HTTPS origin'
+      requiresPublicHttps(environment)
+        ? 'Preview/preproduction/production Gateway public origin must be an HTTPS origin'
         : 'Development Gateway public origin must match its fixed listener'
     )
   }

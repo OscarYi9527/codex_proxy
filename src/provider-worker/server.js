@@ -189,8 +189,15 @@ function validateTransport(req, config) {
     }
     return
   }
-  if (config.environment === 'production') {
-    throw safeError('worker_mtls_required', 'Production Provider Worker requires mTLS', 500)
+  if (
+    config.environment === 'preproduction' ||
+    config.environment === 'production'
+  ) {
+    throw safeError(
+      'worker_mtls_required',
+      'Preproduction/production Provider Worker requires mTLS',
+      500
+    )
   }
   if (!isLoopback(req.socket.remoteAddress)) {
     throw safeError(

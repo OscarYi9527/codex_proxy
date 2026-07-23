@@ -12,7 +12,9 @@ function config(
     environment,
     host,
     port: 47920,
-    publicOrigin: environment === 'preview' || environment === 'production'
+    publicOrigin: environment === 'preview' ||
+      environment === 'preproduction' ||
+      environment === 'production'
       ? 'https://gateway.example.test'
       : 'http://127.0.0.1:47920',
     dataRoot: '.ai-editor-dev/provider-policy-test',
@@ -30,9 +32,11 @@ describe('plaintext-v1 Provider credential policy (T089)', () => {
 
   it('fails startup and writes outside isolated loopback development', () => {
     expect(() => assertCredentialStorageAllowed(config('production'), 1))
-      .toThrow(/Preview\/production Gateway refuses startup/)
+      .toThrow(/Preview\/preproduction\/production Gateway refuses startup/)
+    expect(() => assertCredentialStorageAllowed(config('preproduction'), 1))
+      .toThrow(/Preview\/preproduction\/production Gateway refuses startup/)
     expect(() => assertCredentialStorageAllowed(config('preview'), 1))
-      .toThrow(/Preview\/production Gateway refuses startup/)
+      .toThrow(/Preview\/preproduction\/production Gateway refuses startup/)
     expect(() => assertCredentialStorageAllowed(config('development', '0.0.0.0'), 1))
       .toThrow(/Non-loopback Gateway refuses startup/)
     expect(() => requireDevelopmentPlaintext(config('production')))

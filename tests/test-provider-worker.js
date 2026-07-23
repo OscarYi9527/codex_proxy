@@ -314,6 +314,42 @@ describe('Provider Worker configuration and signed protocol', () => {
     }), /configured together/)
   })
 
+  it('requires mTLS and permits a public listener in preproduction', () => {
+    const repositoryRoot = path.resolve('D:/example/codex-proxy')
+    const files = createMtlsFixture()
+    const dataRoot = path.join(
+      repositoryRoot,
+      '.ai-editor-dev',
+      'preproduction',
+      'provider-worker'
+    )
+    const config = loadProviderWorkerConfig({
+      NODE_ENV: 'preproduction',
+      AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET: SIGNING_SECRET,
+      AI_EDITOR_PROVIDER_WORKER_EXECUTOR: 'chatgpt-sub',
+      AI_EDITOR_PROVIDER_WORKER_HOST: '0.0.0.0',
+      AI_EDITOR_PROVIDER_WORKER_PORT: '47930',
+      AI_EDITOR_PROVIDER_WORKER_DATA_ROOT: dataRoot,
+      AI_EDITOR_PROVIDER_WORKER_TLS_KEY: files.serverKey,
+      AI_EDITOR_PROVIDER_WORKER_TLS_CERT: files.serverCert,
+      AI_EDITOR_PROVIDER_WORKER_TLS_CA: files.ca
+    }, { repositoryRoot })
+    assert.equal(config.environment, 'preproduction')
+    assert.equal(config.host, '0.0.0.0')
+    assert.equal(config.port, 47930)
+    assert.equal(config.executorMode, 'chatgpt-sub')
+    assert.deepEqual(config.tls, {
+      keyFile: path.resolve(files.serverKey),
+      certFile: path.resolve(files.serverCert),
+      caFile: path.resolve(files.ca)
+    })
+    assert.throws(() => loadProviderWorkerConfig({
+      NODE_ENV: 'preproduction',
+      AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET: SIGNING_SECRET,
+      AI_EDITOR_PROVIDER_WORKER_DATA_ROOT: dataRoot
+    }, { repositoryRoot }), /requires mTLS/)
+  })
+
   it('detects body, timestamp, gateway and signature tampering', () => {
     const now = 1_800_000_000_000
     const body = Buffer.from('{"model":"gpt-worker-mock"}')
@@ -857,6 +893,10 @@ describe('Provider Worker ChatGPT subscription runtime', () => {
       environment: 'production',
       ...options
     }), /KMS\/Secret Manager/)
+    assert.ok(loadWorkerCredentialVault({
+      environment: 'preproduction',
+      ...options
+    }) instanceof DevelopmentWorkerCredentialVault)
   })
 
   it('syncs the pool, rotates cooled accounts, preserves tool IDs and reports usage', async () => {

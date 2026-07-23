@@ -65,7 +65,9 @@ export function createGatewayDatabase(config: GatewayConfig): DatabaseHandle {
     config.environment === 'production' && config.database.dialect === 'postgres'
       ? () => verifyPostgresRuntimeRoleSecurity(db)
       : undefined,
-    config.environment === 'production' ? 'strict' : 'repair-preview'
+    config.environment === 'production' || config.environment === 'preproduction'
+      ? 'strict'
+      : 'repair-preview'
   )
 }
 

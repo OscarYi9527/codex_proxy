@@ -11,10 +11,11 @@ export function assertCredentialStorageAllowed(
   if (plaintextCredentialCount <= 0) return
   if (
     config.environment === 'preview' ||
+    config.environment === 'preproduction' ||
     config.environment === 'production'
   ) {
     throw new Error(
-      'Preview/production Gateway refuses startup while plaintext-v1 Provider credentials exist'
+      'Preview/preproduction/production Gateway refuses startup while plaintext-v1 Provider credentials exist'
     )
   }
   if (config.host !== '127.0.0.1') {
@@ -27,6 +28,7 @@ export function assertCredentialStorageAllowed(
 export function requireDevelopmentPlaintext(config: GatewayConfig): void {
   if (
     config.environment === 'preview' ||
+    config.environment === 'preproduction' ||
     config.environment === 'production' ||
     config.host !== '127.0.0.1'
   ) {

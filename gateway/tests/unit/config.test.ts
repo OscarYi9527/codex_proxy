@@ -119,7 +119,7 @@ describe('Gateway fixed development configuration', () => {
   it('supports a loopback-only HTTPS preview behind an outbound tunnel', () => {
     const preview = loadGatewayConfig({
       NODE_ENV: 'preview',
-      AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: 'https://preview.cocoduck.live',
+      AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: 'https://preview.torvye.com',
       AI_EDITOR_PROVIDER_WORKER_ORIGIN: 'http://127.0.0.1:47930',
       AI_EDITOR_PROVIDER_WORKER_GATEWAY_ID: 'gateway-preview',
       AI_EDITOR_PROVIDER_WORKER_SIGNING_SECRET:
@@ -129,7 +129,7 @@ describe('Gateway fixed development configuration', () => {
       environment: 'preview',
       host: '127.0.0.1',
       port: 47920,
-      publicOrigin: 'https://preview.cocoduck.live',
+      publicOrigin: 'https://preview.torvye.com',
       authMode: 'real',
       providerWorker: {
         origin: 'http://127.0.0.1:47930',
@@ -139,16 +139,16 @@ describe('Gateway fixed development configuration', () => {
     })
     expect(() => loadGatewayConfig({
       NODE_ENV: 'preview',
-      AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: 'http://preview.cocoduck.live'
+      AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: 'http://preview.torvye.com'
     }, { repositoryRoot })).toThrow(/HTTPS origin/)
     expect(() => loadGatewayConfig({
       NODE_ENV: 'preview',
-      AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: 'https://preview.cocoduck.live',
+      AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: 'https://preview.torvye.com',
       AI_EDITOR_GATEWAY_HOST: '0.0.0.0'
     }, { repositoryRoot })).toThrow(/127\.0\.0\.1/)
     expect(() => loadGatewayConfig({
       NODE_ENV: 'preview',
-      AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: 'https://preview.cocoduck.live',
+      AI_EDITOR_GATEWAY_PUBLIC_ORIGIN: 'https://preview.torvye.com',
       AI_EDITOR_GATEWAY_AUTH_MODE: 'mock'
     }, { repositoryRoot })).toThrow(/Mock authentication is forbidden/)
   })

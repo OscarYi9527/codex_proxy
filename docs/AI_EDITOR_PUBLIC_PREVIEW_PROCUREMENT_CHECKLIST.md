@@ -12,9 +12,9 @@ No purchase is required to complete the first temporary public preview:
 - existing authorized test Provider account;
 - existing Clash subscription, if it is still authorized and usable.
 
-A free Cloudflare account plus control of `cocoduck.live` is required only when
+A free Cloudflare account plus control of `torvye.com` is required only when
 switching from a random Quick Tunnel URL to
-`https://preview.cocoduck.live`.
+`https://preview.torvye.com`.
 
 ## Before inviting external preview testers
 
@@ -37,14 +37,15 @@ The recorded short-term production architecture requires:
 1. **Domestic Gateway host**
    - initial size: 4 vCPU, 8 GB RAM, 100 GB SSD/data disk;
    - fixed public IP and at least 5–10 Mbps usable bandwidth;
-   - eligible for the `cocoduck.live` ICP filing and HTTPS service;
+   - eligible for the `torvye.com` ICP filing and HTTPS service;
    - runs SafeLine, Gateway and short-term PostgreSQL.
 2. **Authorized-region Provider Worker**
    - initial size: 2 vCPU, 4 GB RAM, 40–80 GB disk;
    - fixed public IP in a Provider-supported region;
    - only its mTLS Gateway endpoint is exposed.
 3. **Domain and certificate**
-   - keep `cocoduck.live` if ownership is confirmed;
+   - use `gateway.torvye.com` for the product Gateway and reserve
+     `worker.torvye.com` for the mTLS-restricted Provider Worker endpoint;
    - ICP filing for a mainland ingress;
    - ACME/TLS certificate can initially be free.
 4. **Secret management**

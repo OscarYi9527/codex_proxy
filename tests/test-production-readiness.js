@@ -15,7 +15,7 @@ function completeDecision() {
     gateway: {
       hostingProvider: 'domestic-cloud',
       region: 'mainland-region',
-      publicOrigin: 'https://gateway.cocoduck.live',
+      publicOrigin: 'https://gateway.torvye.com',
       compute: {
         vcpu: 4,
         memoryGiB: 8,
@@ -36,7 +36,7 @@ function completeDecision() {
       hostingProvider: 'authorized-cloud',
       region: 'provider-authorized-region',
       providerRegionAuthorized: true,
-      origin: 'https://worker.cocoduck.live',
+      origin: 'https://worker.torvye.com',
       compute: {
         vcpu: 2,
         memoryGiB: 4,

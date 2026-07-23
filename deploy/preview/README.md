@@ -122,7 +122,7 @@ the Cloudflare credentials JSON beside it with mode `0600`. Then run:
 
 ```bash
 ./scripts/start-preview.sh \
-  --named https://preview.cocoduck.live \
+  --named https://preview.torvye.com \
   --executor mock
 ```
 

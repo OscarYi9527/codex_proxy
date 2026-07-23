@@ -172,7 +172,17 @@ export class GatewayClient {
         'cache-control': 'no-store',
         'x-content-type-options': 'nosniff'
       }
-      for (const name of ['content-type', 'x-request-id', 'x-codex-proxy-request-id']) {
+      // Preserve only safe routing metadata from the central Gateway. This
+      // lets the local Edge and product diagnostics distinguish the actual
+      // Provider Worker route from unrelated local processes such as the
+      // shared standalone Proxy on 47892.
+      for (const name of [
+        'content-type',
+        'x-request-id',
+        'x-codex-proxy-request-id',
+        'x-ai-editor-provider-id',
+        'x-ai-editor-idempotent-replay'
+      ]) {
         const value = response.headers.get(name)
         if (value) headers[name] = value
       }

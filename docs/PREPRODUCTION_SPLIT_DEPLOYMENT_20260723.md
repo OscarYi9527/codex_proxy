@@ -14,7 +14,7 @@ AI Editor -> China Gateway (114.132.161.56)
 Current temporary public Gateway origin:
 
 ```text
-https://manager-oak-carmen-despite.trycloudflare.com
+https://peace-flashers-forum-mas.trycloudflare.com
 ```
 
 This is a Cloudflare Quick Tunnel for preproduction only. It must not be
@@ -26,7 +26,7 @@ Proxy branch:
 
 ```text
 codex/subscription-account-management
-3aa1d40df65b7ba22a643c3e0636046d7470c7a8
+88e1e49bdb4ca64d319655ec99b832e7eaeb42d0
 ```
 
 The final source revision includes:
@@ -72,7 +72,20 @@ delete them until the new route has completed the intended soak period.
 
 The next production-only gates remain separate:
 
-1. stable Gateway DNS/TLS (`gateway.torvye.com`);
+1. complete the `torvye.com` ICP filing, then re-enable the already validated
+   stable Gateway DNS/TLS path (`gateway.torvye.com`);
 2. named Cloudflare Tunnel or equivalent production ingress;
 3. PostgreSQL and external secret/KMS vault;
 4. final Code product `edge` target and release acceptance.
+
+## 2026-07-24 direct-ingress rollback update
+
+The stable origin completed DNS, TCP 80/443, Caddy, Let's Encrypt TLS, HSTS
+and Worker mTLS validation. Tencent Cloud then intercepted the unfiled
+mainland domain, so direct Caddy was stopped and the temporary Quick Tunnel
+was restored. This is an ICP filing blocker, not a Gateway/Worker defect.
+
+The deployed `start-gateway.sh` now waits up to 240 seconds for a newly issued
+Quick Tunnel hostname to propagate before it publishes the origin. Windows,
+the domestic host and the Singapore host all passed `/live` after the script
+update; no running service was restarted for the update.

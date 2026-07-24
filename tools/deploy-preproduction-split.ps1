@@ -89,6 +89,9 @@ function Invoke-DetachedReleaseStatus(
 			-RedirectStandardOutput $standardOutput `
 			-RedirectStandardError $standardError `
 			-PassThru
+		# Windows PowerShell can otherwise return a null ExitCode after the
+		# timed WaitForExit overload, even though the child exited normally.
+		$null = $process.Handle
 		if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
 			Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
 			$process.WaitForExit(5000) | Out-Null
@@ -99,6 +102,8 @@ function Invoke-DetachedReleaseStatus(
 				error = @()
 			}
 		}
+		$process.WaitForExit()
+		$process.Refresh()
 		return [pscustomobject]@{
 			timedOut = $false
 			exitCode = $process.ExitCode

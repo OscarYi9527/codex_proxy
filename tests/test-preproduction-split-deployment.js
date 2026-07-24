@@ -216,7 +216,12 @@ describe('split preproduction deployment boundary', () => {
     assert.match(deploymentTool, /nohup bash/)
     assert.match(deploymentTool, /DeploymentTimeoutMinutes/)
     assert.match(deploymentTool, /function Invoke-DetachedReleaseStatus/)
+    assert.match(deploymentTool, /\$null = \$process\.Handle/)
     assert.match(deploymentTool, /WaitForExit\(\$TimeoutSeconds \* 1000\)/)
+    assert.ok(
+      deploymentTool.indexOf('$null = $process.Handle') <
+      deploymentTool.indexOf('$process.WaitForExit($TimeoutSeconds * 1000)')
+    )
     assert.match(deploymentTool, /WindowStyle Hidden/)
     assert.match(deploymentTool, /preserved \$remoteDirectory for recovery/)
     assert.match(deploymentTool, /\$remoteCompleted/)

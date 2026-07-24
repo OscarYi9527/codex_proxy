@@ -59,32 +59,23 @@ function Remove-LocalReleaseFile([string]$Path) {
 	}
 }
 
-function Invoke-DetachedReleaseStatus(
-	[string]$HostName,
-	[string]$RunnerPath,
-	[int]$TimeoutSeconds = 40
+function Invoke-NativeProcessWithTimeout(
+	[string]$FilePath,
+	[string[]]$Arguments,
+	[int]$TimeoutSeconds
 ) {
 	$probeId = [Guid]::NewGuid().ToString('N')
 	$standardOutput = Join-Path (
 		[IO.Path]::GetTempPath()
-	) "torvye-release-ssh-$probeId.out"
+	) "torvye-release-native-$probeId.out"
 	$standardError = Join-Path (
 		[IO.Path]::GetTempPath()
-	) "torvye-release-ssh-$probeId.err"
+	) "torvye-release-native-$probeId.err"
 	$process = $null
 	try {
 		$process = Start-Process `
-			-FilePath 'ssh.exe' `
-			-ArgumentList @(
-				'-o', 'BatchMode=yes',
-				'-o', 'ConnectTimeout=20',
-				'-o', 'ServerAliveInterval=15',
-				'-o', 'ServerAliveCountMax=2',
-				$HostName,
-				'bash',
-				$RunnerPath,
-				'--status'
-			) `
+			-FilePath $FilePath `
+			-ArgumentList $Arguments `
 			-WindowStyle Hidden `
 			-RedirectStandardOutput $standardOutput `
 			-RedirectStandardError $standardError `
@@ -125,6 +116,93 @@ function Invoke-DetachedReleaseStatus(
 		Remove-LocalReleaseFile -Path $standardOutput
 		Remove-LocalReleaseFile -Path $standardError
 	}
+}
+
+function Invoke-DetachedReleaseStatus(
+	[string]$HostName,
+	[string]$RunnerPath,
+	[int]$TimeoutSeconds = 40
+) {
+	return Invoke-NativeProcessWithTimeout `
+		-FilePath 'ssh.exe' `
+		-Arguments @(
+			'-o', 'BatchMode=yes',
+			'-o', 'ConnectTimeout=20',
+			'-o', 'ServerAliveInterval=15',
+			'-o', 'ServerAliveCountMax=2',
+			$HostName,
+			'bash',
+			$RunnerPath,
+			'--status'
+		) `
+		-TimeoutSeconds $TimeoutSeconds
+}
+
+function Invoke-SshWithRetry(
+	[string]$HostName,
+	[string[]]$RemoteArguments,
+	[int]$Attempts = 5
+) {
+	$lastOutput = @()
+	for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+		$sshArguments = @(
+			'-o', 'BatchMode=yes',
+			'-o', 'ConnectTimeout=20',
+			'-o', 'ServerAliveInterval=15',
+			'-o', 'ServerAliveCountMax=2',
+			$HostName
+		) + $RemoteArguments
+		$result = Invoke-NativeProcessWithTimeout `
+			-FilePath 'ssh.exe' `
+			-Arguments $sshArguments `
+			-TimeoutSeconds 60
+		$lastOutput = @($result.output) + @($result.error)
+		if (-not $result.timedOut -and $result.exitCode -eq 0) {
+			return [pscustomobject]@{
+				output = @($result.output)
+				attempt = $attempt
+			}
+		}
+		if ($attempt -lt $Attempts) {
+			Start-Sleep -Seconds ([Math]::Min($attempt * 2, 10))
+		}
+	}
+	throw (
+		"SSH command failed on $HostName after $Attempts attempts: " +
+		"$($lastOutput -join [Environment]::NewLine)"
+	)
+}
+
+function Invoke-ScpWithRetry(
+	[string[]]$LocalPaths,
+	[string]$Destination,
+	[int]$Attempts = 5
+) {
+	$lastOutput = @()
+	for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+		$scpArguments = @(
+			'-q',
+			'-o', 'BatchMode=yes',
+			'-o', 'ConnectTimeout=20',
+			'-o', 'ServerAliveInterval=15',
+			'-o', 'ServerAliveCountMax=2'
+		) + $LocalPaths + @($Destination)
+		$result = Invoke-NativeProcessWithTimeout `
+			-FilePath 'scp.exe' `
+			-Arguments $scpArguments `
+			-TimeoutSeconds 120
+		$lastOutput = @($result.output) + @($result.error)
+		if (-not $result.timedOut -and $result.exitCode -eq 0) {
+			return
+		}
+		if ($attempt -lt $Attempts) {
+			Start-Sleep -Seconds ([Math]::Min($attempt * 2, 10))
+		}
+	}
+	throw (
+		"SCP upload failed after $Attempts attempts: " +
+		"$($lastOutput -join [Environment]::NewLine)"
+	)
 }
 
 if (-not $AllowDirty) {
@@ -216,46 +294,35 @@ try {
 		$remoteExitCode = "$remoteDirectory/exit-code"
 		$remoteExitTemp = "$remoteDirectory/exit-code.tmp"
 		$remotePid = "$remoteDirectory/launcher.pid"
+		$remotePidTemp = "$remoteDirectory/launcher.pid.tmp"
+		$remoteLaunchLock = "$remoteDirectory/launch.lock"
 		$remoteCreated = $false
 		$remoteStarted = $false
 		$remoteCompleted = $false
 		try {
-			& ssh.exe `
-				-o BatchMode=yes `
-				-o ConnectTimeout=20 `
-				$target.host `
-				"umask 077; mkdir -m 700 -- '$remoteDirectory'"
-			if ($LASTEXITCODE -ne 0) {
-				throw "Unable to create the remote staging directory on $($target.host)."
-			}
 			$remoteCreated = $true
+			$createCommand = "umask 077; mkdir -p -- '$remoteDirectory'; " +
+				"chmod 700 '$remoteDirectory'"
+			Invoke-SshWithRetry `
+				-HostName $target.host `
+				-RemoteArguments @($createCommand) | Out-Null
 			$remoteDestination = '{0}:{1}/' -f $target.host, $remoteDirectory
-			& scp.exe -q `
-				$archive `
-				$manifest `
-				$installer `
-				$runner `
-				$remoteDestination
-			if ($LASTEXITCODE -ne 0) {
-				throw "Upload to $($target.host) failed."
-			}
-			$launchCommand = "cd '$remoteDirectory'; " +
-				"nohup bash '$remoteRunner' '$remoteInstaller' '$($target.role)' " +
-				"'$remoteArchive' '$remoteManifest' '$commit' " +
-				">'$remoteLauncherLog' 2>&1 < /dev/null & " +
-				"printf '%s\n' " + '$!' + " >'$remotePid'"
+			Invoke-ScpWithRetry `
+				-LocalPaths @($archive, $manifest, $installer, $runner) `
+				-Destination $remoteDestination
 			$remoteStarted = $true
-			& ssh.exe `
-				-o BatchMode=yes `
-				-o ConnectTimeout=20 `
-				$target.host `
-				$launchCommand
-			if ($LASTEXITCODE -ne 0) {
-				Write-Warning (
-					"Launch connection to $($target.host) closed unexpectedly; " +
-					'the detached release status will still be polled.'
-				)
-			}
+			Invoke-SshWithRetry `
+				-HostName $target.host `
+				-RemoteArguments @(
+					'bash',
+					$remoteRunner,
+					'--launch',
+					$remoteInstaller,
+					$target.role,
+					$remoteArchive,
+					$remoteManifest,
+					$commit
+				) | Out-Null
 
 			$deadline = [DateTimeOffset]::UtcNow.AddMinutes($DeploymentTimeoutMinutes)
 			$exitCode = $null
@@ -293,16 +360,12 @@ try {
 				)
 			}
 
-			$releaseTail = & ssh.exe `
-				-o BatchMode=yes `
-				-o ConnectTimeout=20 `
-				$target.host `
-				tail `
-				-n 120 `
-				$remoteInstallLog 2>&1
-			if ($LASTEXITCODE -eq 0) {
-				$releaseTail | ForEach-Object { Write-Host $_ }
-			} else {
+			try {
+				$tailResult = Invoke-SshWithRetry `
+					-HostName $target.host `
+					-RemoteArguments @('tail', '-n', '120', $remoteInstallLog)
+				$tailResult.output | ForEach-Object { Write-Host $_ }
+			} catch {
 				Write-Warning "Unable to retrieve the final release log from $($target.host)."
 			}
 			if ($exitCode -ne 0) {
@@ -313,10 +376,14 @@ try {
 				$cleanupCommand = "rm -f -- '$remoteArchive' '$remoteManifest' " +
 					"'$remoteInstaller' '$remoteRunner' '$remoteInstallLog' " +
 					"'$remoteLauncherLog' '$remoteExitCode' '$remoteExitTemp' " +
-					"'$remotePid'; rmdir -- '$remoteDirectory'"
-				& ssh.exe -o BatchMode=yes -o ConnectTimeout=20 $target.host `
-					$cleanupCommand
-				if ($LASTEXITCODE -ne 0 -and -not $deploymentFailure) {
+					"'$remotePid' '$remotePidTemp' '$remoteLaunchLock'; " +
+					"rmdir -- '$remoteDirectory' 2>/dev/null || " +
+					"test ! -d '$remoteDirectory'"
+				try {
+					Invoke-SshWithRetry `
+						-HostName $target.host `
+						-RemoteArguments @($cleanupCommand) | Out-Null
+				} catch {
 					Write-Warning "Remote temporary-file cleanup failed on $($target.host)."
 				}
 			} elseif ($remoteCreated) {

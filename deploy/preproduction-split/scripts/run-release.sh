@@ -8,7 +8,34 @@ RUN_ROOT="$(
 EXIT_FILE="${RUN_ROOT}/exit-code"
 EXIT_TEMP="${RUN_ROOT}/exit-code.tmp"
 PID_FILE="${RUN_ROOT}/launcher.pid"
+PID_TEMP="${RUN_ROOT}/launcher.pid.tmp"
+LAUNCH_LOCK="${RUN_ROOT}/launch.lock"
 INSTALL_LOG="${RUN_ROOT}/install.log"
+LAUNCHER_LOG="${RUN_ROOT}/launcher.log"
+
+if [[ "${1:-}" == --launch ]]; then
+  shift
+  exec 8>"${LAUNCH_LOCK}"
+  flock -x 8
+  if [[ -s "${EXIT_FILE}" ]]; then
+    printf 'DONE:%s\n' "$(cat "${EXIT_FILE}")"
+    exit 0
+  fi
+  if [[ -s "${PID_FILE}" ]] &&
+    kill -0 "$(cat "${PID_FILE}")" 2>/dev/null; then
+    printf 'RUNNING\n'
+    exit 0
+  fi
+  rm -f -- "${PID_FILE}" "${PID_TEMP}" "${EXIT_FILE}" "${EXIT_TEMP}"
+  nohup bash "${BASH_SOURCE[0]}" "$@" \
+    > "${LAUNCHER_LOG}" 2>&1 < /dev/null &
+  child_pid=$!
+  printf '%s\n' "${child_pid}" > "${PID_TEMP}"
+  chmod 600 "${PID_TEMP}"
+  mv -f -- "${PID_TEMP}" "${PID_FILE}"
+  printf 'STARTED:%s\n' "${child_pid}"
+  exit 0
+fi
 
 if [[ "${1:-}" == --status ]]; then
   if [[ -s "${EXIT_FILE}" ]]; then

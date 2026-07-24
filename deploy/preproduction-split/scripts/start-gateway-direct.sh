@@ -116,14 +116,14 @@ for _ in $(seq 1 90); do
   if docker_compose logs --no-color --since 30s caddy-direct 2>&1 |
     grep -Eq 'Timeout during connect|likely firewall problem'; then
     echo "ACME cannot reach ${expected_ipv4} on TCP 80/443. Allow both ports in the domestic cloud security group, then rerun the cutover." >&2
-    exit 1
+    false
   fi
   sleep 2
 done
 if [[ "${direct_ready}" != true ]]; then
   echo "Stable direct TLS did not become ready within the bounded wait." >&2
   docker_compose logs --no-color --tail 80 caddy-direct >&2 || true
-  exit 1
+  false
 fi
 curl --fail --silent --show-error --max-time 20 \
   --tlsv1.2 "${origin}/live" >/dev/null

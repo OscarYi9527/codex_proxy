@@ -100,6 +100,8 @@ describe('split preproduction deployment boundary', () => {
     assert.match(verify, /strict-transport-security/)
     assert.match(verify, /worker_origin/)
     assert.match(audit, /dnsReady/)
+    assert.match(audit, /getent ahostsv4/)
+    assert.match(audit, /\) \|\| true/)
     assert.match(audit, /mvpCapacityReady/)
     assert.match(audit, /longTermCapacityReady/)
     assert.match(audit, /"status": "\$\{status\}"/)

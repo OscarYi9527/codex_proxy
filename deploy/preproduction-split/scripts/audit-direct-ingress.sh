@@ -32,10 +32,12 @@ memory_mib="$(awk '/MemTotal/ { print int($2 / 1024) }' /proc/meminfo)"
 disk_gib="$(df -BG --output=avail / | tail -n 1 | tr -dc '0-9')"
 cpu_count="$(nproc)"
 dns_ipv4="$(
-  getent ahostsv4 "${hostname}" 2>/dev/null |
-    awk '{ print $1 }' |
-    sort -u |
-    paste -sd, -
+  (
+    getent ahostsv4 "${hostname}" 2>/dev/null |
+      awk '{ print $1 }' |
+      sort -u |
+      paste -sd, -
+  ) || true
 )"
 gateway_listener="$(
   ss -lntH |

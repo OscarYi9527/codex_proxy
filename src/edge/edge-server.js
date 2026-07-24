@@ -119,6 +119,7 @@ export function readJson(req, {
       () => fail(bodyError(408, 'request_timeout', `Request body upload timed out after ${timeout} ms`)),
       timeout
     )
+    timer.unref?.()
     req.on('data', onData)
     req.once('end', onEnd)
     req.once('error', onError)

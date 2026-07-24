@@ -42,7 +42,6 @@ fi
 
 install -d -m 700 "${DEPLOY_DIR}/state/gateway"
 chmod 600 "${ENV_FILE}" "${DEPLOY_DIR}/secrets/gateway-mtls/"*.pem
-set_env AI_EDITOR_PREPRODUCTION_PUBLIC_ORIGIN https://pending.invalid
 docker_compose up -d --force-recreate cloudflared-quick
 
 public_origin=""
@@ -61,6 +60,27 @@ if [[ -z "${public_origin}" ]]; then
   docker_compose logs --no-color --tail 100 cloudflared-quick >&2
   exit 1
 fi
+
+# A Quick Tunnel hostname can be printed several minutes before mainland DNS
+# resolvers and the Cloudflare edge can serve it. Do not mutate the Gateway
+# audience while the new hostname is still propagating; doing so strands
+# existing Edge sessions on an origin that is not reachable yet.
+public_ready=false
+for _ in $(seq 1 120); do
+  if getent ahostsv4 "${public_origin#https://}" >/dev/null 2>&1 &&
+    curl --fail --silent --show-error --max-time 10 \
+      "${public_origin}/live" >/dev/null 2>&1; then
+    public_ready=true
+    break
+  fi
+  sleep 2
+done
+if [[ "${public_ready}" != true ]]; then
+  echo "Cloudflare Quick Tunnel hostname did not become externally reachable within 240 seconds: ${public_origin}" >&2
+  docker_compose logs --no-color --tail 100 cloudflared-quick >&2
+  exit 1
+fi
+
 set_env AI_EDITOR_PREPRODUCTION_PUBLIC_ORIGIN "${public_origin}"
 printf '%s\n' "${public_origin}" > "${DEPLOY_DIR}/state/gateway-public-origin.txt"
 chmod 600 "${DEPLOY_DIR}/state/gateway-public-origin.txt"

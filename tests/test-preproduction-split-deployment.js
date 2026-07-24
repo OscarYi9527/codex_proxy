@@ -67,6 +67,7 @@ describe('split preproduction deployment boundary', () => {
 
   it('verifies certificate identity, unauthorized rejection and split liveness', () => {
     const generate = text(path.join('scripts', 'generate-mtls.sh'))
+    const startGateway = text(path.join('scripts', 'start-gateway.sh'))
     const verifyWorker = text(path.join('scripts', 'verify-worker.sh'))
     const verifyGateway = text(path.join('scripts', 'verify-gateway.sh'))
     assert.match(generate, /extendedKeyUsage=serverAuth/)
@@ -78,6 +79,13 @@ describe('split preproduction deployment boundary', () => {
     assert.match(verifyGateway, /127\.0\.0\.1:47920/)
     assert.match(verifyGateway, /worker_origin/)
     assert.match(verifyGateway, /public_origin/)
+    assert.match(startGateway, /getent ahostsv4/)
+    assert.match(startGateway, /public_ready=false/)
+    assert.match(startGateway, /externally reachable within 240 seconds/)
+    assert.ok(
+      startGateway.indexOf('public_ready=false') <
+      startGateway.indexOf('set_env AI_EDITOR_PREPRODUCTION_PUBLIC_ORIGIN "${public_origin}"')
+    )
   })
 
   it('fails closed before replacing Quick Tunnel with stable direct TLS', () => {

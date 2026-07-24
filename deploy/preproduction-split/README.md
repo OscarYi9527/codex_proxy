@@ -56,6 +56,65 @@ origin in `state/gateway-public-origin.txt`. Quick Tunnel is a preproduction
 connectivity mechanism only and must not be promoted as the final
 `gateway.torvye.com` origin.
 
+## Stable mainland direct ingress for the invitation MVP
+
+After the domestic Gateway has a fixed public IPv4 and the product hostname
+has been added to authoritative DNS, the same isolated Gateway can replace the
+Quick Tunnel without copying state back to a local machine:
+
+```text
+AI Editor Edge
+  -> https://gateway.torvye.com
+  -> Caddy TLS ingress on the domestic Gateway
+  -> loopback Gateway 127.0.0.1:47920
+  -> mTLS + signed request
+  -> Singapore Provider Worker
+```
+
+This is the short-term invitation-only MVP ingress. It deliberately retains
+the preproduction SQLite/envelope boundary and the hard 30-account cap. The
+long-term production gate still requires PostgreSQL, KMS/Secret Manager,
+SafeLine or an equivalent WAF, off-host backups and the 72-hour acceptance.
+
+Add these Git-ignored values to `.gateway.runtime.env`:
+
+```text
+AI_EDITOR_DIRECT_PUBLIC_ORIGIN=https://gateway.torvye.com
+AI_EDITOR_DIRECT_EXPECTED_IPV4=114.132.161.56
+AI_EDITOR_CADDY_IMAGE=mirror.ccs.tencentyun.com/library/caddy:2.10.2-alpine
+```
+
+Before cutover, create this authoritative DNS record and wait for public
+resolvers to return it:
+
+```text
+gateway.torvye.com  A  114.132.161.56
+```
+
+The scripts fail before changing the runtime when DNS is absent or points
+elsewhere:
+
+```bash
+./deploy/preproduction-split/scripts/audit-direct-ingress.sh
+./deploy/preproduction-split/scripts/start-gateway-direct.sh
+./deploy/preproduction-split/scripts/verify-gateway-direct.sh
+```
+
+`start-gateway-direct.sh` keeps a mode-0600 runtime backup, starts Caddy,
+waits for a publicly trusted certificate, recreates the Gateway with the new
+public origin, verifies local/public/Worker health and only then stops the
+Quick Tunnel. Any failure before completion restores the old runtime origin
+and leaves the existing Gateway state intact.
+
+The domestic deployment defaults to Tencent Cloud's Docker Hub mirror because
+direct pulls from `registry-1.docker.io` can time out on mainland hosts. The
+image remains the official Caddy `2.10.2-alpine` content; operators may
+override `AI_EDITOR_CADDY_IMAGE` with an approved private registry mirror.
+
+Only ports 80/443 and operator SSH should be allowed by the cloud security
+group. Gateway port 47920 remains loopback-only. The Worker keeps its existing
+47930 source allowlist and mTLS requirement.
+
 Do not stop the VMware deployment or its US VPN until all of these pass:
 
 1. Worker mTLS and unsigned-client rejection.

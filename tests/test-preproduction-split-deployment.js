@@ -51,6 +51,17 @@ describe('split preproduction deployment boundary', () => {
     assert.match(gateway, /AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_CERT:/)
     assert.match(gateway, /AI_EDITOR_PROVIDER_WORKER_CLIENT_TLS_CA:/)
     assert.match(gateway, /DEBIAN_MIRROR: \$\{AI_EDITOR_DEBIAN_MIRROR:-deb\.debian\.org\}/)
+    assert.match(
+      gateway,
+      /image: \$\{AI_EDITOR_CADDY_IMAGE:-mirror\.ccs\.tencentyun\.com\/library\/caddy:2\.10\.2-alpine\}/
+    )
+    assert.match(gateway, /AI_EDITOR_GATEWAY_HOSTNAME:/)
+    assert.match(
+      gateway,
+      /user: \$\{AI_EDITOR_PREPRODUCTION_UID:-1000\}:\$\{AI_EDITOR_PREPRODUCTION_GID:-1000\}/
+    )
+    assert.match(gateway, /127\.0\.0\.1:47920/)
+    assert.match(gateway, /NET_BIND_SERVICE/)
     assert.doesNotMatch(`${worker}\n${gateway}`, /47892/)
   })
 
@@ -67,5 +78,31 @@ describe('split preproduction deployment boundary', () => {
     assert.match(verifyGateway, /127\.0\.0\.1:47920/)
     assert.match(verifyGateway, /worker_origin/)
     assert.match(verifyGateway, /public_origin/)
+  })
+
+  it('fails closed before replacing Quick Tunnel with stable direct TLS', () => {
+    const caddy = text('Caddyfile')
+    const audit = text(path.join('scripts', 'audit-direct-ingress.sh'))
+    const start = text(path.join('scripts', 'start-gateway-direct.sh'))
+    const verify = text(path.join('scripts', 'verify-gateway-direct.sh'))
+    const readme = text('README.md')
+
+    assert.match(caddy, /\{\$AI_EDITOR_GATEWAY_HOSTNAME\}/)
+    assert.match(caddy, /reverse_proxy 127\.0\.0\.1:47920/)
+    assert.match(caddy, /Strict-Transport-Security/)
+    assert.match(start, /DNS is not ready/)
+    assert.match(start, /direct-cutover-backups/)
+    assert.match(start, /restoring the previous Gateway origin/)
+    assert.match(start, /verify-gateway-direct\.sh/)
+    assert.match(start, /stop cloudflared-quick/)
+    assert.match(verify, /-checkhost/)
+    assert.match(verify, /-checkend 1209600/)
+    assert.match(verify, /strict-transport-security/)
+    assert.match(verify, /worker_origin/)
+    assert.match(audit, /dnsReady/)
+    assert.match(audit, /mvpCapacityReady/)
+    assert.match(audit, /longTermCapacityReady/)
+    assert.match(audit, /"status": "\$\{status\}"/)
+    assert.match(readme, /gateway\.torvye\.com  A  114\.132\.161\.56/)
   })
 })

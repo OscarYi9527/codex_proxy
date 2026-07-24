@@ -59,3 +59,24 @@ services:
       - ${AI_EDITOR_CLOUDFLARED_PROTOCOL:-http2}
       - --url
       - http://127.0.0.1:47920
+
+  caddy-direct:
+    image: ${AI_EDITOR_CADDY_IMAGE:-mirror.ccs.tencentyun.com/library/caddy:2.10.2-alpine}
+    network_mode: host
+    user: ${AI_EDITOR_PREPRODUCTION_UID:-1000}:${AI_EDITOR_PREPRODUCTION_GID:-1000}
+    restart: unless-stopped
+    environment:
+      AI_EDITOR_GATEWAY_HOSTNAME: ${AI_EDITOR_GATEWAY_HOSTNAME:-gateway.torvye.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./state/caddy/data:/data
+      - ./state/caddy/config:/config
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE

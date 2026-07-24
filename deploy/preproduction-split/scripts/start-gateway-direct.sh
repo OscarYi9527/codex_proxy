@@ -106,13 +106,25 @@ set_env AI_EDITOR_GATEWAY_HOSTNAME "${hostname}"
 
 docker_compose pull caddy-direct
 docker_compose up -d --force-recreate caddy-direct
+direct_ready=false
 for _ in $(seq 1 90); do
-  if curl --fail --silent --show-error --max-time 10 \
+  if curl --fail --silent --show-error --max-time 3 \
     --tlsv1.2 "${origin}/live" >/dev/null 2>&1; then
+    direct_ready=true
     break
+  fi
+  if docker_compose logs --no-color --since 30s caddy-direct 2>&1 |
+    grep -Eq 'Timeout during connect|likely firewall problem'; then
+    echo "ACME cannot reach ${expected_ipv4} on TCP 80/443. Allow both ports in the domestic cloud security group, then rerun the cutover." >&2
+    exit 1
   fi
   sleep 2
 done
+if [[ "${direct_ready}" != true ]]; then
+  echo "Stable direct TLS did not become ready within the bounded wait." >&2
+  docker_compose logs --no-color --tail 80 caddy-direct >&2 || true
+  exit 1
+fi
 curl --fail --silent --show-error --max-time 20 \
   --tlsv1.2 "${origin}/live" >/dev/null
 

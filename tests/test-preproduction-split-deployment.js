@@ -93,6 +93,8 @@ describe('split preproduction deployment boundary', () => {
     assert.match(start, /DNS is not ready/)
     assert.match(start, /direct-cutover-backups/)
     assert.match(start, /restoring the previous Gateway origin/)
+    assert.match(start, /ACME cannot reach/)
+    assert.match(start, /security group/)
     assert.match(start, /verify-gateway-direct\.sh/)
     assert.match(start, /stop cloudflared-quick/)
     assert.match(verify, /-checkhost/)

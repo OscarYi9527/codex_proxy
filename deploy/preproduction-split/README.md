@@ -91,6 +91,12 @@ resolvers to return it:
 gateway.torvye.com  A  114.132.161.56
 ```
 
+The Tencent Cloud security group attached to the Gateway must also allow
+inbound TCP 80 and 443 from `0.0.0.0/0` (and `::/0` only when IPv6 is actually
+configured). Keep 47920 closed at the cloud boundary; it is a loopback
+application port. ACME certificate issuance cannot succeed when 80/443 are
+merely listed in a plan but are not present as effective inbound rules.
+
 The scripts fail before changing the runtime when DNS is absent or points
 elsewhere:
 
@@ -105,6 +111,10 @@ waits for a publicly trusted certificate, recreates the Gateway with the new
 public origin, verifies local/public/Worker health and only then stops the
 Quick Tunnel. Any failure before completion restores the old runtime origin
 and leaves the existing Gateway state intact.
+
+An ACME “Timeout during connect” is detected from Caddy logs and fails fast
+with the security-group repair instruction instead of waiting through Caddy's
+long retry schedule.
 
 The domestic deployment defaults to Tencent Cloud's Docker Hub mirror because
 direct pulls from `registry-1.docker.io` can time out on mainland hosts. The

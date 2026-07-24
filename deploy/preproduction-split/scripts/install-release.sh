@@ -245,7 +245,7 @@ if [[ -f "${DEPLOY_ROOT}/.deployed-commit" ]]; then
   cp -- "${DEPLOY_ROOT}/.deployed-commit" "${BACKUP}/deployed-commit.before"
 fi
 : > "${BACKUP_CANDIDATES}"
-cat "${MANIFEST}" >> "${BACKUP_CANDIDATES}"
+cat "${NEW_FILES}" >> "${BACKUP_CANDIDATES}"
 if [[ -f "${PREVIOUS_FILES}" ]]; then
   cat "${PREVIOUS_FILES}" >> "${BACKUP_CANDIDATES}"
 fi
@@ -262,13 +262,13 @@ SWITCH_STARTED=true
 if [[ -f "${PREVIOUS_FILES}" ]]; then
   while IFS= read -r entry || [[ -n "${entry}" ]]; do
     [[ -n "${entry}" ]] || continue
-    if ! grep -Fxq "${entry}" "${MANIFEST}"; then
+    if ! grep -Fxq "${entry}" "${NEW_FILES}"; then
       rm -f -- "${DEPLOY_ROOT}/${entry}"
     fi
   done < "${PREVIOUS_FILES}"
 fi
 tar -xzf "${ARCHIVE}" -C "${DEPLOY_ROOT}"
-cp -- "${MANIFEST}" "${PREVIOUS_FILES}"
+cp -- "${NEW_FILES}" "${PREVIOUS_FILES}"
 printf '%s\n' "${COMMIT}" > "${DEPLOY_ROOT}/.deployed-commit"
 set_env AI_EDITOR_RUNTIME_IMAGE "${NEW_IMAGE}"
 

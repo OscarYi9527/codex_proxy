@@ -168,6 +168,7 @@ describe('split preproduction deployment boundary', () => {
 
   it('locks activation and restores source, runtime image and service after failure', () => {
     const installer = text(path.join('scripts', 'install-release.sh'))
+    const runner = text(path.join('scripts', 'run-release.sh'))
     assert.match(installer, /flock -n 9/)
     assert.match(installer, /trap 'rollback \$\?' ERR/)
     assert.match(installer, /trap 'rollback \$\?' EXIT/)
@@ -184,6 +185,11 @@ describe('split preproduction deployment boundary', () => {
     assert.match(installer, /TORVYE_DEPLOY_FAILPOINT/)
     assert.match(installer, /after-activate-before-verify/)
     assert.match(installer, /find "\$\{BACKUP\}" -mindepth 1 -maxdepth 1 -type f -delete/)
+    assert.match(runner, /--status/)
+    assert.match(runner, /DONE:/)
+    assert.match(runner, /kill -0/)
+    assert.match(runner, /exit-code\.tmp/)
+    assert.match(runner, /mv -f -- "\$\{EXIT_TEMP\}" "\$\{EXIT_FILE\}"/)
   })
 
   it('deploys Worker before Gateway and protects the shared standalone Proxy', () => {
@@ -199,6 +205,7 @@ describe('split preproduction deployment boundary', () => {
     assert.match(deploymentTool, /http:\/\/127\.0\.0\.1:47892\/live/)
     assert.match(deploymentTool, /Shared Proxy PID changed during central deployment/)
     assert.match(deploymentTool, /The release installer is not committed at HEAD/)
+    assert.match(deploymentTool, /The detached release runner is not committed at HEAD/)
     assert.match(deploymentTool, /@\(\$dirty\)\.Count/)
     assert.match(deploymentTool, /\(\$files -join "`n"\) \+ "`n"/)
     assert.match(deploymentTool, /function Remove-LocalReleaseFile/)
@@ -206,6 +213,13 @@ describe('split preproduction deployment boundary', () => {
     assert.doesNotMatch(deploymentTool, /Remove-Item/)
     assert.match(deploymentTool, /Guid\]::NewGuid/)
     assert.match(deploymentTool, /mkdir -m 700/)
+    assert.match(deploymentTool, /nohup bash/)
+    assert.match(deploymentTool, /DeploymentTimeoutMinutes/)
+    assert.match(deploymentTool, /function Invoke-DetachedReleaseStatus/)
+    assert.match(deploymentTool, /WaitForExit\(\$TimeoutSeconds \* 1000\)/)
+    assert.match(deploymentTool, /WindowStyle Hidden/)
+    assert.match(deploymentTool, /preserved \$remoteDirectory for recovery/)
+    assert.match(deploymentTool, /\$remoteCompleted/)
     assert.match(deploymentTool, /rm -f --[\s\S]*rmdir --/)
   })
 })

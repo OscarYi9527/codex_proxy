@@ -7,6 +7,8 @@ param(
 	[ValidatePattern('^[A-Za-z0-9._-]+$')]
 	[string]$WorkerHost = 'torvye-provider-worker',
 	[string]$RemoteRoot = '/home/ubuntu/torvye/codex_proxy',
+	[ValidateRange(5, 120)]
+	[int]$DeploymentTimeoutMinutes = 45,
 	[switch]$AllowDirty
 )
 
@@ -15,8 +17,11 @@ $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $installer = Join-Path $repositoryRoot 'deploy\preproduction-split\scripts\install-release.sh'
-if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
-	throw "Release installer is missing: $installer"
+$runner = Join-Path $repositoryRoot 'deploy\preproduction-split\scripts\run-release.sh'
+foreach ($releaseScript in @($installer, $runner)) {
+	if (-not (Test-Path -LiteralPath $releaseScript -PathType Leaf)) {
+		throw "Release script is missing: $releaseScript"
+	}
 }
 if ($RemoteRoot -ne '/home/ubuntu/torvye/codex_proxy') {
 	throw 'RemoteRoot must use the reviewed TORVYE deployment root.'
@@ -54,6 +59,69 @@ function Remove-LocalReleaseFile([string]$Path) {
 	}
 }
 
+function Invoke-DetachedReleaseStatus(
+	[string]$HostName,
+	[string]$RunnerPath,
+	[int]$TimeoutSeconds = 40
+) {
+	$probeId = [Guid]::NewGuid().ToString('N')
+	$standardOutput = Join-Path (
+		[IO.Path]::GetTempPath()
+	) "torvye-release-ssh-$probeId.out"
+	$standardError = Join-Path (
+		[IO.Path]::GetTempPath()
+	) "torvye-release-ssh-$probeId.err"
+	$process = $null
+	try {
+		$process = Start-Process `
+			-FilePath 'ssh.exe' `
+			-ArgumentList @(
+				'-o', 'BatchMode=yes',
+				'-o', 'ConnectTimeout=20',
+				'-o', 'ServerAliveInterval=15',
+				'-o', 'ServerAliveCountMax=2',
+				$HostName,
+				'bash',
+				$RunnerPath,
+				'--status'
+			) `
+			-WindowStyle Hidden `
+			-RedirectStandardOutput $standardOutput `
+			-RedirectStandardError $standardError `
+			-PassThru
+		if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+			Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+			$process.WaitForExit(5000) | Out-Null
+			return [pscustomobject]@{
+				timedOut = $true
+				exitCode = 124
+				output = @()
+				error = @()
+			}
+		}
+		return [pscustomobject]@{
+			timedOut = $false
+			exitCode = $process.ExitCode
+			output = if ([IO.File]::Exists($standardOutput)) {
+				@([IO.File]::ReadAllLines($standardOutput))
+			} else {
+				@()
+			}
+			error = if ([IO.File]::Exists($standardError)) {
+				@([IO.File]::ReadAllLines($standardError))
+			} else {
+				@()
+			}
+		}
+	} finally {
+		if ($process) {
+			$process.Dispose()
+		}
+		Remove-LocalReleaseFile -Path $standardOutput
+		Remove-LocalReleaseFile -Path $standardError
+	}
+}
+
 if (-not $AllowDirty) {
 	$dirty = Invoke-Git @('status', '--porcelain', '--untracked-files=no')
 	if (@($dirty).Count -gt 0) {
@@ -68,6 +136,10 @@ if ($commit -notmatch '^[0-9a-f]{40}$') {
 & git.exe -C $repositoryRoot cat-file -e "${commit}:deploy/preproduction-split/scripts/install-release.sh"
 if ($LASTEXITCODE -ne 0) {
 	throw 'The release installer is not committed at HEAD.'
+}
+& git.exe -C $repositoryRoot cat-file -e "${commit}:deploy/preproduction-split/scripts/run-release.sh"
+if ($LASTEXITCODE -ne 0) {
+	throw 'The detached release runner is not committed at HEAD.'
 }
 
 $sharedBefore = Get-NetTCPConnection `
@@ -133,7 +205,15 @@ try {
 		$remoteArchive = "$remoteDirectory/$([IO.Path]::GetFileName($archive))"
 		$remoteManifest = "$remoteDirectory/$([IO.Path]::GetFileName($manifest))"
 		$remoteInstaller = "$remoteDirectory/$([IO.Path]::GetFileName($installer))"
+		$remoteRunner = "$remoteDirectory/$([IO.Path]::GetFileName($runner))"
+		$remoteInstallLog = "$remoteDirectory/install.log"
+		$remoteLauncherLog = "$remoteDirectory/launcher.log"
+		$remoteExitCode = "$remoteDirectory/exit-code"
+		$remoteExitTemp = "$remoteDirectory/exit-code.tmp"
+		$remotePid = "$remoteDirectory/launcher.pid"
 		$remoteCreated = $false
+		$remoteStarted = $false
+		$remoteCompleted = $false
 		try {
 			& ssh.exe `
 				-o BatchMode=yes `
@@ -149,30 +229,96 @@ try {
 				$archive `
 				$manifest `
 				$installer `
+				$runner `
 				$remoteDestination
 			if ($LASTEXITCODE -ne 0) {
 				throw "Upload to $($target.host) failed."
 			}
+			$launchCommand = "cd '$remoteDirectory'; " +
+				"nohup bash '$remoteRunner' '$remoteInstaller' '$($target.role)' " +
+				"'$remoteArchive' '$remoteManifest' '$commit' " +
+				">'$remoteLauncherLog' 2>&1 < /dev/null & " +
+				"printf '%s\n' " + '$!' + " >'$remotePid'"
+			$remoteStarted = $true
 			& ssh.exe `
 				-o BatchMode=yes `
 				-o ConnectTimeout=20 `
 				$target.host `
-				bash `
-				$remoteInstaller `
-				$target.role `
-				$remoteArchive `
-				$remoteManifest `
-				$commit
+				$launchCommand
 			if ($LASTEXITCODE -ne 0) {
-				throw "$($target.role) deployment failed on $($target.host)."
+				Write-Warning (
+					"Launch connection to $($target.host) closed unexpectedly; " +
+					'the detached release status will still be polled.'
+				)
+			}
+
+			$deadline = [DateTimeOffset]::UtcNow.AddMinutes($DeploymentTimeoutMinutes)
+			$exitCode = $null
+			$lastStatus = $null
+			do {
+				$statusResult = Invoke-DetachedReleaseStatus `
+					-HostName $target.host `
+					-RunnerPath $remoteRunner
+				if (-not $statusResult.timedOut -and $statusResult.exitCode -eq 0) {
+					$statusLines = @($statusResult.output)
+					$lastStatus = if ($statusLines.Count -gt 0) {
+						([string]$statusLines[-1]).Trim()
+					} else {
+						$null
+					}
+					if ($lastStatus -match '^DONE:(\d+)$') {
+						$exitCode = [int]$Matches[1]
+						$remoteCompleted = $true
+						break
+					}
+					if ($lastStatus -eq 'LOST') {
+						throw (
+							"$($target.role) detached deployment lost its runner " +
+							"on $($target.host); preserved $remoteDirectory for diagnosis."
+						)
+					}
+				}
+				Start-Sleep -Seconds 5
+			} while ([DateTimeOffset]::UtcNow -lt $deadline)
+
+			if ($null -eq $exitCode) {
+				throw (
+					"$($target.role) deployment exceeded $DeploymentTimeoutMinutes minutes " +
+					"on $($target.host); preserved $remoteDirectory for recovery."
+				)
+			}
+
+			$releaseTail = & ssh.exe `
+				-o BatchMode=yes `
+				-o ConnectTimeout=20 `
+				$target.host `
+				tail `
+				-n 120 `
+				$remoteInstallLog 2>&1
+			if ($LASTEXITCODE -eq 0) {
+				$releaseTail | ForEach-Object { Write-Host $_ }
+			} else {
+				Write-Warning "Unable to retrieve the final release log from $($target.host)."
+			}
+			if ($exitCode -ne 0) {
+				throw "$($target.role) deployment failed on $($target.host) with exit code $exitCode."
 			}
 		} finally {
-			if ($remoteCreated) {
+			if ($remoteCreated -and (-not $remoteStarted -or $remoteCompleted)) {
+				$cleanupCommand = "rm -f -- '$remoteArchive' '$remoteManifest' " +
+					"'$remoteInstaller' '$remoteRunner' '$remoteInstallLog' " +
+					"'$remoteLauncherLog' '$remoteExitCode' '$remoteExitTemp' " +
+					"'$remotePid'; rmdir -- '$remoteDirectory'"
 				& ssh.exe -o BatchMode=yes -o ConnectTimeout=20 $target.host `
-					"rm -f -- '$remoteArchive' '$remoteManifest' '$remoteInstaller'; rmdir -- '$remoteDirectory'"
+					$cleanupCommand
 				if ($LASTEXITCODE -ne 0 -and -not $deploymentFailure) {
 					Write-Warning "Remote temporary-file cleanup failed on $($target.host)."
 				}
+			} elseif ($remoteCreated) {
+				Write-Warning (
+					"Preserved incomplete remote release directory for recovery: " +
+					"$($target.host):$remoteDirectory"
+				)
 			}
 		}
 	}

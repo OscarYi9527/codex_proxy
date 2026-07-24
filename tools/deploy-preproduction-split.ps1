@@ -30,6 +30,30 @@ function Invoke-Git([string[]]$Arguments) {
 	return @($output)
 }
 
+function Remove-LocalReleaseFile([string]$Path) {
+	$fullPath = [IO.Path]::GetFullPath($Path)
+	$temporaryDirectory = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+	$temporaryDirectory = $temporaryDirectory.TrimEnd(
+		[IO.Path]::DirectorySeparatorChar,
+		[IO.Path]::AltDirectorySeparatorChar
+	)
+	if (
+		-not $fullPath.StartsWith(
+			$temporaryDirectory + [IO.Path]::DirectorySeparatorChar,
+			[StringComparison]::OrdinalIgnoreCase
+		) -or
+		-not [IO.Path]::GetFileName($fullPath).StartsWith(
+			'torvye-release-',
+			[StringComparison]::Ordinal
+		)
+	) {
+		throw "Refusing to remove an unexpected local release path: $fullPath"
+	}
+	if ([IO.File]::Exists($fullPath)) {
+		[IO.File]::Delete($fullPath)
+	}
+}
+
 if (-not $AllowDirty) {
 	$dirty = Invoke-Git @('status', '--porcelain', '--untracked-files=no')
 	if (@($dirty).Count -gt 0) {
@@ -60,12 +84,17 @@ if ($sharedLive.status -ne 'ok') {
 	throw 'Shared Proxy /live is not healthy; deployment will not attempt to repair it.'
 }
 
-$temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) "torvye-release-$commit"
+$localDeploymentId = '{0}-{1}-{2}' -f `
+	$commit, `
+	$PID, `
+	([Guid]::NewGuid().ToString('N').Substring(0, 12))
+$temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) "torvye-release-$localDeploymentId"
 $archive = "$temporaryRoot.tar.gz"
 $manifest = "$temporaryRoot.files"
 $deploymentFailure = $null
 try {
-	Remove-Item -LiteralPath $archive, $manifest -Force -ErrorAction SilentlyContinue
+	Remove-LocalReleaseFile -Path $archive
+	Remove-LocalReleaseFile -Path $manifest
 	& git.exe -C $repositoryRoot archive --format=tar.gz --output=$archive $commit
 	if ($LASTEXITCODE -ne 0) {
 		throw 'Unable to create the release archive.'
@@ -150,7 +179,8 @@ try {
 } catch {
 	$deploymentFailure = $_.Exception
 } finally {
-	Remove-Item -LiteralPath $archive, $manifest -Force -ErrorAction SilentlyContinue
+	Remove-LocalReleaseFile -Path $archive
+	Remove-LocalReleaseFile -Path $manifest
 }
 
 $sharedAfter = Get-NetTCPConnection `

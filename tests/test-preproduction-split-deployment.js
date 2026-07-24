@@ -5,6 +5,10 @@ import path from 'node:path'
 
 const root = path.resolve()
 const deployment = path.join(root, 'deploy', 'preproduction-split')
+const deploymentTool = fs.readFileSync(
+  path.join(root, 'tools', 'deploy-preproduction-split.ps1'),
+  'utf8'
+).replace(/\r\n/g, '\n')
 
 function text(file) {
   return fs.readFileSync(path.join(deployment, file), 'utf8')
@@ -15,6 +19,8 @@ describe('split preproduction deployment boundary', () => {
   it('pins the application runtime and keeps generated state out of Git', () => {
     assert.match(text('Dockerfile'), /FROM node:24\.16\.0-bookworm-slim/)
     assert.match(text('Dockerfile'), /ARG DEBIAN_MIRROR=deb\.debian\.org/)
+    const lock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'))
+    assert.equal(lock.packages['node_modules/find-my-way'].version, '9.7.0')
     const ignore = fs.readFileSync(path.join(root, '.gitignore'), 'utf8')
     const dockerIgnore = fs.readFileSync(path.join(root, '.dockerignore'), 'utf8')
     for (const value of [
@@ -124,5 +130,73 @@ describe('split preproduction deployment boundary', () => {
     assert.match(audit, /longTermCapacityReady/)
     assert.match(audit, /"status": "\$\{status\}"/)
     assert.match(readme, /gateway\.torvye\.com  A  114\.132\.161\.56/)
+  })
+
+  it('activates immutable commit images without rebuilding during compose up', () => {
+    const installer = text(path.join('scripts', 'install-release.sh'))
+    const worker = text('worker.compose.yaml')
+    const gateway = text('gateway.compose.yaml')
+    assert.match(worker, /image: \$\{AI_EDITOR_RUNTIME_IMAGE:-torvye-ai-runtime:preproduction\}/)
+    assert.match(gateway, /image: \$\{AI_EDITOR_RUNTIME_IMAGE:-torvye-ai-runtime:preproduction\}/)
+    assert.match(installer, /NEW_IMAGE="torvye-ai-runtime:\$\{COMMIT:0:12\}"/)
+    assert.match(installer, /docker build[\s\S]*--tag "\$\{NEW_IMAGE\}"/)
+    assert.match(installer, /set_env AI_EDITOR_RUNTIME_IMAGE "\$\{NEW_IMAGE\}"/)
+    assert.match(installer, /docker_compose up -d --no-build --force-recreate "\$\{SERVICE\}"/)
+    assert.ok(
+      installer.indexOf('sudo docker build') <
+      installer.indexOf('SWITCH_STARTED=true')
+    )
+  })
+
+  it('validates release paths and excludes runtime state and credentials', () => {
+    const installer = text(path.join('scripts', 'install-release.sh'))
+    assert.match(installer, /validate_manifest/)
+    assert.match(installer, /validate_archive/)
+    assert.match(installer, /Release archive does not match its tracked-file manifest/)
+    assert.match(installer, /Release archives may not contain symbolic or hard links/)
+    assert.match(
+      installer,
+      /\^deploy\/preproduction-split\/\(\\\.\(gateway\|worker\)\\\.runtime\\\.env\|state\/\|secrets\/\)/
+    )
+    assert.match(installer, /Release manifest must be sorted and contain unique paths/)
+    assert.doesNotMatch(installer, /cat "\$\{MANIFEST\}" "\$\{PREVIOUS_FILES\}" 2>\/dev\/null/)
+  })
+
+  it('locks activation and restores source, runtime image and service after failure', () => {
+    const installer = text(path.join('scripts', 'install-release.sh'))
+    assert.match(installer, /flock -n 9/)
+    assert.match(installer, /trap 'rollback \$\?' ERR/)
+    assert.match(installer, /trap 'rollback \$\?' EXIT/)
+    assert.match(installer, /trap 'rollback 129' HUP/)
+    assert.match(installer, /trap 'rollback 130' INT/)
+    assert.match(installer, /trap 'rollback 143' TERM/)
+    assert.match(installer, /cp -- "\$\{ENV_BACKUP\}" "\$\{ENV_FILE\}"/)
+    assert.match(installer, /restore_source/)
+    assert.match(
+      installer,
+      /docker_compose up -d --no-build --force-recreate "\$\{SERVICE\}" >\/dev\/null 2>&1/
+    )
+    assert.match(installer, /bash "\$\{VERIFY_SCRIPT\}" >\/dev\/null 2>&1/)
+    assert.match(installer, /TORVYE_DEPLOY_FAILPOINT/)
+    assert.match(installer, /after-activate-before-verify/)
+  })
+
+  it('deploys Worker before Gateway and protects the shared standalone Proxy', () => {
+    const workerTarget = deploymentTool.indexOf(
+      "[ordered]@{ role = 'worker'; host = $WorkerHost }"
+    )
+    const gatewayTarget = deploymentTool.indexOf(
+      "[ordered]@{ role = 'gateway'; host = $GatewayHost }"
+    )
+    assert.ok(workerTarget >= 0)
+    assert.ok(gatewayTarget > workerTarget)
+    assert.match(deploymentTool, /Get-NetTCPConnection[\s\S]*LocalPort 47892/)
+    assert.match(deploymentTool, /http:\/\/127\.0\.0\.1:47892\/live/)
+    assert.match(deploymentTool, /Shared Proxy PID changed during central deployment/)
+    assert.match(deploymentTool, /The release installer is not committed at HEAD/)
+    assert.match(deploymentTool, /\(\$files -join "`n"\) \+ "`n"/)
+    assert.match(deploymentTool, /Guid\]::NewGuid/)
+    assert.match(deploymentTool, /mkdir -m 700/)
+    assert.match(deploymentTool, /rm -f --[\s\S]*rmdir --/)
   })
 })

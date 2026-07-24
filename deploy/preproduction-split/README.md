@@ -56,6 +56,46 @@ origin in `state/gateway-public-origin.txt`. Quick Tunnel is a preproduction
 connectivity mechanism only and must not be promoted as the final
 `gateway.torvye.com` origin.
 
+## Versioned two-host release
+
+After the initial host bootstrap, deploy only a clean, committed revision from
+the operator's Windows checkout:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  .\tools\deploy-preproduction-split.ps1 `
+  -Role both
+```
+
+The tool creates an archive and exact tracked-file manifest from `HEAD`, then
+deploys the Singapore Worker before the China Gateway. Each host:
+
+1. takes a non-blocking deployment lock;
+2. validates every archive path and rejects links or runtime secrets;
+3. builds `torvye-ai-runtime:<12-character-commit>`;
+4. checks both Node entry points before touching the running service;
+5. backs up the previous source manifest, commit and mode-0600 runtime file;
+6. activates the prebuilt image with Compose `--no-build`;
+7. runs the role-specific health verifier;
+8. restores the previous source, runtime image and service automatically when
+   activation or verification fails.
+
+Uploaded files use a unique mode-0700 remote directory and are removed after
+each attempt. The Windows tool also requires shared
+`http://127.0.0.1:47892/live` to stay healthy with the same PID before and
+after central deployment; it never restarts or repairs that shared Proxy.
+
+For the preproduction rollback drill only, an operator can invoke the remote
+installer with:
+
+```text
+TORVYE_DEPLOY_FAILPOINT=after-activate-before-verify
+```
+
+The failpoint is deliberately not exposed by the normal deployment command.
+It must produce a nonzero result and restore the previous deployed commit,
+runtime image and healthy service before the failpoint build is promoted.
+
 ## Stable mainland direct ingress for the invitation MVP
 
 After the domestic Gateway has a fixed public IPv4 and the product hostname

@@ -179,6 +179,9 @@ rollback() {
     else
       echo "Automatic rollback restored the previous ${ROLE} release." >&2
     fi
+  elif [[ -d "${BACKUP}" ]]; then
+    find "${BACKUP}" -mindepth 1 -maxdepth 1 -type f -delete
+    rmdir -- "${BACKUP}" 2>/dev/null || true
   fi
   cleanup
   exit "${exit_code}"
@@ -248,8 +251,9 @@ if [[ -f "${PREVIOUS_FILES}" ]]; then
 fi
 LC_ALL=C sort -u "${BACKUP_CANDIDATES}" |
   while IFS= read -r entry; do
-    [[ -f "${DEPLOY_ROOT}/${entry}" || -L "${DEPLOY_ROOT}/${entry}" ]] &&
+    if [[ -f "${DEPLOY_ROOT}/${entry}" || -L "${DEPLOY_ROOT}/${entry}" ]]; then
       printf '%s\n' "${entry}"
+    fi
   done > "${BACKUP_FILES}"
 tar -czf "${SOURCE_BACKUP}" -C "${DEPLOY_ROOT}" -T "${BACKUP_FILES}"
 cp -- "${SOURCE_BACKUP}" "${BACKUP}/source-before.tar.gz"

@@ -160,6 +160,10 @@ describe('split preproduction deployment boundary', () => {
     )
     assert.match(installer, /Release manifest must be sorted and contain unique paths/)
     assert.doesNotMatch(installer, /cat "\$\{MANIFEST\}" "\$\{PREVIOUS_FILES\}" 2>\/dev\/null/)
+    assert.doesNotMatch(
+      installer,
+      /\[\[ -f "\$\{DEPLOY_ROOT\}\/\$\{entry\}" \|\| -L "\$\{DEPLOY_ROOT\}\/\$\{entry\}" \]\] &&/
+    )
   })
 
   it('locks activation and restores source, runtime image and service after failure', () => {
@@ -179,6 +183,7 @@ describe('split preproduction deployment boundary', () => {
     assert.match(installer, /bash "\$\{VERIFY_SCRIPT\}" >\/dev\/null 2>&1/)
     assert.match(installer, /TORVYE_DEPLOY_FAILPOINT/)
     assert.match(installer, /after-activate-before-verify/)
+    assert.match(installer, /find "\$\{BACKUP\}" -mindepth 1 -maxdepth 1 -type f -delete/)
   })
 
   it('deploys Worker before Gateway and protects the shared standalone Proxy', () => {

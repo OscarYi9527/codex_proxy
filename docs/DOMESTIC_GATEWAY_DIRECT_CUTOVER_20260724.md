@@ -92,6 +92,12 @@ Added:
   - Gateway recreated successfully;
   - Caddy stopped;
   - local and public Gateway `/live` both returned `status=ok`.
+- The complete `npm run release:check` passed after the deployment fixes. The
+  repository-owned Windows Edge was released and restored through its own
+  lifecycle scripts; shared `127.0.0.1:47892` remained PID `35276`.
+- A post-restore real `gpt-5.6-terra` SSE acceptance passed with
+  `response.completed`, proving that the failed ACME experiment and rollback
+  did not damage authentication, model routing or the Singapore Worker path.
 
 ## Required operator actions
 

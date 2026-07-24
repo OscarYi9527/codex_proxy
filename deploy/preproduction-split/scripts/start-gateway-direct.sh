@@ -87,9 +87,15 @@ previous_origin="$(
     tail -n 1
 )"
 cutover_complete=false
+rollback_started=false
 
 rollback() {
-  local exit_code=$?
+  local exit_code="${1:-$?}"
+  trap - ERR EXIT HUP INT TERM
+  if [[ "${rollback_started}" == true ]]; then
+    exit "${exit_code}"
+  fi
+  rollback_started=true
   if [[ "${cutover_complete}" == true ]]; then
     exit "${exit_code}"
   fi
@@ -99,7 +105,11 @@ rollback() {
   docker_compose stop caddy-direct >/dev/null 2>&1 || true
   exit "${exit_code}"
 }
-trap rollback ERR
+trap 'rollback $?' ERR
+trap 'rollback $?' EXIT
+trap 'rollback 129' HUP
+trap 'rollback 130' INT
+trap 'rollback 143' TERM
 
 set_env AI_EDITOR_PREPRODUCTION_PUBLIC_ORIGIN "${origin}"
 set_env AI_EDITOR_GATEWAY_HOSTNAME "${hostname}"
@@ -138,7 +148,7 @@ docker_compose stop cloudflared-quick
 printf '%s\n' "${origin}" > "${STATE_DIR}/gateway-public-origin.txt"
 chmod 600 "${STATE_DIR}/gateway-public-origin.txt"
 cutover_complete=true
-trap - ERR
+trap - ERR EXIT HUP INT TERM
 
 echo "Stable direct Gateway cutover completed."
 echo "Previous origin: ${previous_origin}"

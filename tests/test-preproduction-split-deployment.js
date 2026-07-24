@@ -194,6 +194,7 @@ describe('split preproduction deployment boundary', () => {
     assert.match(deploymentTool, /http:\/\/127\.0\.0\.1:47892\/live/)
     assert.match(deploymentTool, /Shared Proxy PID changed during central deployment/)
     assert.match(deploymentTool, /The release installer is not committed at HEAD/)
+    assert.match(deploymentTool, /@\(\$dirty\)\.Count/)
     assert.match(deploymentTool, /\(\$files -join "`n"\) \+ "`n"/)
     assert.match(deploymentTool, /Guid\]::NewGuid/)
     assert.match(deploymentTool, /mkdir -m 700/)

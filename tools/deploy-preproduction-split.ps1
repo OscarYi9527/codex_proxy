@@ -32,7 +32,7 @@ function Invoke-Git([string[]]$Arguments) {
 
 if (-not $AllowDirty) {
 	$dirty = Invoke-Git @('status', '--porcelain', '--untracked-files=no')
-	if ($dirty.Count -gt 0) {
+	if (@($dirty).Count -gt 0) {
 		throw 'The Proxy repository has tracked changes. Commit and validate them before deployment.'
 	}
 }
